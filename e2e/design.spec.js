@@ -445,10 +445,10 @@ test('personas sheet and confirm sheet', async ({ browser, request }) => {
   await expect(sheet.getByLabel('Speaks up')).toBeHidden();
   await sheet.getByRole('link', { name: 'Triggers', exact: true }).click();
   await expect(sheet.getByLabel('Speaks up')).toBeVisible();
-  await expect(sheet.getByRole('button', { name: /library|^Remove/ })).toHaveCount(0);
+  await expect(sheet.getByRole('button', { name: /my personas|^Remove/ })).toHaveCount(0);
   await sheet.locator('#persona-more').click();
   const menu = alice.locator('#persona-menu');
-  await expect(menu.getByRole('button')).toHaveText(['Save to the library', 'Remove']);
+  await expect(menu.getByRole('button')).toHaveText(['Save to my personas', 'Remove']);
   await expect(menu.getByRole('button', { name: 'Remove Grill' })).toHaveClass('danger');
   await shot(alice, 'after-desktop-personas');
   await menu.getByRole('button', { name: 'Remove Grill' }).click();

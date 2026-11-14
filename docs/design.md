@@ -191,7 +191,7 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 | Self-call | Can follow up on its own |
 | Autocompact (k tokens) | Memory size, on the persona sheet's Model tab |
 | New session (with handoff) | Start fresh (keep a summary) |
-| Publish as a template | Save to the library |
+| Publish as a template, Save to the library | Save to my personas (035-AC12) |
 | Transcription unavailable / 2 voices transcribed | (audio menu) Voice-to-text is off · 2 voices are being written down |
 | Deafen | Mute the room |
 | Manage (member view) | Room settings |

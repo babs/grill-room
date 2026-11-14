@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -194,6 +195,20 @@ func TestTemplateLibrary(t *testing.T) {
 	p, _, err := s.AddPersona(ctx, "a", tp.ID, alice, true)
 	if err != nil || p.TemplateVersion != 2 || p.Text != "v2 text" {
 		t.Fatalf("persona from it: %+v %v", p, err)
+	}
+	// The room persona a library persona was saved from is its owner's to know, even once shared.
+	if _, err := s.db.ExecContext(ctx, `UPDATE persona_templates SET section = 'instance', source_persona_id = ? WHERE id = ?`, p.ID, tp.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		who  *Participant
+		want int64
+	}{{alice, p.ID}, {bob, 0}} {
+		ts, err := s.Templates(ctx, c.who.ProfileID)
+		i := slices.IndexFunc(ts, func(x Template) bool { return x.ID == tp.ID })
+		if err != nil || i < 0 || ts[i].SourcePersonaID != c.want {
+			t.Fatalf("source persona for %s: %+v %v", c.who.Name, ts, err)
+		}
 	}
 	if err := s.RemoveTemplate(ctx, def.ID); !errors.Is(err, ErrPreset) {
 		t.Fatalf("remove a preset: %v", err)

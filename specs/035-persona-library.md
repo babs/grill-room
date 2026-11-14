@@ -57,7 +57,7 @@ Personas get a library like starters. `/profile` gains a Personas tab with three
 
 ### In the room
 
-- [ ] **AC12** The persona sheet ⋯ shows "Save to my personas" for a room persona not linked to one of the caller's library personas, and "Save to my personas as v<N+1>" for one that is. Saving uses the saved state of the persona; with unsaved changes the item reads "Save your changes first" and is disabled with that reason as text, not a tip.
+- [ ] **AC12** The persona sheet ⋯ shows "Save to my personas" for a room persona not linked to one of the caller's library personas, and "Save to my personas as v<N+1>" for one that is (the linked one when it is the caller's, else the one the caller first saved from this persona). Saving uses the saved state of the persona; with unsaved changes the item reads "Save your changes first" and is disabled with that reason as text, not a tip.
 - [ ] **AC13** After a first save, the room persona is linked to the new library persona: the next save makes version 2, never a second library persona. The status line reads "Saved <name> v<N> to your personas." with a link to `/profile#personas`.
 - [ ] **AC14** "Add a persona" (Personas sheet, and a "+" button at the end of the persona bar labelled "Add a persona") opens a picker with the three sections. The "+" sits after the scrolling pills, outside the bar's scroll area, so it never mixes with 034's edge "+N" buttons; on a phone it keeps its 44 px target. Selecting a row shows a preview: description, model and effort, trigger in words, voice when the server has speech, skill and plugin names. "Add" adds it; the picker closes and the new pill shows.
 - [ ] **AC15** At 12 personas in the room, "+" and "Add" are disabled with the text "A room holds 12 personas at most."

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -177,6 +178,78 @@ func TestSavePersonaTwice(t *testing.T) {
 	}
 }
 
+// 035-AC16 035-AC18: a room persona names its library persona's author as profileNameSQL does: the
+// profile's chosen name, else its latest name in a room.
+func TestRoomPersonaAuthor(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice, _, grill := personaRoom(t, s, "a")
+	if _, err := s.SavePersonaToLibrary(ctx, "a", grill.ID, alice.ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		chosen any
+		name   string
+	}{{nil, "Alice"}, {"Chosen", "Chosen"}} {
+		if _, err := s.db.ExecContext(ctx, `UPDATE profiles SET name = ? WHERE id = ?`, c.chosen, alice.ProfileID); err != nil {
+			t.Fatal(err)
+		}
+		var want string
+		if err := s.db.QueryRowContext(ctx, `SELECT `+profileNameSQL, alice.ProfileID, alice.ProfileID).Scan(&want); err != nil {
+			t.Fatal(err)
+		}
+		p, err := s.RoomPersona(ctx, "a", grill.ID)
+		if err != nil || want != c.name || p.TemplateAuthor != want {
+			t.Fatalf("chosen name %v: author %q, profileNameSQL %q, %v", c.chosen, p.TemplateAuthor, want, err)
+		}
+	}
+}
+
+// 035-AC8 035-AC9: a version published the 002 way, six fields only, keeps the latest version's
+// description, settings and frozen files; a save after it keeps the description.
+func TestPublishVersionKeepsWholePersona(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice, _, grill := personaRoom(t, s, "a")
+	if _, _, _, err := s.EditPersona(ctx, "a", grill.ID, PersonaPatch{EveryN: ptr(3), Speaks: no()}, alice); err != nil {
+		t.Fatal(err)
+	}
+	var sid int64
+	if err := s.db.QueryRowContext(ctx, `INSERT INTO skills(name, created_at, room_id, pending) VALUES('stamp', ?, 'a', 0) RETURNING id`, now()).Scan(&sid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO skill_versions(skill_id, n, author, description, files, size, sha256, data, created_at) VALUES(?,1,'Bob','d',1,6,'x','tar v1',?)`,
+		sid, now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO room_persona_skills(persona_id, skill_id, version) VALUES(?, ?, 1)`, grill.ID, sid); err != nil {
+		t.Fatal(err)
+	}
+	t1, err := s.SavePersonaToLibrary(ctx, "a", grill.ID, alice.ProfileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE persona_template_versions SET description = 'One line.' WHERE template_id = ?`, t1.ID); err != nil {
+		t.Fatal(err)
+	}
+	f := t1.PersonaFields
+	f.Text = "Published."
+	t2, err := s.PublishVersion(ctx, alice.ProfileID, t1.ID, "Alice", f)
+	if err != nil || t2.Version != 2 || t2.Text != "Published." || t2.Description != "One line." || t2.EveryN != 3 || t2.SpeaksInCall() ||
+		len(t2.FrozenSkills) != 1 || t2.FrozenSkills[0].Name != "stamp" {
+		t.Fatalf("published version: %+v %v", t2, err)
+	}
+	var data string
+	if err := s.db.QueryRowContext(ctx, `SELECT f.data FROM persona_template_files f JOIN persona_template_versions v ON v.id = f.version_id
+		WHERE v.template_id = ? AND v.n = 2 AND f.name = ?`, t1.ID, t2.FrozenSkills[0].File).Scan(&data); err != nil || data != "tar v1" {
+		t.Fatalf("v2 frozen skill %q %v", data, err)
+	}
+	t3, err := s.SavePersonaToLibrary(ctx, "a", grill.ID, alice.ProfileID)
+	if err != nil || t3.ID != t1.ID || t3.Version != 3 || t3.Description != "One line." {
+		t.Fatalf("save after publish: %+v %v", t3, err)
+	}
+}
+
 // 035-AC9: a save freezes the persona's skill at its pin, not the latest, and its plugin at the
 // running version, with their bytes, whoever saves; a skill or plugin still waiting for the host is
 // left out.
@@ -245,7 +318,7 @@ func TestSavePersonaFreezesKit(t *testing.T) {
 }
 
 // 035-AC7: past 100 versions or 50 library personas, or past the instance storage quota, a save
-// answers with the limit and changes nothing.
+// or a publish answers with the limit and changes nothing.
 func TestSavePersonaLimits(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
@@ -265,8 +338,9 @@ func TestSavePersonaLimits(t *testing.T) {
 	if p, _ := s.RoomPersona(ctx, "a", grill.ID); p.TemplateVersion != 1 || count(t, s, `SELECT count(*) FROM persona_template_versions WHERE template_id = ?`, tp.ID) != MaxTemplateVersions {
 		t.Fatalf("a refused version changed something: %+v", p)
 	}
+	var last *Template
 	for i := 1; i < MaxProfileTemplates; i++ {
-		if _, err := s.PublishTemplate(ctx, alice.ProfileID, "Alice", "T", grill.PersonaFields); err != nil {
+		if last, err = s.PublishTemplate(ctx, alice.ProfileID, "Alice", "T", grill.PersonaFields); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -292,6 +366,19 @@ func TestSavePersonaLimits(t *testing.T) {
 	}
 	if n := count(t, s, `SELECT count(*) FROM persona_templates WHERE profile_id = ?`, bob.ProfileID); n != 0 {
 		t.Fatalf("a save past the quota left %d templates", n)
+	}
+	// The 002 route is held to the same quota.
+	if _, err := s.PublishTemplate(ctx, bob.ProfileID, "Bob", "T", grill.PersonaFields); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "storage quota") {
+		t.Fatalf("publish past the quota: %v", err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM persona_templates WHERE profile_id = ?`, bob.ProfileID); n != 0 {
+		t.Fatalf("a publish past the quota left %d templates", n)
+	}
+	if _, err := s.PublishVersion(ctx, alice.ProfileID, last.ID, "Alice", grill.PersonaFields); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "storage quota") {
+		t.Fatalf("version past the quota: %v", err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM persona_template_versions WHERE template_id = ?`, last.ID); n != 1 {
+		t.Fatalf("a version past the quota left %d versions", n)
 	}
 }
 
@@ -501,8 +588,27 @@ func TestImportLinksVisibleTemplatesOnly(t *testing.T) {
 				got = &ps[i]
 			}
 		}
-		if got == nil || got.TemplateID != c.want || got.Text != "t" {
+		// 035-AC16: unlinked, the copy keeps no version either.
+		if got == nil || got.TemplateID != c.want || got.Text != "t" || (c.want == 0) != (got.TemplateVersion == 0) {
 			t.Errorf("%s: imported copy %+v, want template %d", c.room, got, c.want)
 		}
+	}
+	// 035-AC16: a library persona deleted before the export stays deleted: the copy keeps its version.
+	gone, err := s.PublishTemplate(ctx, alice.ProfileID, "Alice", "Gone", PersonaFields{Name: "Gone", Badge: "👻", Colour: "#112233", Text: "g", Model: "sonnet", Effort: "medium"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.AddPersona(ctx, "orig", gone.ID, alice, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveTemplate(ctx, gone.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ImportRoom(ctx, export(t, s, "orig"), importOpts("after-delete")); err != nil {
+		t.Fatal(err)
+	}
+	ps, _ := s.RoomPersonas(ctx, "after-delete")
+	if i := slices.IndexFunc(ps, func(p RoomPersona) bool { return p.Name == "Gone" }); i < 0 || ps[i].TemplateID != 0 || ps[i].TemplateVersion != 1 {
+		t.Fatalf("copy of a deleted library persona: %+v", ps)
 	}
 }

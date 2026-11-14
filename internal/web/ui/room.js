@@ -59,6 +59,8 @@ let myID = '';
 let myName = '';
 let hasProfile = false;
 let roomName = '';
+// startedFrom is the starter the room was created from, {title, version}, or null (035-AC16).
+let startedFrom = null;
 // tab names this page to the server's presence: its stream and heartbeats (005-AC6).
 const tab = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).replaceAll('-', '');
 // stt/device.js's pipeline sends its device beats under the same tab (010-AC13).
@@ -156,6 +158,7 @@ async function loadRoom() {
   }
   (link || heading.querySelector('.name')).textContent = data.room.name;
   roomName = data.room.name;
+  startedFrom = data.room.created_from || null;
   fitPersonas();
   showTitle();
   // Someone else renamed this participant (005-AC21): a rename of their own sets myName first.
@@ -2266,7 +2269,7 @@ $('doc-width').addEventListener('click', () => {
 });
 
 // arrowKeys moves the focus through a menu's shown items with ↑ and ↓ (008-AC8, 008-AC13).
-const menuItems = (menu) => [...menu.querySelectorAll(':scope > :is(a, button), :scope > label > input')].filter((e) => !e.hidden && e.offsetParent !== null);
+const menuItems = (menu) => [...menu.querySelectorAll(':scope > :is(a, button), :scope > label > input')].filter((e) => !e.hidden && !e.disabled && e.offsetParent !== null);
 function arrowKeys(menu) {
   menu.addEventListener('keydown', (e) => {
     const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
@@ -3227,10 +3230,12 @@ async function pressPersona(id, fresh) {
 // applies from that persona's next turn and shows in the chat (002-AC14, 002-AC15).
 let templates = [];
 
-// personasStatus says how an action went in both sheets; only a failure reads as an error.
+// personasStatus says how an action went in both sheets; only a failure reads as an error. text may
+// be a list of strings and nodes, such as a link to where the result went (035-AC13).
 function personasStatus(text, error = false) {
   for (const id of ['personas-status', 'persona-status']) {
-    $(id).textContent = text;
+    // A node sits in one sheet only: each gets its copy.
+    $(id).replaceChildren(...[text].flat().map((t) => (typeof t === 'string' ? t : t.cloneNode(true))));
     $(id).classList.toggle('error', error);
   }
 }
@@ -3263,7 +3268,6 @@ function personaForm(p) {
   // A hidden tab's field cannot show the browser's bubble: the submit handler checks instead.
   form.noValidate = true;
   form.style.setProperty('--persona', p.colour);
-  const tpl = templates.find((t) => t.id === p.template_id);
   const hint = (text) => Object.assign(document.createElement('p'), { className: 'hint', textContent: text });
   const input = (name, value, attrs) => {
     const i = document.createElement('input');
@@ -3290,8 +3294,7 @@ function personaForm(p) {
   text.maxLength = 8000;
   text.value = p.text;
   const identity = panel('identity',
-    hint((tpl ? 'From "' + tpl.title + '" v' + p.template_version + '.' : 'Its template was removed from the library.')
-      + (p.pending ? ' Waits for the AI host\'s approval.' : '')),
+    hint(provenance(p) + (p.pending ? ' Waits for the AI host\'s approval.' : '')),
     grid(field('Name', input('name', p.name, { maxLength: 30, required: true })),
       field('Badge', input('badge', p.badge, { maxLength: 8, required: true })),
       field('Colour', input('colour', p.colour, { type: 'color' }))),
@@ -3398,8 +3401,22 @@ function personaForm(p) {
   return form;
 }
 
+// provenance says where room persona p came from, in the caller's words: theirs only when their list
+// marks it mine (035-AC16, 035-AC18).
+function provenance(p) {
+  const from = 'From ' + p.template_title + ' v' + p.template_version;
+  if (p.template_id) {
+    if (p.template_section === 'builtin') return from + ', built in.';
+    if (p.template_section === 'instance') return from + ', shared by ' + p.template_author + '.';
+    return templates.some((t) => t.id === p.template_id && t.mine) ? from + ', in your personas.' : from + ', by ' + p.template_author + '.';
+  }
+  // A version without a link: the library persona it came from is gone.
+  if (p.template_version) return 'Its library persona was deleted.';
+  return startedFrom ? 'Came with the starter ' + startedFrom.title + '.' : 'Made in this room.';
+}
+
 // fillPersonaMenu builds the sheet's ⋯ for the persona as it is when it opens (009-AC3): the
-// template update, the library, a fresh start for the host, then Remove.
+// library update, Save to my personas, a fresh start for the host, then Remove.
 function fillPersonaMenu() {
   const form = $('persona-body').firstElementChild;
   const p = form && personaByID(Number(form.dataset.id));
@@ -3412,23 +3429,33 @@ function fillPersonaMenu() {
     if (cls) b.className = cls;
     b.addEventListener('click', () => fn().catch((err) => personasStatus(err.message, true)));
     items.push(b);
+    return b;
   };
   if (p) {
     const tpl = templates.find((t) => t.id === p.template_id);
-    if (p.update_version) {
+    // Only from a library persona the viewer sees: the server refuses the others (035-AC18).
+    if (p.update_version && tpl) {
       act('Update to v' + p.update_version, 'Update ' + p.name + ' to template version ' + p.update_version, async () => {
         const done = await sendJSON('POST', api + '/personas/' + p.id + '/update');
         if (done) personasStatus(done.held ? p.name + ': the update waits for the AI host\'s approval.' : p.name + ' updated.');
       });
     }
-    const mine = tpl && tpl.mine;
-    act(mine ? 'Save to the library as v' + (tpl.version + 1) : 'Save to the library', 'Save ' + p.name + ' to the library', async () => {
-      const body = formFields(form);
-      if (mine) body.template_id = tpl.id;
-      const t = await sendJSON('POST', api + '/templates', body);
-      if (t) personasStatus('Saved "' + t.title + '" v' + t.version + ' to the library.');
-      await loadTemplates();
-    });
+    if (form.dataset.dirty) {
+      // The server saves the persona as the room has it, not the form's edits (035-AC12). Not
+      // disabled: a disabled item takes no focus, and its label is the reason.
+      act('Save your changes first', 'Save your changes first', async () => {}).setAttribute('aria-disabled', 'true');
+    } else {
+      // As the server picks: the linked one when it is theirs, else the one they saved from this persona (035-AC13).
+      const lib = templates.find((t) => t.mine && t.id === p.template_id) || templates.find((t) => t.mine && t.source_persona_id === p.id);
+      const next = lib ? ' as v' + (lib.version + 1) : '';
+      act('Save to my personas' + next, 'Save ' + p.name + ' to my personas' + next, async () => {
+        const t = await sendJSON('POST', api + '/personas/' + p.id + '/library');
+        if (!t) return;
+        const mine = Object.assign(document.createElement('a'), { href: '/profile#personas', textContent: 'your personas' });
+        personasStatus(['Saved ' + t.title + ' v' + t.version + ' to ', mine, '.']);
+        await loadTemplates();
+      });
+    }
     if (isHost()) {
       act('Start fresh', 'Start fresh for ' + p.name, async () => {
         if (await grillConfirm('Start ' + p.name + ' fresh?', 'It forgets its earlier answers and rereads the room history.', 'Start fresh')) await pressPersona(p.id, true);

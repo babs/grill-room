@@ -77,8 +77,8 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
   }
 });
 
-// 032-AC5 032-AC6: the library's Timekeeper, added to a room whose Grill keeps time, takes the role
-// with its room settings, all said in the chat; the Secretary added next brings none.
+// 032-AC5 032-AC6 035-AC11: the library's Timekeeper, added to a room whose Grill keeps time, comes
+// with its room settings but not the role, all said in the chat; the Secretary added next brings none.
 test('personas: the Timekeeper from the library', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await appointAdmin(alice, request, room.id);
@@ -89,14 +89,14 @@ test('personas: the Timekeeper from the library', async ({ browser, request }) =
   await panel.locator('#persona-template').selectOption({ label: '⏱️ Timekeeper v1' });
   await panel.getByRole('button', { name: 'Add', exact: true }).click();
   await expect(alice.locator('#messages')).toContainText('Alice added the persona ⏱️ Timekeeper, from the template "Timekeeper" v1, every N minutes off → 5, '
-    + 'now keeps time (was 🔥 Grill), speak over after off → 20 s.');
+    + 'speak over after off → 20 s, not the time keeper (🔥 Grill keeps time).');
   await expect(alice.locator('button.persona')).toHaveText([/^🔥Grill/, /^⏱️Timekeeper/]);
   await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
   await panel.getByRole('button', { name: 'Add', exact: true }).click();
   await expect(alice.locator('#messages')).toContainText('Alice added the persona 📝 Secretary, from the template "Secretary" v1.');
   const ps = (await agentState(alice, room.id)).personas;
   expect(ps.map((p) => [p.name, !!p.time_keeper, p.cut_in_s || 0, p.every_minutes || 0, p.speaks]))
-    .toEqual([['Grill', false, 0, 0, true], ['Timekeeper', true, 20, 5, true], ['Secretary', false, 0, 0, true]]);
+    .toEqual([['Grill', true, 0, 0, true], ['Timekeeper', false, 20, 5, true], ['Secretary', false, 0, 0, true]]);
 });
 
 // 032-AC3: the time keeper's turn with an empty answer posts nothing, and its pill says "nothing to

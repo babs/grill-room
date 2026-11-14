@@ -401,7 +401,7 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 .person-more { min-width: var(--control-h-sm); min-height: var(--control-h-sm); padding: 0; border-color: transparent; background: transparent; color: var(--text-muted); }
 .person-more.blank { visibility: hidden; }
 #person-menu input[type=range] { width: 8rem; }
-#person-menu button[aria-disabled=true] { color: var(--text-muted); cursor: default; }
+:is(#person-menu, #persona-menu) button[aria-disabled=true] { color: var(--text-muted); cursor: default; }
 /* A toggle draws both states, a box ticked or empty in the icon column, kept out of the accessible name. */
 #person-menu .ico.toggle { display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 1; }
 #person-menu [aria-pressed=true] > .ico.toggle { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }

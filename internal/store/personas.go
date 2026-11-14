@@ -255,12 +255,15 @@ type Template struct {
 	// Author is who published the latest version: a display name, or grill-room for presets.
 	Author      string `json:"author"`
 	Description string `json:"description"`
+	// SourcePersonaID is the room persona it was first saved from, which a save of that persona
+	// finds it by (035-AC13); listed to its owner only.
+	SourcePersonaID int64 `json:"source_persona_id,omitempty"`
 	TemplateManifest
 	CreatedAt time.Time `json:"created_at"`
 }
 
 const templateCols = `SELECT t.id, COALESCE(t.preset, ''), t.section, COALESCE(t.profile_id, 0), t.title, v.n, v.author,
-	v.name, v.badge, v.colour, v.text, v.model, v.effort, v.created_at, v.description, v.manifest
+	v.name, v.badge, v.colour, v.text, v.model, v.effort, v.created_at, v.description, v.manifest, COALESCE(t.source_persona_id, 0)
 	FROM persona_templates t JOIN persona_template_versions v ON v.template_id = t.id
 	AND v.n = (SELECT MAX(n) FROM persona_template_versions WHERE template_id = t.id) `
 
@@ -272,7 +275,7 @@ func scanTemplate(sc scanner) (*Template, error) {
 	var f PersonaFields
 	var created, manifest string
 	err := sc.Scan(&t.ID, &t.Preset, &t.Section, &t.ProfileID, &t.Title, &t.Version, &t.Author,
-		&f.Name, &f.Badge, &f.Colour, &f.Text, &f.Model, &f.Effort, &created, &t.Description, &manifest)
+		&f.Name, &f.Badge, &f.Colour, &f.Text, &f.Model, &f.Effort, &created, &t.Description, &manifest, &t.SourcePersonaID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -311,6 +314,9 @@ func (s *Store) Templates(ctx context.Context, viewer int64) ([]Template, error)
 			return nil, err
 		}
 		t.Mine = viewer != 0 && t.ProfileID == viewer
+		if !t.Mine {
+			t.SourcePersonaID = 0
+		}
 		out = append(out, *t)
 	}
 	return out, rows.Err()
@@ -338,57 +344,85 @@ func newTemplate(ctx context.Context, tx *txn, profileID int64, title string, so
 	return id, nil
 }
 
-// PublishTemplate adds a template owned by profileID, with f as its version 1 signed author.
+// PublishTemplate adds a template owned by profileID, with f as its version 1 signed author, within
+// the profile's limit and the instance storage quota (035-AC7).
 func (s *Store) PublishTemplate(ctx context.Context, profileID int64, author, title string, f PersonaFields) (*Template, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("publish template: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-	id, err := newTemplate(ctx, tx, profileID, title, 0)
+	var id int64
+	err := s.withTx(ctx, "publish template", func(tx *txn) error {
+		var err error
+		if id, err = newTemplate(ctx, tx, profileID, title, 0); err != nil {
+			return err
+		}
+		manifest := []byte("{}")
+		if err := withinQuota(ctx, tx, StarterSize(manifest, nil)); err != nil {
+			return err
+		}
+		return insertVersion(ctx, tx, id, 1, author, f, "", manifest, nil)
+	})
 	if err != nil {
 		return nil, err
-	}
-	if err := insertVersion(ctx, tx, id, 1, author, f, "", []byte("{}"), nil); err != nil {
-		return nil, fmt.Errorf("publish template: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("publish template: %w", err)
 	}
 	return s.Template(ctx, id)
 }
 
 // PublishVersion adds f as the next version of template id, which only its owner may do:
-// ErrForbidden otherwise, presets included. Earlier versions never change.
+// ErrForbidden otherwise, presets included. The latest version's description, settings and frozen
+// files carry over: f holds only the six persona fields. Earlier versions never change.
 func (s *Store) PublishVersion(ctx context.Context, profileID, id int64, author string, f PersonaFields) (*Template, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	err := s.withTx(ctx, "publish version", func(tx *txn) error {
+		var owner, vid int64
+		var n int
+		var description, manifest string
+		err := tx.QueryRowContext(ctx, `SELECT COALESCE(t.profile_id, 0), v.id, v.n, v.description, v.manifest
+			FROM persona_templates t JOIN persona_template_versions v ON v.template_id = t.id
+			WHERE t.id = ? ORDER BY v.n DESC LIMIT 1`, id).Scan(&owner, &vid, &n, &description, &manifest)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("publish version: %w", err)
+		}
+		if owner == 0 || owner != profileID {
+			return ErrForbidden
+		}
+		if n >= MaxTemplateVersions {
+			return errVersionLimit
+		}
+		files, err := versionFiles(ctx, tx, vid)
+		if err != nil {
+			return err
+		}
+		if err := withinQuota(ctx, tx, StarterSize([]byte(manifest), files)); err != nil {
+			return err
+		}
+		return insertVersion(ctx, tx, id, n+1, author, f, description, []byte(manifest), files)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("publish version: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-	var owner int64
-	var n int
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE(t.profile_id, 0), (SELECT MAX(n) FROM persona_template_versions WHERE template_id = t.id)
-		FROM persona_templates t WHERE t.id = ?`, id).Scan(&owner, &n)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("publish version: %w", err)
-	}
-	if owner == 0 || owner != profileID {
-		return nil, ErrForbidden
-	}
-	if n >= MaxTemplateVersions {
-		return nil, errVersionLimit
-	}
-	if err := insertVersion(ctx, tx, id, n+1, author, f, "", []byte("{}"), nil); err != nil {
-		return nil, fmt.Errorf("publish version: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("publish version: %w", err)
+		return nil, err
 	}
 	return s.Template(ctx, id)
+}
+
+// versionFiles returns the frozen files of template version vid, by name.
+func versionFiles(ctx context.Context, tx *txn, vid int64) (map[string][]byte, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT name, data FROM persona_template_files WHERE version_id = ?`, vid)
+	if err != nil {
+		return nil, fmt.Errorf("template files: %w", err)
+	}
+	defer rows.Close()
+	files := map[string][]byte{}
+	for rows.Next() {
+		var name string
+		var data []byte
+		if err := rows.Scan(&name, &data); err != nil {
+			return nil, fmt.Errorf("template files: %w", err)
+		}
+		files[name] = data
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("template files: %w", err)
+	}
+	return files, nil
 }
 
 // RemoveTemplate deletes template id with its versions. Room personas made from it keep their
@@ -483,10 +517,10 @@ type RoomPersona struct {
 	VoiceRate float64 `json:"voice_rate"`
 }
 
-var personaCols = `SELECT p.id, p.room_id, COALESCE(p.template_id, 0), p.template_version,
+const personaCols = `SELECT p.id, p.room_id, COALESCE(p.template_id, 0), p.template_version,
 	COALESCE((SELECT MAX(n) FROM persona_template_versions WHERE template_id = p.template_id), 0),
 	COALESCE(pt.title, ''), COALESCE(pt.section, ''), CASE WHEN pt.id IS NULL THEN '' WHEN pt.section = 'builtin' THEN '` + presetAuthor + `'
-		ELSE ` + strings.ReplaceAll(profileNameSQL, "?", "pt.profile_id") + ` END,
+		ELSE ` + profileName1 + `pt.profile_id` + profileName2 + `pt.profile_id` + profileName3 + ` END,
 	p.name, p.badge, p.colour, p.text, p.model, p.effort, COALESCE(p.every_n, 0), p.self_call, p.created_at,
 	p.pending, p.cap_decision, COALESCE(p.cap_daemon_id, 0), p.cap_model, p.cap_effort, p.autocompact,
 	COALESCE(s.context_tokens, 0), COALESCE(s.context_window, 0), COALESCE(p.every_voice, 0), COALESCE(p.every_minutes, 0), p.mark_at_ms,

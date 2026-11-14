@@ -245,8 +245,14 @@ func starterFiles(ctx context.Context, db rowsQuerier, id int64, n int) (map[str
 }
 
 // profileNameSQL is a profile's display name: the one it chose (005-AC1), else the name it last
-// joined a room with. Its two ? are the profile id.
-const profileNameSQL = `COALESCE((SELECT name FROM profiles WHERE id = ?), (SELECT name FROM participants WHERE profile_id = ? ORDER BY id DESC LIMIT 1), 'someone')`
+// joined a room with. Its two ? are the profile id. profileName1-3 surround the id, for a query
+// that names it by column (personaCols).
+const (
+	profileName1   = `COALESCE((SELECT name FROM profiles WHERE id = `
+	profileName2   = `), (SELECT name FROM participants WHERE profile_id = `
+	profileName3   = ` ORDER BY id DESC LIMIT 1), 'someone')`
+	profileNameSQL = profileName1 + `?` + profileName2 + `?` + profileName3
+)
 
 // StarterSize is what a version weighs: its manifest and its blobs.
 func StarterSize(manifest []byte, files map[string][]byte) int64 {

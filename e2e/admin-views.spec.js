@@ -183,8 +183,9 @@ for (const vp of widths) {
     await pat.ctx.dispose();
   });
 
-  // 004-AC4: the libraries view lists persona templates and shared skills with author and version,
-  // and removes them; shipped templates stay.
+  // 004-AC4 035-AC19: the libraries view lists shipped persona templates and shared skills with
+  // author and version, and removes the skills; a profile's private persona is not listed. Removing
+  // a shared persona needs sharing, which 035 phase 2 brings.
   test(`libraries view and removal, ${vp.name}`, async ({ browser, request, baseURL }) => {
     const stamp = `${vp.name}${uniq()}`;
     const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Library ' + stamp } })).json();
@@ -195,19 +196,14 @@ for (const vp of widths) {
     expect((await lib.ctx.post('/api/profile/skills?scope=shared', { headers: { 'Content-Type': 'application/zip' }, data: readFileSync(skillZip(skill, 'X')) })).status()).toBe(201);
     const page = await (await browser.newContext({ viewport: vp })).newPage();
     expect(await signIn(page, adminToken, 'libraries')).toBe(201);
-    const t = page.locator('#templates .list-row', { hasText: tpl.title });
-    await expect(t).toHaveText(new RegExp(`${tpl.title}Libv1`));
     await expect(page.locator('#templates .list-row', { hasText: 'shipped' }).first()).toBeVisible();
+    await expect(page.locator('#templates .list-row', { hasText: tpl.title })).toHaveCount(0);
     const k = page.locator('#skills .list-row', { hasText: skill });
     await expect(k).toHaveText(new RegExp(`${skill}Libv1`));
     await fits(page, vp.width);
-    await rowAction(t, /^Remove/);
-    await confirmSheet(page, 'Remove');
-    await expect(t).toHaveCount(0);
     await rowAction(k, /^Remove/);
     await confirmSheet(page, 'Remove');
     await expect(k).toHaveCount(0);
-    await audited(request, 'template.remove', tpl.title);
     await audited(request, 'skill.remove', skill);
     await lib.ctx.dispose();
   });

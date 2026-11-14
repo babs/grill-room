@@ -150,7 +150,8 @@ for (const vp of widths) {
   });
 }
 
-// 033-AC2 033-AC4: a room from Retro has the Timekeeper as its time keeper, speaking over after 20 s.
+// 033-AC2 033-AC4 035-AC16: a room from Retro has the Timekeeper as its time keeper, speaking over
+// after 20 s; its Identity tab says it came with the starter.
 test('a room from Retro keeps time', async ({ browser, request }) => {
   const { pages: [page] } = await roomWith(browser, request, ['Tia' + uniq()]);
   await page.goto('/profile');
@@ -166,6 +167,8 @@ test('a room from Retro keeps time', async ({ browser, request }) => {
   await expect(sheet.getByLabel('N', { exact: true })).toHaveValue('5');
   await expect(sheet.getByLabel('Time keeper')).toBeChecked();
   await expect(sheet.getByLabel('Speak over after')).toHaveValue('20');
+  await sheet.getByRole('link', { name: 'Identity', exact: true }).click();
+  await expect(sheet.locator('section[data-tab=identity] > p.hint').first()).toHaveText('Came with the starter Retro.');
 });
 
 // 006-AC15 006-AC16 006-AC17 006-AC3: a room admin saves a room as a starter from Room settings,

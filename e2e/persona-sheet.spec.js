@@ -113,11 +113,11 @@ for (const [size, viewport] of Object.entries(sizes)) {
     await expect(more).toBeFocused();
     await alice.keyboard.press('Enter');
     const menu = alice.locator('#persona-menu');
-    await expect(menu.getByRole('button', { name: 'Save Grill to the library' })).toBeFocused();
+    await expect(menu.getByRole('button', { name: 'Save Grill to my personas' })).toBeFocused();
     await alice.keyboard.press('ArrowDown');
     await expect(menu.getByRole('button', { name: 'Remove Grill' })).toBeFocused();
     await alice.keyboard.press('ArrowDown');
-    await expect(menu.getByRole('button', { name: 'Save Grill to the library' })).toBeFocused();
+    await expect(menu.getByRole('button', { name: 'Save Grill to my personas' })).toBeFocused();
     await alice.keyboard.press('Escape');
     await expect(menu).toBeHidden();
     await expect(sheet).toBeVisible();
@@ -144,7 +144,7 @@ for (const [size, viewport] of Object.entries(sizes)) {
     // Enter on ⋯'s Remove asks first (005-AC39).
     await more.focus();
     await alice.keyboard.press('Enter');
-    await expect(menu.getByRole('button', { name: 'Save Grill to the library' })).toBeFocused();
+    await expect(menu.getByRole('button', { name: 'Save Grill to my personas' })).toBeFocused();
     await alice.keyboard.press('ArrowDown');
     await expect(menu.getByRole('button', { name: 'Remove Grill' })).toBeFocused();
     await alice.keyboard.press('Enter');
@@ -183,7 +183,7 @@ test('persona sheet: every 005 control is reachable', async ({ browser, request 
       'persona-add', 'room-skills', 'room-skill-list', 'room-skill-copy', 'room-skill-source'],
     fields: ['name', 'badge', 'colour', 'model', 'effort', 'text', 'trigger', 'every', 'autocompact', 'self_call'],
     sheetButtons: ['Save', 'Turn on the chosen skill for Grill', 'Turn off skill stamp for Grill', 'Update skill stamp of Grill to version 2'],
-    menuButtons: ['Update Grill to template version 2', 'Save Grill to the library', 'Start fresh for Grill', 'Start fresh with a summary for Grill',
+    menuButtons: ['Update Grill to template version 2', 'Save Grill to my personas', 'Start fresh for Grill', 'Start fresh with a summary for Grill',
       'Remove Grill'],
     selects: ['Skill to turn on for Grill'],
   };

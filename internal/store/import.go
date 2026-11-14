@@ -459,6 +459,11 @@ func (im *importer) personasStep(ps []xPersona) error {
 		if err != nil {
 			return err
 		}
+		// A template the archive names but this room cannot link: its version would read as a
+		// deleted library persona (035-AC16). One deleted before the export stays deleted.
+		if tpl == nil && (p.Template != 0 || p.TemplatePreset != "") {
+			p.TemplateVersion = 0
+		}
 		var id int64
 		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO room_personas(room_id, template_id, template_version, name, badge, colour, text, model, effort,
 			every_n, self_call, autocompact, created_at, every_voice, every_minutes, watches_notes, speaks, voice, voice_rate, time_keeper, cut_in_s, mark_msg_id, mark_at_ms)
