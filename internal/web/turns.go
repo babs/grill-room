@@ -388,9 +388,26 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, persona *sto
 	if err != nil {
 		return nil, err
 	}
+	if t.Linked, err = st.ReadRooms(ctx, room.ID); err != nil {
+		return nil, err
+	}
+	linkSlugs(t.Linked)
+	linked := make([]linkedPrompt, len(t.Linked))
+	for i, l := range t.Linked {
+		ds, err := st.Documents(ctx, l.Room)
+		if err != nil {
+			return nil, err
+		}
+		linked[i] = linkedPrompt{Slug: l.Slug, Name: l.Name}
+		for _, d := range ds {
+			if d.Folder == "" {
+				linked[i].Docs = append(linked[i].Docs, textPath(d))
+			}
+		}
+	}
 	t.Prompt = buildPrompt(promptInput{Preamble: preamble, Room: room.Name, Persona: persona.Name, Self: persona.ID, NewSession: t.Resume == "",
 		Handoff: t.Handoff, Msgs: msgs, Changes: changes, Anns: anns, Named: named, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs), Renamed: renamed,
-		SpokenWords: room.Speech.Words})
+		SpokenWords: room.Speech.Words, Linked: linked})
 	return t, nil
 }
 
@@ -452,12 +469,16 @@ func (s *Server) rejectTurn(ctx context.Context, room string, id, daemon int64, 
 // fetch of one turn's workspace holds the same documents (003-AC21). A daemon fetches the
 // workspace once its turn runs: a turn still shown queued on its host lost that state change.
 func (s *Server) pinBase(w http.ResponseWriter, r *http.Request, t *store.Turn) bool {
-	base, err := s.bus.Store.PinBaseRevisions(r.Context(), t.RoomID, t.ID)
+	base, linked, err := s.bus.Store.PinBaseRevisions(r.Context(), t.RoomID, t.ID)
+	if err == nil {
+		// A link removed or a room deleted since takes its files out of this turn (023-AC13).
+		linked, err = s.bus.Store.StillRead(r.Context(), t.RoomID, linked)
+	}
 	if err != nil {
 		s.serverError(w, "workspace_failed", err)
 		return false
 	}
-	t.BaseRevisions = base
+	t.BaseRevisions, t.Linked = base, linked
 	if t.HostQueued {
 		if err := s.hostQueued(r.Context(), t.RoomID, t.ID, t.DaemonID, false); err != nil {
 			s.log.Warn("turn_state_failed", zap.String("room", t.RoomID), zap.Int64("turn", t.ID), zap.Error(err))
@@ -673,7 +694,7 @@ func (s *Server) getWorkspace(w http.ResponseWriter, r *http.Request, d *store.D
 			zap.String("reason", truncate(reason, 32)))
 	}
 	w.Header().Set("Content-Type", "application/x-tar")
-	if err := s.writeWorkspace(r.Context(), w, t, nil); err != nil {
+	if err := s.writeWorkspace(r.Context(), w, t); err != nil {
 		// Headers are gone: the daemon sees a truncated tar and fails the turn.
 		s.log.Error("workspace_failed", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Error(err))
 	}
@@ -711,24 +732,17 @@ func (s *Server) postWorkspace(w http.ResponseWriter, r *http.Request, d *store.
 	for _, p := range req.Paths {
 		only[p] = true
 	}
-	// Listing the paths reads no blob; only the requested files are loaded below.
-	found := 0
-	err := s.walkWorkspace(r.Context(), t, func(name string, _ int64, _ func() ([]byte, error)) error {
-		if only[name] {
-			found++
-		}
-		return nil
-	})
+	files, err := s.pickFiles(r.Context(), t, only)
 	if err != nil {
 		s.serverError(w, "workspace_failed", err)
 		return
 	}
-	if found != len(only) {
+	if len(files) != len(only) {
 		httpError(w, http.StatusBadRequest, "a path is not in this turn's workspace")
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-tar")
-	if err := s.writeWorkspace(r.Context(), w, t, only); err != nil {
+	if err := writeEntries(w, files); err != nil {
 		s.log.Error("workspace_failed", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Error(err))
 	}
 }

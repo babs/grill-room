@@ -200,6 +200,21 @@ async function showLinks() {
 }
 window.grillShowLinks = () => showLinks().catch(console.error);
 
+// readersNote is what the remove sheet adds when other rooms read this one: their access stays,
+// and the reading rooms the caller shares with p where p still sits (023-AC15). '' for none.
+async function readersNote(p) {
+  if (!(window.grillLinks || []).some((l) => l.read_room === roomID)) return '';
+  let links = [];
+  try {
+    const res = await netFetch(api + '/links?participant=' + p.id);
+    if (res.ok) links = await res.json();
+  } catch { /* the note's first sentence holds without the names */ }
+  const where = links.filter((l) => l.person_member).map((l) => l.reader_name);
+  return ' Rooms that read this one keep their access; removing someone here does not cut it.'
+    + (where.length ? ' ' + p.name + ' still sits in ' + where.join(', ') + '.' : '');
+}
+window.grillReadersNote = readersNote;
+
 // showMe draws the user menu's button: initials in a ring, and the name beside them when wide.
 function showMe() {
   const who = document.createElement('span');
@@ -3824,7 +3839,7 @@ async function removePerson(p) {
   block.id = 'remove-block';
   block.disabled = !!p.no_profile;
   box.append(block, p.no_profile ? ' Block from rejoining: no profile, so no block' : ' Block from rejoining');
-  if (!(await grillConfirm('Remove ' + p.name + ' from the room?', 'Their messages stay.', 'Remove', false, box))) return;
+  if (!(await grillConfirm('Remove ' + p.name + ' from the room?', 'Their messages stay.' + (await readersNote(p)), 'Remove', false, box))) return;
   sendJSON('DELETE', api + '/participants/' + p.id, { block: block.checked }).catch((err) => toast(err.message));
 }
 

@@ -22,12 +22,33 @@ const (
 	msgLinkSelf        = "A room cannot read itself: pick another room"
 )
 
-// listRoomLinks lists the room's links both ways, for any member (023-AC1).
+// listRoomLinks lists the room's links both ways, for any member (023-AC1). With ?participant=<id>
+// it marks the rooms reading this one where that person sits, among those the caller sits in,
+// for a room admin only, who may remove them (023-AC15): anyone else could map seats across rooms.
 func (s *Server) listRoomLinks(w http.ResponseWriter, r *http.Request, sess session) {
+	q := r.URL.Query().Get("participant")
+	if q != "" && !s.asRoomAdmin(w, r, &sess) {
+		return
+	}
 	ls, err := s.bus.Store.RoomLinks(r.Context(), sess.p.RoomID, sess.p.ProfileID)
 	if err != nil {
 		s.serverError(w, "list_room_links_failed", err)
 		return
+	}
+	if q != "" {
+		pid, err := strconv.ParseInt(q, 10, 64)
+		if err != nil {
+			httpError(w, http.StatusBadRequest, "participant must be an id")
+			return
+		}
+		seated, err := s.bus.Store.SeatedRooms(r.Context(), sess.p.RoomID, pid)
+		if err != nil {
+			s.serverError(w, "list_room_links_failed", err)
+			return
+		}
+		for i := range ls {
+			ls[i].PersonMember = ls[i].Member && ls[i].ReadRoom == sess.p.RoomID && seated[ls[i].ReaderRoom]
+		}
 	}
 	writeJSON(w, http.StatusOK, ls)
 }

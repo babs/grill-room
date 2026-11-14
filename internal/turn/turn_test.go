@@ -210,3 +210,12 @@ func TestDrift(t *testing.T) {
 		}
 	}
 }
+
+// 023-AC12: any change under linked/ is ignored and listed, whatever its kind.
+func TestClassifyLinked(t *testing.T) {
+	o := Classify([]Change{{Path: "linked/legal/docs/a.md", Content: []byte("x")}, {Path: "linked/b/new.txt"}, {Path: "linked", Deleted: true}, {Path: "linkedin.md"}})
+	want := []string{"linked/legal/docs/a.md: linked rooms are read-only", "linked/b/new.txt: linked rooms are read-only", "linked: linked rooms are read-only"}
+	if !slices.Equal(o.Ignored, want) || len(o.Docs) != 0 || len(o.Rejected) != 0 {
+		t.Fatalf("%+v", o)
+	}
+}

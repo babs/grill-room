@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -591,5 +592,45 @@ func TestWorkspaceSyncFetchFailures(t *testing.T) {
 		}
 		sr.tr.setHook(nil)
 		sr.turn(t)
+	}
+}
+
+// 023-AC13: a linked room's files reach the sandbox through the server and the cache only while
+// the turn's manifest lists them: once the link is gone, its copy in the cache is never served.
+func TestWorkspaceCacheServesNoUnlistedLinkedFile(t *testing.T) {
+	sr := newSyncRoom(t, 1<<30)
+	ctx := t.Context()
+	var legal store.Room
+	sr.rs.call(t, "POST", "/api/rooms", sr.rs.admin, map[string]string{"name": "Legal"}, http.StatusCreated, &legal)
+	body := "# Floor price\n\nNot below 40.\n"
+	if _, err := sr.rs.st.CreateAgentDocument(ctx, legal.ID, "floor.md", "md", body, store.AgentName); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("pgx", sr.rs.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test
+	if _, err := db.ExecContext(ctx, `INSERT INTO room_links(reader_room_id, read_room_id, created_at) VALUES($1, $2, '2026-01-01T00:00:00Z')`, sr.rs.room, legal.ID); err != nil {
+		t.Fatal(err)
+	}
+	sr.turn(t)
+	if got := sr.workdir[0]["linked/legal/docs/floor.md"]; got != body {
+		t.Fatalf("linked document in the sandbox: %q", got)
+	}
+	if _, err := os.Stat(sr.cached([]byte(body))); err != nil {
+		t.Fatalf("linked document not cached: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM room_links`); err != nil {
+		t.Fatal(err)
+	}
+	calls := sr.turn(t)
+	for name := range sr.workdir[1] {
+		if strings.HasPrefix(name, "linked") {
+			t.Fatalf("unlinked room served from the cache: %s", name)
+		}
+	}
+	if fullFetch(calls) != "" || slices.ContainsFunc(fetched(calls), func(p string) bool { return strings.HasPrefix(p, "linked") }) {
+		t.Fatalf("second turn's requests: %+v", calls)
 	}
 }

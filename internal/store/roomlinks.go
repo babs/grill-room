@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -33,6 +35,9 @@ type RoomLink struct {
 	// Member tells the viewer sits in the other room, so its name may link there (023-AC8).
 	Member    bool `json:"member"`
 	CanRemove bool `json:"can_remove"`
+	// PersonMember tells a person asked about sits in the reader room too, set only where Member
+	// is (023-AC15).
+	PersonMember bool `json:"person_member,omitempty"`
 }
 
 func (l *RoomLink) details() map[string]any {
@@ -261,4 +266,134 @@ func roomLinksGone(ctx context.Context, tx *txn, id string) ([]int64, []string, 
 		}
 	}
 	return ids, others, nil
+}
+
+// LinkedRoom is a room a turn reads through link Link, as pinned on the turn (023-AC13): Cursor
+// is its last message at the turn's start, Revisions the latest revision of each of its live
+// documents, uploads included, at the turn's first fetch; nil before.
+type LinkedRoom struct {
+	Link      int64         `json:"link"`
+	Room      string        `json:"room"`
+	Slug      string        `json:"slug"`
+	Name      string        `json:"name"`
+	Cursor    int64         `json:"last_message"`
+	Revisions map[int64]int `json:"revisions"`
+}
+
+// ReadRooms lists the rooms room reads, oldest link first, each with its last message id; Slug is
+// left to the caller.
+func (s *Store) ReadRooms(ctx context.Context, roomID string) ([]LinkedRoom, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT l.id, r.id, r.name, COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.room_id = r.id), 0)
+		FROM room_links l JOIN rooms r ON r.id = l.read_room_id WHERE l.reader_room_id = ? ORDER BY l.id`, roomID)
+	if err != nil {
+		return nil, fmt.Errorf("read rooms: %w", err)
+	}
+	defer rows.Close()
+	var out []LinkedRoom
+	for rows.Next() {
+		var l LinkedRoom
+		if err := rows.Scan(&l.Link, &l.Room, &l.Name, &l.Cursor); err != nil {
+			return nil, fmt.Errorf("scan read room: %w", err)
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// pinLinked pins the agent document revisions of the rooms turn id reads, once (023-AC13).
+func pinLinked(ctx context.Context, tx *txn, id int64) ([]LinkedRoom, error) {
+	var raw sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT linked FROM turns WHERE id = ?`, id).Scan(&raw); err != nil {
+		return nil, fmt.Errorf("pin linked rooms: %w", err)
+	}
+	if !raw.Valid {
+		return nil, nil
+	}
+	var ls []LinkedRoom
+	if err := json.Unmarshal([]byte(raw.String), &ls); err != nil {
+		return nil, fmt.Errorf("pin linked rooms: %w", err)
+	}
+	if len(ls) == 0 || ls[0].Revisions != nil {
+		return ls, nil
+	}
+	for i := range ls {
+		revs, err := docRevisions(ctx, tx, ls[i].Room, true)
+		if err != nil {
+			return nil, err
+		}
+		ls[i].Revisions = revs
+	}
+	b, err := json.Marshal(ls)
+	if err != nil {
+		return nil, fmt.Errorf("pin linked rooms: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE turns SET linked = ? WHERE id = ?`, string(b), id); err != nil {
+		return nil, fmt.Errorf("pin linked rooms: %w", err)
+	}
+	return ls, nil
+}
+
+// StillRead keeps the rooms of ls whose link still stands: a link removed or a room deleted during
+// the turn takes it out of the workspace, and a link made again is not this turn's (023-AC13).
+func (s *Store) StillRead(ctx context.Context, roomID string, ls []LinkedRoom) ([]LinkedRoom, error) {
+	if len(ls) == 0 {
+		return ls, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM room_links WHERE reader_room_id = ?`, roomID)
+	if err != nil {
+		return nil, fmt.Errorf("still read: %w", err)
+	}
+	defer rows.Close()
+	live := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("still read: %w", err)
+		}
+		live[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("still read: %w", err)
+	}
+	return slices.DeleteFunc(slices.Clone(ls), func(l LinkedRoom) bool { return !live[l.Link] }), nil
+}
+
+// HiddenChatFiles returns the chat documents of room sent with a message deleted since: a linked
+// room's reader never sees them (023-AC10).
+func (s *Store) HiddenChatFiles(ctx context.Context, roomID string) (map[int64]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT md.document_id FROM message_documents md JOIN messages m ON m.id = md.message_id
+		JOIN documents d ON d.id = md.document_id WHERE m.room_id = ? AND m.deleted_at IS NOT NULL AND d.folder = ?`, roomID, FolderChat)
+	if err != nil {
+		return nil, fmt.Errorf("hidden chat files: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("hidden chat files: %w", err)
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// SeatedRooms returns the rooms where the profile of participant pid of room has a live seat;
+// none for a participant without a profile.
+func (s *Store) SeatedRooms(ctx context.Context, roomID string, pid int64) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT o.room_id FROM participants p JOIN participants o ON o.profile_id = p.profile_id
+		WHERE p.id = ? AND p.room_id = ? AND o.removed_at IS NULL`, pid, roomID)
+	if err != nil {
+		return nil, fmt.Errorf("seated rooms: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, fmt.Errorf("seated rooms: %w", err)
+		}
+		out[r] = true
+	}
+	return out, rows.Err()
 }

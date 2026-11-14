@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { rowAction, unfoldTabs, uniq } from './helpers.js';
+import { fakeDaemon, personMenu, rowAction, unfoldTabs, uniq } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -102,4 +102,54 @@ test('room links from Room settings', async ({ browser, request }) => {
   await sheet.getByLabel('Room').selectOption(notes);
   await expect(sheet.getByLabel(`${notesName} reads ${names[1]}`)).toBeChecked();
   await expect(sheet.getByLabel(`${names[1]} reads ${notesName}`)).toBeDisabled();
+});
+
+// 023-AC9 023-AC14 023-AC15: a turn of Pricing, which reads Legal, gets Legal's document from the
+// server through a stub AI host; Legal's remove sheet says the link keeps reading, and names
+// Pricing, where Bob still sits, to Ana who sits there too; Pricing, read by none, says nothing.
+test('a turn reads a linked room; the remove sheet says links stay', async ({ browser, request, baseURL }) => {
+  const lobby = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Lobby' } })).json();
+  const ana = await join(browser, request, lobby.id, 'Ana');
+  const make = async (name) => (await (await ana.request.post('/api/profile/rooms', { data: { name, display_name: 'Ana' } })).json()).id;
+  const pricingName = 'Pricing ' + uniq();
+  const legalName = 'Legal ' + uniq();
+  const pricing = await make(pricingName);
+  const legal = await make(legalName);
+  expect((await ana.request.post(`/api/rooms/${pricing}/links`, { data: { room: legal, reads: true } })).status()).toBe(201);
+  const up = await ana.request.post(`/api/rooms/${legal}/documents`, { multipart: { file: { name: 'terms.md', mimeType: 'text/markdown', buffer: Buffer.from('# Terms\n\nNet 30.\n') } } });
+  expect(up.status()).toBe(201);
+  const docID = (await up.json()).id;
+
+  await ana.goto(`/r/${pricing}`);
+  const d = await fakeDaemon(ana, baseURL, pricing, 'ana-laptop');
+  try {
+    expect((await ana.request.post(`/api/rooms/${pricing}/turns`, { data: {} })).status()).toBe(201);
+    await expect.poll(() => d.turns.length).toBe(1);
+    const daemon = (p, init = {}) => fetch(`${baseURL}/api/rooms/${pricing}/daemon/turns/${d.turns[0]}${p}`,
+      { ...init, headers: { Authorization: 'Bearer ' + d.token, 'Content-Type': 'application/json' } });
+    const m = await (await daemon('/manifest')).json();
+    const want = `linked/${legalName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}/uploads/${docID}-terms.md`;
+    expect(m.files.map((f) => f.path)).toContain(want);
+    const tar = await daemon('/workspace', { method: 'POST', body: JSON.stringify({ paths: [want] }) });
+    expect(tar.status).toBe(200);
+    expect(Buffer.from(await tar.arrayBuffer()).toString()).toContain('Net 30.');
+  } finally {
+    d();
+  }
+
+  const bob = await join(browser, request, legal, 'Bob');
+  // Bob's own profile takes a seat in Pricing too.
+  const inv = await (await request.post(`/api/rooms/${pricing}/invites`, { headers: admin })).json();
+  expect((await bob.request.post('/api/join', { data: { invite: inv.token, name: 'Bob' } })).status()).toBe(201);
+  await ana.goto(`/r/${legal}`);
+  await (await personMenu(ana, 'Bob')).getByRole('button', { name: 'Remove from room…' }).click();
+  const sheet = ana.locator('dialog.confirm');
+  await expect(sheet.locator('#confirm-text')).toHaveText('Their messages stay. Rooms that read this one keep their access; removing someone here does not cut it.'
+    + ` Bob still sits in ${pricingName}.`);
+  await sheet.getByRole('button', { name: 'Cancel' }).click();
+  await bob.goto(`/r/${pricing}`);
+  await expect(bob.locator('#me')).toHaveText('Bob');
+  await ana.goto(`/r/${pricing}`);
+  await (await personMenu(ana, 'Bob')).getByRole('button', { name: 'Remove from room…' }).click();
+  await expect(sheet.locator('#confirm-text')).toHaveText('Their messages stay.');
 });

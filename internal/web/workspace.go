@@ -11,7 +11,9 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
 	"time"
+	"unicode"
 
 	"github.com/babs/grill-room/internal/anchor"
 	"github.com/babs/grill-room/internal/store"
@@ -81,6 +83,41 @@ type promptInput struct {
 	Renamed []string
 	// SpokenWords asks for spoken.md of at most that many words; 0 leaves it out (013-AC1).
 	SpokenWords int
+	// Linked are the rooms the turn reads (023-AC11).
+	Linked []linkedPrompt
+}
+
+// linkedPrompt is a room the turn reads, as its prompt names it: Docs are paths in its folder.
+type linkedPrompt struct {
+	Slug, Name string
+	Docs       []string
+}
+
+// linkSlugs names each read room's folder after the room, path-safe, with -2, -3 … when two give
+// the same (023-AC9).
+func linkSlugs(ls []store.LinkedRoom) {
+	seen := map[string]bool{}
+	for i := range ls {
+		base := slugOf(ls[i].Name)
+		slug := base
+		for n := 2; seen[slug]; n++ {
+			slug = fmt.Sprintf("%s-%d", base, n)
+		}
+		seen[slug], ls[i].Slug = true, slug
+	}
+}
+
+// slugOf lowercases name and joins its runs of letters and digits with dashes; "room" when none.
+func slugOf(name string) string {
+	f := strings.FieldsFunc(strings.ToLower(name), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	s := strings.Join(f, "-")
+	if r := []rune(s); len(r) > 60 {
+		s = strings.Trim(string(r[:60]), "-")
+	}
+	if s == "" {
+		return "room"
+	}
+	return s
 }
 
 // spokenRules ask for spoken.md (013 Appendix C); %d is the word cap.
@@ -200,6 +237,17 @@ func buildPrompt(in promptInput) string {
 		}
 		b.WriteString("\n")
 	}
+	if len(in.Linked) > 0 {
+		b.WriteString("## Linked rooms\n\nThis room reads other rooms. Each one is in linked/<folder>/, read-only: never edit, add or delete a file there; a change is refused. Its transcript/ runs up to when this turn started; its docs/ and uploads/ are as they were when your workspace was fetched. It has no annotations.\n\n")
+		for _, l := range in.Linked {
+			fmt.Fprintf(&b, "- linked/%s/: %q", l.Slug, l.Name)
+			if len(l.Docs) > 0 {
+				b.WriteString(", documents: " + strings.Join(l.Docs, ", "))
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
 	if in.Handoff == store.HandoffWrite {
 		fmt.Fprintf(&b, "## Handoff\n\nThis is the last turn of your session: the host starts a new session for you after it, which remembers nothing of this one. Write %s for it: the decisions made, the current state, the open questions, and what to do next. The new session reads it, then transcript/.\n\n", doc)
 	}
@@ -312,63 +360,94 @@ func attachmentPath(at store.Attachment) string {
 // workspaceDirs exist in every workspace, even empty.
 var workspaceDirs = []string{turn.DocsDir, turn.UploadsDir, turn.TranscriptDir, turn.AttachmentsDir}
 
+// turnDirs are t's workspace dirs: linked/ and each read room's folders only when it reads one (023-AC11).
+func turnDirs(t *store.Turn) []string {
+	if len(t.Linked) == 0 {
+		return workspaceDirs
+	}
+	dirs := append(slices.Clone(workspaceDirs), turn.LinkedDir)
+	for _, l := range t.Linked {
+		for _, d := range []string{"", turn.DocsDir, turn.UploadsDir, turn.TranscriptDir} {
+			dirs = append(dirs, path.Join(linkedDir(l.Slug), d))
+		}
+	}
+	return dirs
+}
+
 // wsFile receives one workspace file. data loads its bytes and is valid only during the call: a
-// walk that only lists paths reads no blob.
-type wsFile func(name string, mode int64, data func() ([]byte, error)) error
+// walk that only lists paths reads no blob. key names a stored blob, whose data stays valid after
+// the call; the zero key is a file the walk generates.
+type wsFile func(name string, mode int64, key blobKey, data func() ([]byte, error)) error
+
+// blobKey is a stored blob: revision rev of document doc, or with rev 0 an upload's original.
+// Neither changes once written (store.TestStoredBlobsAreNeverRewritten).
+type blobKey struct {
+	doc int64
+	rev int
+}
+
+type blobSum struct {
+	sha256 string
+	size   int64
+}
+
+// maxBlobSums bounds blobSums: about 100 bytes an entry.
+const maxBlobSums = 10_000
+
+// blobSums keeps the sha256 of stored blobs, so a manifest reads each blob once per process, not
+// once per fetch for every room the turn reads (023-AC9).
+// ponytail: emptied whole once past maxBlobSums entries; an LRU if large instances keep missing.
+type blobSums struct {
+	mu sync.Mutex
+	m  map[blobKey]blobSum
+}
+
+// sum returns the sha256 and size of data, loading it only when key is the zero key or unknown.
+func (c *blobSums) sum(key blobKey, data func() ([]byte, error)) (blobSum, error) {
+	if key != (blobKey{}) {
+		c.mu.Lock()
+		got, ok := c.m[key]
+		c.mu.Unlock()
+		if ok {
+			return got, nil
+		}
+	}
+	b, err := data()
+	if err != nil {
+		return blobSum{}, err
+	}
+	h := sha256.Sum256(b)
+	got := blobSum{hex.EncodeToString(h[:]), int64(len(b))}
+	if key != (blobKey{}) {
+		c.mu.Lock()
+		if c.m == nil || len(c.m) >= maxBlobSums {
+			c.m = map[blobKey]blobSum{}
+		}
+		c.m[key] = got
+		c.mu.Unlock()
+	}
+	return got, nil
+}
 
 func bytesOf(b []byte) func() ([]byte, error) { return func() ([]byte, error) { return b, nil } }
 
 // walkWorkspace visits the turn's workspace files: the documents, the uploads (read-only) with
-// their Markdown copies, the transcript up to the turn's cursor, and the annotation threads.
+// their Markdown copies, the transcript up to the turn's cursor, the annotation threads, and each
+// room the turn reads under linked/<slug>/ (023-AC9).
 func (s *Server) walkWorkspace(ctx context.Context, t *store.Turn, visit wsFile) error {
 	st := s.bus.Store
-	file := func(name string, mode int64, data func() ([]byte, error)) error {
+	file := func(name string, mode int64, key blobKey, data func() ([]byte, error)) error {
 		// Invariant: the daemon refuses a path that could leave /workspace.
 		if !turn.ValidPath(name) {
 			return fmt.Errorf("workspace path %q is not valid", name)
 		}
-		return visit(name, mode, data)
+		return visit(name, mode, key, data)
 	}
-	docs, err := st.Documents(ctx, t.RoomID)
+	paths, err := s.walkDocs(ctx, t.RoomID, t.BaseRevisions, "", false, file)
 	if err != nil {
 		return err
 	}
-	for _, d := range docs {
-		revision := func(n int) func() ([]byte, error) {
-			return func() ([]byte, error) {
-				rev, err := st.Revision(ctx, d.ID, n)
-				if err != nil {
-					return nil, err
-				}
-				return []byte(rev.Body), nil
-			}
-		}
-		if d.Kind == store.DocAgent {
-			n := d.Revisions
-			if t.BaseRevisions != nil {
-				var ok bool
-				// A document another turn wrote after this workspace was pinned stays out of it.
-				if n, ok = t.BaseRevisions[d.ID]; !ok {
-					continue
-				}
-			}
-			if err := file(agentPath(d), 0o644, revision(n)); err != nil {
-				return err
-			}
-			continue
-		}
-		// Read-only modes keep honest edits away; the server refuses any upload change anyway.
-		if err := file(uploadPath(d), 0o444, func() ([]byte, error) { return st.Original(ctx, t.RoomID, d.ID) }); err != nil {
-			return err
-		}
-		if isOffice(d) {
-			if err := file(textPath(d), 0o444, revision(1)); err != nil {
-				return err
-			}
-		}
-	}
-	paths := docPaths(docs)
-	if err := s.writeTranscript(ctx, t, paths, file); err != nil {
+	if err := s.writeTranscript(ctx, t.RoomID, t.MessageCursor, "", false, paths, file); err != nil {
 		return err
 	}
 	anns, _, err := st.AnnotationsSince(ctx, t.RoomID, 0)
@@ -384,39 +463,103 @@ func (s *Server) walkWorkspace(ctx context.Context, t *store.Turn, visit wsFile)
 		writeThread(&b, a, paths, 0, 0)
 		for _, m := range a.Messages {
 			for _, at := range m.Attachments {
-				if err := file(attachmentPath(at), 0o444, bytesOf(at.Data)); err != nil {
+				if err := file(attachmentPath(at), 0o444, blobKey{}, bytesOf(at.Data)); err != nil {
 					return err
 				}
 			}
 		}
 	}
-	return file(turn.AnnotationsFile, 0o444, bytesOf([]byte(b.String())))
-}
-
-// writeWorkspace writes the turn's workspace as a tar, or only the files in only when it is not nil.
-func (s *Server) writeWorkspace(ctx context.Context, w io.Writer, t *store.Turn, only map[string]bool) error {
-	tw := tar.NewWriter(w)
-	mtime := time.Now()
-	if only == nil {
-		for _, d := range workspaceDirs {
-			if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: d + "/", Mode: 0o755, ModTime: mtime}); err != nil {
-				return err
-			}
-		}
+	if err := file(turn.AnnotationsFile, 0o444, blobKey{}, bytesOf([]byte(b.String()))); err != nil {
+		return err
 	}
-	err := s.walkWorkspace(ctx, t, func(name string, mode int64, data func() ([]byte, error)) error {
-		if only != nil && !only[name] {
-			return nil
-		}
-		b, err := data()
+	for _, l := range t.Linked {
+		dir := linkedDir(l.Slug)
+		lp, err := s.walkDocs(ctx, l.Room, l.Revisions, dir, true, file)
 		if err != nil {
 			return err
 		}
-		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: int64(len(b)), ModTime: mtime}); err != nil {
+		if err := s.writeTranscript(ctx, l.Room, l.Cursor, dir, true, lp, file); err != nil {
 			return err
 		}
-		_, err = tw.Write(b)
-		return err
+	}
+	return nil
+}
+
+func linkedDir(slug string) string { return path.Join(turn.LinkedDir, slug) }
+
+// walkDocs visits room's documents under dir: agent documents at their base revisions (all the
+// latest while base is nil), uploads with their Markdown copies. It returns each document's path.
+// A linked room is read-only, its documents are all pinned in base, uploads included, and the
+// files of its deleted messages stay out (023-AC10, 023-AC12, 023-AC13).
+func (s *Server) walkDocs(ctx context.Context, room string, base map[int64]int, dir string, linked bool, file wsFile) (map[int64]string, error) {
+	st := s.bus.Store
+	docs, err := st.Documents(ctx, room)
+	if err != nil {
+		return nil, err
+	}
+	agentMode, hidden := int64(0o644), map[int64]bool{}
+	if linked {
+		agentMode = 0o444
+		if hidden, err = st.HiddenChatFiles(ctx, room); err != nil {
+			return nil, err
+		}
+		docs = slices.DeleteFunc(docs, func(d store.Document) bool {
+			_, pinned := base[d.ID]
+			return hidden[d.ID] || base != nil && !pinned
+		})
+	}
+	for _, d := range docs {
+		revision := func(n int) func() ([]byte, error) {
+			return func() ([]byte, error) {
+				rev, err := st.Revision(ctx, d.ID, n)
+				if err != nil {
+					return nil, err
+				}
+				return []byte(rev.Body), nil
+			}
+		}
+		if d.Kind == store.DocAgent {
+			n := d.Revisions
+			if base != nil {
+				var ok bool
+				// A document another turn wrote after this workspace was pinned stays out of it.
+				if n, ok = base[d.ID]; !ok {
+					continue
+				}
+			}
+			if err := file(path.Join(dir, agentPath(d)), agentMode, blobKey{d.ID, n}, revision(n)); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		// Read-only modes keep honest edits away; the server refuses any upload change anyway.
+		if err := file(path.Join(dir, uploadPath(d)), 0o444, blobKey{d.ID, 0}, func() ([]byte, error) { return st.Original(ctx, room, d.ID) }); err != nil {
+			return nil, err
+		}
+		if isOffice(d) {
+			if err := file(path.Join(dir, textPath(d)), 0o444, blobKey{d.ID, 1}, revision(1)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	paths := docPaths(docs)
+	for id, p := range paths {
+		paths[id] = path.Join(dir, p)
+	}
+	return paths, nil
+}
+
+// writeWorkspace writes the turn's whole workspace as a tar.
+func (s *Server) writeWorkspace(ctx context.Context, w io.Writer, t *store.Turn) error {
+	tw := tar.NewWriter(w)
+	mtime := time.Now()
+	for _, d := range turnDirs(t) {
+		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: d + "/", Mode: 0o755, ModTime: mtime}); err != nil {
+			return err
+		}
+	}
+	err := s.walkWorkspace(ctx, t, func(name string, mode int64, _ blobKey, data func() ([]byte, error)) error {
+		return writeEntry(tw, name, mode, mtime, data)
 	})
 	if err != nil {
 		return err
@@ -424,16 +567,67 @@ func (s *Server) writeWorkspace(ctx context.Context, w io.Writer, t *store.Turn,
 	return tw.Close()
 }
 
+func writeEntry(tw *tar.Writer, name string, mode int64, mtime time.Time, data func() ([]byte, error)) error {
+	b, err := data()
+	if err != nil {
+		return err
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: int64(len(b)), ModTime: mtime}); err != nil {
+		return err
+	}
+	_, err = tw.Write(b)
+	return err
+}
+
+// writeEntries writes files as a tar.
+func writeEntries(w io.Writer, files []wsEntry) error {
+	tw := tar.NewWriter(w)
+	mtime := time.Now()
+	for _, f := range files {
+		if err := writeEntry(tw, f.name, f.mode, mtime, f.data); err != nil {
+			return err
+		}
+	}
+	return tw.Close()
+}
+
+// wsEntry is a workspace file kept past its walk: a generated file's bytes are copied.
+type wsEntry struct {
+	name string
+	mode int64
+	data func() ([]byte, error)
+}
+
+// pickFiles walks the turn's workspace once and keeps the files named in only, in walk order;
+// it reads only the generated ones, which the walk builds anyway, and loads no stored blob.
+func (s *Server) pickFiles(ctx context.Context, t *store.Turn, only map[string]bool) ([]wsEntry, error) {
+	var out []wsEntry
+	err := s.walkWorkspace(ctx, t, func(name string, mode int64, key blobKey, data func() ([]byte, error)) error {
+		if !only[name] {
+			return nil
+		}
+		if key == (blobKey{}) {
+			b, err := data()
+			if err != nil {
+				return err
+			}
+			data = bytesOf(bytes.Clone(b))
+		}
+		out = append(out, wsEntry{name, mode, data})
+		return nil
+	})
+	return out, err
+}
+
 // manifest lists the turn's workspace files with their sha256 and size, sorted by path (002-AC37).
 func (s *Server) manifest(ctx context.Context, t *store.Turn) (*turn.Manifest, error) {
-	m := &turn.Manifest{Dirs: workspaceDirs, Files: []turn.File{}}
-	err := s.walkWorkspace(ctx, t, func(name string, mode int64, data func() ([]byte, error)) error {
-		b, err := data()
+	m := &turn.Manifest{Dirs: turnDirs(t), Files: []turn.File{}}
+	err := s.walkWorkspace(ctx, t, func(name string, mode int64, key blobKey, data func() ([]byte, error)) error {
+		sum, err := s.blobSums.sum(key, data)
 		if err != nil {
 			return err
 		}
-		sum := sha256.Sum256(b)
-		m.Files = append(m.Files, turn.File{Path: name, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(b)), Mode: mode})
+		m.Files = append(m.Files, turn.File{Path: name, SHA256: sum.sha256, Size: sum.size, Mode: mode})
 		return nil
 	})
 	if err != nil {
@@ -443,12 +637,13 @@ func (s *Server) manifest(ctx context.Context, t *store.Turn) (*turn.Manifest, e
 	return m, nil
 }
 
-// writeTranscript writes the room's messages up to the turn's cursor: a folder per UTC day, of
-// chunks of turn.TranscriptChunk messages (003-AC23). Messages only ever append, so a full chunk
-// changes only when one of its messages is edited or deleted, or a file one lists is renamed or
-// deleted, and a daemon's cache keeps the rest. The header names no room: a rename would rewrite
-// every chunk.
-func (s *Server) writeTranscript(ctx context.Context, t *store.Turn, paths map[int64]string, file wsFile) error {
+// writeTranscript writes room's messages up to cursor under dir: a folder per UTC day, of chunks
+// of turn.TranscriptChunk messages (003-AC23). Messages only ever append, so a full chunk changes
+// only when one of its messages is edited or deleted, or a file one lists is renamed or deleted,
+// and a daemon's cache keeps the rest. The header names no room: a rename would rewrite every
+// chunk. A linked room's transcript leaves deleted messages out and shows edits untagged
+// (023-AC10); they still count in their chunk, so a delete moves no later line.
+func (s *Server) writeTranscript(ctx context.Context, room string, cursor int64, dir string, linked bool, paths map[int64]string, file wsFile) error {
 	var day string
 	var n int // messages of the day so far
 	var buf bytes.Buffer
@@ -457,12 +652,12 @@ func (s *Server) writeTranscript(ctx context.Context, t *store.Turn, paths map[i
 			return nil
 		}
 		chunk := fmt.Sprintf("%03d.md", (n-1)/turn.TranscriptChunk+1)
-		err := file(path.Join(turn.TranscriptDir, day, chunk), 0o444, bytesOf(buf.Bytes()))
+		err := file(path.Join(dir, turn.TranscriptDir, day, chunk), 0o444, blobKey{}, bytesOf(buf.Bytes()))
 		buf.Reset()
 		return err
 	}
-	for after := int64(0); after < t.MessageCursor; {
-		batch, err := s.bus.Store.Messages(ctx, t.RoomID, after, replayBatch)
+	for after := int64(0); after < cursor; {
+		batch, err := s.bus.Store.Messages(ctx, room, after, replayBatch)
 		if err != nil {
 			return err
 		}
@@ -470,7 +665,7 @@ func (s *Server) writeTranscript(ctx context.Context, t *store.Turn, paths map[i
 			break
 		}
 		for _, m := range batch {
-			if m.ID > t.MessageCursor {
+			if m.ID > cursor {
 				break
 			}
 			if d := m.TS.UTC().Format(time.DateOnly); d != day || n%turn.TranscriptChunk == 0 {
@@ -483,6 +678,12 @@ func (s *Server) writeTranscript(ctx context.Context, t *store.Turn, paths map[i
 				fmt.Fprintf(&buf, "# %s (UTC), part %d\n\n", day, n/turn.TranscriptChunk+1)
 			}
 			n++
+			if linked {
+				if m.DeletedAt != nil {
+					continue
+				}
+				m.EditedAt = nil
+			}
 			buf.WriteString(transcriptLine(m, false, paths))
 		}
 		after = batch[len(batch)-1].ID

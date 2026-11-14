@@ -293,4 +293,160 @@ func TestRoomLinksSchema(t *testing.T) {
 	if baselineVersion+len(migrations) < 62 || !strings.Contains(migrations[62-baselineVersion-1], "room_links") {
 		t.Fatal("migration 62 does not create room_links")
 	}
+	// 023-AC13: phase 2 pins a turn's linked rooms.
+	if baselineVersion+len(migrations) < 63 || !strings.Contains(migrations[63-baselineVersion-1], "turns ADD COLUMN IF NOT EXISTS linked") {
+		t.Fatal("migration 63 does not add turns.linked")
+	}
+}
+
+// 023-AC13: a turn pins the rooms its room reads at its start, their document revisions at its
+// first fetch; later fetches keep that snapshot, and a removed link takes the room out.
+func TestLinkedTurnPin(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	r := newTurnRoom(t, s, "a")
+	ana, _, _ := linkSetup(t, s)
+	anaA, _, err := s.Join(ctx, "inv-a", "Ana A", "tok-ana-a", JoinProfile{ID: ana.ProfileID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeAdmin(t, s, "a", ana.ProfileID)
+	ls, _, err := s.CreateRoomLinks(ctx, "a", "l", true, false, anaA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.CreateRoomLinks(ctx, "a", "p", true, false, anaA); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := s.CreateAgentDocument(ctx, "l", "brief.md", "md", "# Brief\n", AgentName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	up, err := s.AddUpload(ctx, &Upload{RoomID: "l", Author: "Ana", Filename: "nda.pdf", ContentType: "application/pdf", Format: "pdf", Data: []byte("%PDF")}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, err := s.ReadRooms(ctx, "a")
+	if err != nil || len(read) != 2 || read[0].Room != "l" || read[0].Link != ls[0].ID || read[0].Name != "Room l" || read[0].Cursor == 0 || read[1].Room != "p" {
+		t.Fatalf("read rooms %+v %v", read, err)
+	}
+	if none, err := s.ReadRooms(ctx, "l"); err != nil || len(none) != 0 {
+		t.Fatalf("l reads %+v %v", none, err)
+	}
+	tn := &Turn{RoomID: "a", ParticipantID: r.p.ID, DaemonID: r.daemon, Prompt: "go", PersonaID: r.grill.ID, PersonaName: r.grill.Name, Linked: read}
+	if err := s.StartTurn(ctx, tn, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Turn(ctx, "a", tn.ID); len(got.Linked) != 2 || got.Linked[0].Revisions != nil || got.Linked[0].Cursor != read[0].Cursor {
+		t.Fatalf("stored %+v", got.Linked)
+	}
+	_, linked, err := s.PinBaseRevisions(ctx, "a", tn.ID)
+	if err != nil || len(linked) != 2 {
+		t.Fatalf("pinned %+v %v", linked, err)
+	}
+	if _, ok := linked[0].Revisions[up.ID]; linked[0].Revisions[doc.ID] != 1 || !ok || linked[1].Revisions == nil || len(linked[1].Revisions) != 0 {
+		t.Fatalf("pinned %+v %v", linked, err)
+	}
+	if _, err := s.AddRevision(ctx, "l", doc.ID, "# Brief v2\n", "Secretary"); err != nil {
+		t.Fatal(err)
+	}
+	if _, again, _ := s.PinBaseRevisions(ctx, "a", tn.ID); again[0].Revisions[doc.ID] != 1 {
+		t.Fatalf("the pin moved: %+v", again)
+	}
+	if _, err := s.DeleteRoomLink(ctx, "a", ls[0].ID, anaA); err != nil {
+		t.Fatal(err)
+	}
+	if kept, err := s.StillRead(ctx, "a", linked); err != nil || len(kept) != 1 || kept[0].Room != "p" || len(linked) != 2 {
+		t.Fatalf("still read %+v %v", kept, err)
+	}
+	// A link made again is another link: the turn still leaves the room out.
+	if _, _, err := s.CreateRoomLinks(ctx, "a", "l", true, false, anaA); err != nil {
+		t.Fatal(err)
+	}
+	if kept, _ := s.StillRead(ctx, "a", linked); len(kept) != 1 || kept[0].Room != "p" {
+		t.Fatalf("relinked %+v", kept)
+	}
+}
+
+// 023-AC15: the rooms a participant's profile sits in, none without a profile.
+func TestSeatedRooms(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	ana, _, bob := linkSetup(t, s)
+	got, err := s.SeatedRooms(ctx, "p", ana.ID)
+	if err != nil || len(got) != 2 || !got["p"] || !got["l"] {
+		t.Fatalf("ana %v %v", got, err)
+	}
+	if got, _ := s.SeatedRooms(ctx, "p", bob.ID); len(got) != 1 || !got["p"] {
+		t.Fatalf("bob %v", got)
+	}
+	if got, _ := s.SeatedRooms(ctx, "l", bob.ID); len(got) != 0 {
+		t.Fatalf("bob from another room %v", got)
+	}
+}
+
+// The linked-room reads fail with the store, and a corrupt pin fails the turn's reads.
+func TestLinkedRoomsFailWithTheStore(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	r := newTurnRoom(t, s, "a")
+	tn := r.start(t, s, "a")
+	if _, err := s.db.ExecContext(ctx, `UPDATE turns SET linked = '[{"room": 1}]' WHERE id = ?`, tn.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Turn(ctx, "a", tn.ID); err == nil {
+		t.Fatal("a corrupt linked column read")
+	}
+	if _, _, err := s.PinBaseRevisions(ctx, "a", tn.ID); err == nil {
+		t.Fatal("a corrupt linked column pinned")
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE turns SET linked = '[{"room": "x"}]' WHERE id = ?`, tn.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"documents", "turns", "room_links", "participants"} {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE `+table+` RENAME TO gone`); err != nil {
+			t.Fatal(err)
+		}
+		_, _, pinErr := s.PinBaseRevisions(ctx, "a", tn.ID)
+		_, readErr := s.ReadRooms(ctx, "a")
+		_, stillErr := s.StillRead(ctx, "a", []LinkedRoom{{Link: 1, Room: "x"}})
+		_, seatErr := s.SeatedRooms(ctx, "a", r.p.ID)
+		if _, err := s.HiddenChatFiles(ctx, "a"); err == nil && table == "documents" {
+			t.Errorf("documents gone: hidden chat files read")
+		}
+		if pinErr == nil && (table == "documents" || table == "turns") || readErr == nil && table == "room_links" ||
+			stillErr == nil && table == "room_links" || seatErr == nil && table == "participants" {
+			t.Errorf("%s gone: pin %v, read %v, still %v, seated %v", table, pinErr, readErr, stillErr, seatErr)
+		}
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE gone RENAME TO `+table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if kept, err := s.StillRead(ctx, "a", nil); err != nil || kept != nil {
+		t.Fatalf("none: %v %v", kept, err)
+	}
+}
+
+// 023-AC10: the chat files of a deleted message are hidden from a reading room; a live message's
+// are not, nor a room document.
+func TestHiddenChatFiles(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	ana, _, _ := linkSetup(t, s)
+	send := func(name string) *Message {
+		m := &Message{RoomID: "p", Kind: KindText, ParticipantID: ana.ID, Sender: "Ana"}
+		if err := s.InsertMessageUploads(ctx, m, []Upload{{RoomID: "p", ParticipantID: ana.ID, Author: "Ana", Filename: name,
+			ContentType: "text/markdown; charset=utf-8", Format: "md", Data: []byte("# x\n"), Text: "# x\n"}}, 1<<20); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	gone, kept := send("gone.md"), send("kept.md")
+	if _, err := s.DeleteMessage(ctx, "p", gone.ID, ana.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.HiddenChatFiles(ctx, "p")
+	if err != nil || len(got) != 1 || !got[gone.Documents[0].ID] || got[kept.Documents[0].ID] {
+		t.Fatalf("hidden %v %v", got, err)
+	}
 }

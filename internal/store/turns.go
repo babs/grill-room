@@ -96,6 +96,8 @@ type Turn struct {
 	// BaseRevisions are the revisions of the agent documents in the turn's workspace, by document
 	// id, pinned when the daemon first fetches it; nil before.
 	BaseRevisions map[int64]int `json:"-"`
+	// Linked are the rooms the turn reads through links, pinned at its start (023-AC13); nil for none.
+	Linked []LinkedRoom `json:"-"`
 	// QueueID is the queue entry the turn comes from, 0 for a press that did not wait: the
 	// mentions waiting on it follow the turn (005-AC4). Set by the caller of StartTurn only.
 	QueueID int64 `json:"-"`
@@ -247,16 +249,16 @@ type TurnOutcome struct {
 const turnCols = `SELECT id, room_id, COALESCE(participant_id, 0), COALESCE(daemon_id, 0), status, fresh, resume,
 	session_id, model, message_cursor, annotation_cursor, change_cursor, prompt, error, report, started_at, ended_at,
 	COALESCE(persona_id, 0), persona_name, persona_text, req_model, req_effort, effort,
-	host_queued_at IS NOT NULL, COALESCE(rerun_of, 0), cause, base_revisions, handoff, delivered = 1 FROM turns`
+	host_queued_at IS NOT NULL, COALESCE(rerun_of, 0), cause, base_revisions, handoff, delivered = 1, linked FROM turns`
 
 func scanTurn(sc scanner) (*Turn, error) {
 	var t Turn
 	var report, started string
-	var ended, base sql.NullString
+	var ended, base, linked sql.NullString
 	err := sc.Scan(&t.ID, &t.RoomID, &t.ParticipantID, &t.DaemonID, &t.Status, &t.Fresh, &t.Resume,
 		&t.SessionID, &t.Model, &t.MessageCursor, &t.AnnotationCursor, &t.ChangeCursor, &t.Prompt, &t.Error, &report, &started, &ended,
 		&t.PersonaID, &t.PersonaName, &t.PersonaText, &t.ReqModel, &t.ReqEffort, &t.Effort,
-		&t.HostQueued, &t.RerunOf, &t.Cause, &base, &t.Handoff, &t.Delivered)
+		&t.HostQueued, &t.RerunOf, &t.Cause, &base, &t.Handoff, &t.Delivered, &linked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -269,6 +271,11 @@ func scanTurn(sc scanner) (*Turn, error) {
 	if base.Valid {
 		if err := json.Unmarshal([]byte(base.String), &t.BaseRevisions); err != nil {
 			return nil, fmt.Errorf("turn %d base revisions: %w", t.ID, err)
+		}
+	}
+	if linked.Valid {
+		if err := json.Unmarshal([]byte(linked.String), &t.Linked); err != nil {
+			return nil, fmt.Errorf("turn %d linked rooms: %w", t.ID, err)
 		}
 	}
 	t.StartedAt = parseTS(started)
@@ -297,7 +304,14 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn, parallel bool) error {
 		return ErrTurnInProgress
 	}
 	t.Status, t.StartedAt = TurnRunning, time.Now().UTC()
-	var pid, did, rerun any
+	var pid, did, rerun, linked any
+	if len(t.Linked) > 0 {
+		b, err := json.Marshal(t.Linked)
+		if err != nil {
+			return fmt.Errorf("start turn: %w", err)
+		}
+		linked = string(b)
+	}
 	if t.ParticipantID != 0 {
 		pid = t.ParticipantID
 	}
@@ -309,10 +323,10 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn, parallel bool) error {
 	}
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO turns(room_id, participant_id, daemon_id, host, status, fresh, resume, message_cursor, annotation_cursor, change_cursor, prompt, started_at,
-			persona_id, persona_name, persona_text, req_model, req_effort, rerun_of, cause, handoff)
-		SELECT room_id, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0 RETURNING id`,
+			persona_id, persona_name, persona_text, req_model, req_effort, rerun_of, cause, handoff, linked)
+		SELECT room_id, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ?, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0 RETURNING id`,
 		pid, did, t.Status, t.Fresh, t.Resume, t.MessageCursor, t.AnnotationCursor, t.ChangeCursor, t.Prompt, formatTS(t.StartedAt),
-		t.PersonaName, t.PersonaText, t.ReqModel, t.ReqEffort, rerun, t.Cause, t.Handoff, t.PersonaID, t.RoomID).Scan(&t.ID)
+		t.PersonaName, t.PersonaText, t.ReqModel, t.ReqEffort, rerun, t.Cause, t.Handoff, linked, t.PersonaID, t.RoomID).Scan(&t.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -415,10 +429,12 @@ func (s *Store) SetHostQueued(ctx context.Context, roomID string, id, daemonID i
 }
 
 // PinBaseRevisions returns the revision of each agent document the turn's workspace holds, by
-// document id. The first call pins them to the latest ones: every later fetch of the workspace,
-// and the conflict check of its result, use the same (003-AC21).
-func (s *Store) PinBaseRevisions(ctx context.Context, roomID string, id int64) (map[int64]int, error) {
+// document id, and the rooms it reads with theirs (023-AC13). The first call pins them to the
+// latest ones: every later fetch of the workspace, and the conflict check of its result, use the
+// same (003-AC21).
+func (s *Store) PinBaseRevisions(ctx context.Context, roomID string, id int64) (map[int64]int, []LinkedRoom, error) {
 	base := map[int64]int{}
+	var linked []LinkedRoom
 	err := s.withTx(ctx, "pin base revisions", func(tx *txn) error {
 		var pinned sql.NullString
 		if err := tx.QueryRowContext(ctx, `SELECT base_revisions FROM turns WHERE id = ? AND room_id = ?`, id, roomID).Scan(&pinned); err != nil {
@@ -427,26 +443,15 @@ func (s *Store) PinBaseRevisions(ctx context.Context, roomID string, id int64) (
 			}
 			return fmt.Errorf("pin base revisions: %w", err)
 		}
+		var err error
+		if linked, err = pinLinked(ctx, tx, id); err != nil {
+			return err
+		}
 		if pinned.Valid {
 			return json.Unmarshal([]byte(pinned.String), &base)
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT d.id, MAX(r.n) FROM documents d JOIN revisions r ON r.document_id = d.id
-			WHERE d.room_id = ? AND d.kind = 'agent' AND d.deleted_at IS NULL GROUP BY d.id`, roomID)
-		if err != nil {
-			return fmt.Errorf("pin base revisions: %w", err)
-		}
-		for rows.Next() {
-			var doc int64
-			var n int
-			if err := rows.Scan(&doc, &n); err != nil {
-				_ = rows.Close()
-				return fmt.Errorf("pin base revisions: %w", err)
-			}
-			base[doc] = n
-		}
-		_ = rows.Close()
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("pin base revisions: %w", err)
+		if base, err = docRevisions(ctx, tx, roomID, false); err != nil {
+			return err
 		}
 		b, err := json.Marshal(base)
 		if err != nil {
@@ -455,7 +460,32 @@ func (s *Store) PinBaseRevisions(ctx context.Context, roomID string, id int64) (
 		_, err = tx.ExecContext(ctx, `UPDATE turns SET base_revisions = ? WHERE id = ?`, string(b), id)
 		return err
 	})
-	return base, err
+	return base, linked, err
+}
+
+// docRevisions returns the latest revision of each live agent document of room, by document id,
+// and with uploads each live upload's too: a linked room pins its uploads as well (023-AC13).
+func docRevisions(ctx context.Context, tx *txn, roomID string, uploads bool) (map[int64]int, error) {
+	kinds := []any{roomID, DocAgent, DocAgent}
+	if uploads {
+		kinds[2] = DocUpload
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT d.id, COALESCE(MAX(r.n), 0) FROM documents d LEFT JOIN revisions r ON r.document_id = d.id
+		WHERE d.room_id = ? AND d.kind IN (?, ?) AND d.deleted_at IS NULL GROUP BY d.id`, kinds...)
+	if err != nil {
+		return nil, fmt.Errorf("document revisions: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]int{}
+	for rows.Next() {
+		var doc int64
+		var n int
+		if err := rows.Scan(&doc, &n); err != nil {
+			return nil, fmt.Errorf("document revisions: %w", err)
+		}
+		out[doc] = n
+	}
+	return out, rows.Err()
 }
 
 // LastTurn returns the room's latest turn, whatever its status; ErrNotFound if none ran.

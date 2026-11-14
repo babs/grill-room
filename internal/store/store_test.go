@@ -380,7 +380,7 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 		if err := s.StartTurn(ctx, rejected, false); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.PinBaseRevisions(ctx, room, rejected.ID); err != nil {
+		if _, _, err := s.PinBaseRevisions(ctx, room, rejected.ID); err != nil {
 			t.Fatal(err)
 		}
 		if _, rerun, err := s.RejectTurn(ctx, room, rejected.ID, dm.ID, "synthesis.md"); err != nil || !rerun {

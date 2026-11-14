@@ -25,6 +25,8 @@ const (
 	// TranscriptDir holds the room's messages as Markdown: a folder per UTC day, of chunks of
 	// TranscriptChunk messages each (D20, 003-AC23).
 	TranscriptDir = "transcript"
+	// LinkedDir holds the rooms a turn reads through links, one folder each, read-only (023-AC9).
+	LinkedDir = "linked"
 	// AnnotationsFile lists every annotation thread with its id.
 	AnnotationsFile = "annotations.md"
 	// AttachmentsDir holds the images attached to annotation messages.
@@ -267,6 +269,8 @@ func Classify(changes []Change) Outcome {
 		switch {
 		case p == UploadsDir || strings.HasPrefix(p, UploadsDir+"/"):
 			o.Rejected = append(o.Rejected, p)
+		case p == LinkedDir || strings.HasPrefix(p, LinkedDir+"/"):
+			o.Ignored = append(o.Ignored, p+": linked rooms are read-only")
 		case p == RepliesFile && !c.Deleted:
 			replies, err := parseReplies(c.Content)
 			if err != nil {

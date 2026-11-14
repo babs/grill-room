@@ -344,6 +344,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS room_personas_keeper ON room_personas(room_id)
 	CHECK (reader_room_id <> read_room_id)
 );
 CREATE INDEX IF NOT EXISTS room_links_read ON room_links(read_room_id);`,
+	// 63 (023-AC13): the rooms a turn reads, pinned at its start, their documents at its first fetch; never exported.
+	`ALTER TABLE turns ADD COLUMN IF NOT EXISTS linked TEXT;`,
 }
 
 // nonText is the predicate of the non-typed message indexes, written into every query that uses

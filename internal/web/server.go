@@ -120,6 +120,8 @@ type Server struct {
 	// a lockTurns, its wait behind the guard included: the store's lock timeout, shorter in tests.
 	turnWaits roomGuards
 	turnWait  time.Duration
+	// blobSums keeps the hashes of stored workspace blobs for manifests.
+	blobSums blobSums
 	// fallbacks counts full workspace fetches by daemons with a cache, by turn.FallbackReasons.
 	fallbacks map[string]*atomic.Int64
 	// conflicts counts results rejected on a document conflict, by ConflictOutcomes (003-AC21).

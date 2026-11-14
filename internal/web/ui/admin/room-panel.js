@@ -129,7 +129,8 @@ function AdminRow({ p, base, api, show, done, me, makeHost }) {
     block.type = 'checkbox';
     block.disabled = p.has_profile === false || !!p.no_profile;
     box.append(block, block.disabled ? ' Block from rejoining: no profile, so no block' : ' Block from rejoining');
-    if (!(await window.grillConfirm(`Remove ${p.name} from the room?`, 'Their messages stay.', 'Remove', false, box))) return;
+    const note = window.grillReadersNote ? await window.grillReadersNote(p) : '';
+    if (!(await window.grillConfirm(`Remove ${p.name} from the room?`, 'Their messages stay.' + note, 'Remove', false, box))) return;
     api('DELETE', `${base}/participants/${p.id}`, { block: block.checked }).then(done).catch(show);
   };
   /** @param {boolean} on */
