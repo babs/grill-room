@@ -98,8 +98,8 @@ test('mentions: autocomplete in the edit box', async ({ browser, request, browse
   await expect(list.getByRole('option')).toHaveText(['🔥 Grillagent', 'Bob Smithperson']);
   await expect(box).not.toHaveAttribute('aria-expanded');
   await expect(box).toHaveAttribute('aria-activedescendant', /-0$/);
-  // Inside the #messages live region, the list is not read out on each keystroke.
-  await expect(list).toHaveAttribute('aria-live', 'off');
+  // No live ancestor reads the list out on each keystroke (036-AC9).
+  expect(await list.evaluate((l) => !!l.closest('[aria-live]'))).toBe(false);
   await box.press('ArrowDown');
   await expect(list.getByRole('option').nth(1)).toHaveAttribute('aria-selected', 'true');
   await box.press('Enter');

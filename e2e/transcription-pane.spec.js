@@ -321,12 +321,13 @@ test('the empty pane and voice-to-text off', async ({ browser, request }) => {
   await expect(alice.locator('#transcript-empty')).toBeHidden();
 });
 
-// 020-AC14: an aside named Transcription, a polite live list, aria-expanded on the fold, reached
-// after the chat's messages and before the composer; the fold shows a visible focus ring.
+// 020-AC14: an aside named Transcription, its list named too (not live: 036-AC1), aria-expanded on
+// the fold, reached after the chat's messages and before the composer; the fold shows a visible
+// focus ring.
 test('the pane is a labelled aside after the messages', async ({ browser, request }) => {
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await expect(alice.getByRole('complementary', { name: 'Transcription' })).toBeVisible();
-  await expect(alice.locator('#voice-lines')).toHaveAttribute('aria-live', 'polite');
+  await expect(alice.getByRole('list', { name: 'Transcription', exact: true })).toHaveId('voice-lines');
   await expect(fold(alice)).toHaveAttribute('aria-expanded', 'true');
   const order = await alice.evaluate(() => [...document.querySelectorAll('#messages, #transcript, #send')].map((e) => e.id));
   expect(order).toEqual(['messages', 'transcript', 'send']);
