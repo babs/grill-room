@@ -145,8 +145,8 @@ func TestPresetChangeIsOffered(t *testing.T) {
 	}
 }
 
-// 002-AC13: a profile publishes templates and versions of its own; versions are immutable with
-// their author; the admin removes a published template, never a preset; room copies survive.
+// 002-AC13 035-AC3: a profile publishes templates and versions of its own; versions are immutable with
+// their author; a rename retitles; the admin removes a published template, never a preset; room copies survive.
 func TestTemplateLibrary(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
@@ -176,6 +176,15 @@ func TestTemplateLibrary(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, `SELECT text FROM persona_template_versions WHERE template_id = ? AND n = 1`, tp.ID).Scan(&v1); err != nil || v1 != "v1 text" {
 		t.Fatalf("version 1 changed: %q %v", v1, err)
 	}
+	// 035-AC3: a rename through the room's old route retitles it, as the other version paths do.
+	f3 := f2
+	f3.Name = "Critic2"
+	if v3, err := s.PublishVersion(ctx, alice.ProfileID, tp.ID, "Alice", f3); err != nil || v3.Version != 3 || v3.Title != "Critic2" {
+		t.Fatalf("renamed version 3: %+v %v", v3, err)
+	}
+	if v4, err := s.PublishVersion(ctx, alice.ProfileID, tp.ID, "Alice", f2); err != nil || v4.Version != 4 || v4.Title != "Critic" {
+		t.Fatalf("renamed back in version 4: %+v %v", v4, err)
+	}
 	ts, err := s.Templates(ctx, alice.ProfileID)
 	mine := len(presets)
 	if err != nil || len(ts) != mine+1 || ts[0].Preset != PresetDefault || ts[mine].ID != tp.ID || !ts[mine].Mine || ts[0].Mine {
@@ -193,7 +202,7 @@ func TestTemplateLibrary(t *testing.T) {
 	}
 
 	p, _, err := s.AddPersona(ctx, "a", tp.ID, alice, true)
-	if err != nil || p.TemplateVersion != 2 || p.Text != "v2 text" {
+	if err != nil || p.TemplateVersion != 4 || p.Text != "v2 text" {
 		t.Fatalf("persona from it: %+v %v", p, err)
 	}
 	// The room persona a library persona was saved from is its owner's to know, even once shared.
@@ -248,6 +257,43 @@ func TestTemplateLibrary(t *testing.T) {
 	}
 	if got, err := s.RoomPersona(ctx, "a", q.ID); err != nil || got.Name != "Critic-2" || got.TemplateID != 0 {
 		t.Fatalf("room copy after the profile went: %+v %v", got, err)
+	}
+}
+
+// 035-AC3 035-AC4: a version renamed onto a title Yours already has is numbered as a duplicate is;
+// one renamed onto its own title keeps it.
+func TestTemplateRenameTaken(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	alice, _, _ := personaRoom(t, s, "a")
+	f := PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "t", Model: "haiku", Effort: "low"}
+	tmp := f
+	tmp.Name = "Tmp"
+	first, err := s.PublishTemplate(ctx, alice.ProfileID, "Alice", "Critic", f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Critic (copy)", "Critic (copy) 2"} {
+		tp, err := s.PublishTemplate(ctx, alice.ProfileID, "Alice", "Tmp", tmp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.PublishVersion(ctx, alice.ProfileID, tp.ID, "Alice", f); err != nil || got.Title != want {
+			t.Fatalf("renamed onto a taken title: %+v %v, want %q", got, err, want)
+		}
+	}
+	if got, err := s.Template(ctx, first.ID); err != nil || got.Title != "Critic" {
+		t.Fatalf("the first keeps its title: %+v %v", got, err)
+	}
+	// Its own title is no other's: "Solo" stays "Solo".
+	solo, err := s.PublishTemplate(ctx, alice.ProfileID, "Alice", "Solo", tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := f
+	g.Name = "Solo"
+	if got, err := s.PublishVersion(ctx, alice.ProfileID, solo.ID, "Alice", g); err != nil || got.Title != "Solo" {
+		t.Fatalf("renamed onto its own title: %+v %v", got, err)
 	}
 }
 

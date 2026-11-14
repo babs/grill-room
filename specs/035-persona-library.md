@@ -118,3 +118,6 @@ Personas get a library like starters. `/profile` gains a Personas tab with three
 - Adding or updating from a library persona the caller cannot see answers "not found". Because a private persona's id must not let another profile copy it.
 - "Save to my personas" is refused while the persona or a change to it waits for the host. Because the saved state must be one the room ran.
 - Saving finds the caller's library persona saved from this room persona when the link points to someone else's. Because two profiles saving the same room persona in turn must not give either a second library persona (AC13).
+- The library editor shows a persona's frozen skills and plugins read-only. Because they are copies of a room's, and saving from a room is where they change.
+- A library persona's title follows its name whenever a version renames it; a duplicate takes the persona's name as its title, or "<name> (copy)", then "<name> (copy) 2"…, while Yours has one of that title. Because the list must tell copies apart and still read like the persona.
+- Library edits carry the version they started from, and a stale one is refused. Because two tabs must not silently overwrite each other.

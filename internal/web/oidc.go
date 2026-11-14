@@ -503,7 +503,7 @@ func attachMoves(pv *store.MergePreview) (int, []string) {
 		one, many string
 	}{
 		{len(pv.Skills.Merge), "personal skill", "personal skills"}, {pv.SharedSkills.Merge, "published skill", "published skills"},
-		{pv.Templates.Merge, "persona template", "persona templates"}, {pv.Starters.Merge, "starter", "starters"},
+		{pv.Templates.Merge, "library persona", "library personas"}, {pv.Starters.Merge, "starter", "starters"},
 	} {
 		if c.n > 0 {
 			moves = append(moves, countOf(c.n, c.one, c.many))

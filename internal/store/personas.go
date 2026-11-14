@@ -30,6 +30,10 @@ var (
 	ErrAwaitingHost = errors.New("waits for the AI host's approval")
 	// ErrStaleVersion is returned when an edit was made on a version that is no longer the latest (035-AC3).
 	ErrStaleVersion = errors.New("exists: reopen the persona to edit it")
+	// ErrAlreadyShared is returned when the author shares a library persona already shared (035-AC5).
+	ErrAlreadyShared = errors.New("is already shared")
+	// ErrNotShared is returned when the author unshares a personal library persona (035-AC5).
+	ErrNotShared = errors.New("is not shared")
 )
 
 // Every member may add personas and every profile may publish: these bound what one of them can
@@ -485,9 +489,10 @@ func (s *Store) publishVersion(ctx context.Context, profileID, id int64, author 
 				return err
 			}
 			manifest = string(raw)
-			if err := retitle(ctx, tx, id, name, f.Name); err != nil {
-				return err
-			}
+		}
+		// Every version path retitles on a rename, the room's old route included (035-AC3).
+		if err := retitle(ctx, tx, profileID, id, name, f.Name); err != nil {
+			return err
 		}
 		files, err := versionFiles(ctx, tx, vid)
 		if err != nil {
@@ -531,13 +536,18 @@ func versionFiles(ctx context.Context, tx *txn, vid int64) (map[string][]byte, e
 	return files, nil
 }
 
-// retitle names template id after its new version's persona name when it differs from the latest
-// version's, was: a title of its own, as a duplicate's "(copy)", stays until a rename (035-AC3).
-func retitle(ctx context.Context, tx *txn, id int64, was, name string) error {
+// retitle names template id of profileID after its new version's persona name when it differs from
+// the latest version's, was, numbered as a duplicate is when another of its own has that title: a
+// title of its own, as a duplicate's "(copy)", stays until a rename (035-AC3, 035-AC4).
+func retitle(ctx context.Context, tx *txn, profileID, id int64, was, name string) error {
 	if name == was {
 		return nil
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE persona_templates SET title = ? WHERE id = ?`, name, id); err != nil {
+	title, err := freeTitle(ctx, tx, profileID, name, id)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE persona_templates SET title = ? WHERE id = ?`, title, id); err != nil {
 		return fmt.Errorf("template %d title: %w", id, err)
 	}
 	return nil
@@ -566,8 +576,8 @@ func templateOwner(ctx context.Context, tx *txn, id int64) (section string, owne
 }
 
 // freeTitle is title, a persona's name, or "<name> (copy)", then "<name> (copy) 2"…, when profileID
-// has a personal persona of that title (035-AC4).
-func freeTitle(ctx context.Context, tx *txn, profileID int64, title string) (string, error) {
+// has a personal persona of that title other than template self, 0 for none (035-AC4).
+func freeTitle(ctx context.Context, tx *txn, profileID int64, title string, self int64) (string, error) {
 	for i := 0; ; i++ {
 		try := title
 		switch {
@@ -577,8 +587,8 @@ func freeTitle(ctx context.Context, tx *txn, profileID int64, title string) (str
 			try += " (copy) " + strconv.Itoa(i)
 		}
 		var taken bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM persona_templates WHERE profile_id = ? AND section = 'personal' AND title = ?)`,
-			profileID, try).Scan(&taken); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM persona_templates WHERE profile_id = ? AND section = 'personal' AND title = ? AND id <> ?)`,
+			profileID, try, self).Scan(&taken); err != nil {
 			return "", fmt.Errorf("template title: %w", err)
 		}
 		if !taken {
@@ -612,7 +622,7 @@ func (s *Store) DuplicateTemplate(ctx context.Context, profileID, id int64) (*Te
 		if err != nil {
 			return err
 		}
-		title, err := freeTitle(ctx, tx, profileID, t.Name)
+		title, err := freeTitle(ctx, tx, profileID, t.Name, 0)
 		if err != nil {
 			return err
 		}
@@ -641,7 +651,7 @@ func (s *Store) DuplicateTemplate(ctx context.Context, profileID, id int64) (*Te
 // ShareTemplate moves personal template id of profileID to the instance library, or with share
 // false back to its personal one, audited (035-AC5). Rooms keep their copies; a viewer who no longer
 // sees it loses its update offer. ErrPreset for a built-in, ErrNotFound for one profileID does not
-// see, ErrForbidden for someone else's or one already there.
+// see, ErrForbidden for someone else's, ErrAlreadyShared or ErrNotShared for one already there.
 func (s *Store) ShareTemplate(ctx context.Context, profileID, id int64, share bool) error {
 	from, to := SectionPersonal, SectionInstance
 	if !share {
@@ -656,8 +666,18 @@ func (s *Store) ShareTemplate(ctx context.Context, profileID, id int64, share bo
 			return ErrPreset
 		case section == SectionPersonal && owner != profileID:
 			return ErrNotFound
-		case owner != profileID || section != from:
+		case owner != profileID:
 			return ErrForbidden
+		case section != from:
+			// Its author asked twice, from a stale page say: tell them where it already is.
+			var title string
+			if err := tx.QueryRowContext(ctx, `SELECT title FROM persona_templates WHERE id = ?`, id).Scan(&title); err != nil {
+				return fmt.Errorf("template %d title: %w", id, err)
+			}
+			if share {
+				return fmt.Errorf("%s %w", title, ErrAlreadyShared)
+			}
+			return fmt.Errorf("%s %w", title, ErrNotShared)
 		}
 		if err := execOne(ctx, tx, `UPDATE persona_templates SET section = ? WHERE id = ?`, to, id); err != nil {
 			return err
@@ -1380,7 +1400,7 @@ func (s *Store) SavePersonaToLibrary(ctx context.Context, roomID string, persona
 		if err := insertVersion(ctx, tx, id, n+1, author, p.PersonaFields, description, raw, files); err != nil {
 			return err
 		}
-		if err := retitle(ctx, tx, id, name, p.Name); err != nil {
+		if err := retitle(ctx, tx, profileID, id, name, p.Name); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET template_id = ?, template_version = ? WHERE id = ?`, id, n+1, p.ID); err != nil {

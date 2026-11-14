@@ -15,7 +15,8 @@ const states = {
   pending: { pending_email: address, pending_ttl_s: 14 * 60, pending_age_s: 90 },
   bound: { email: address },
 };
-const tabs = ['rooms', 'starters', 'skills', 'tokens', 'account'];
+// tabsOf reads the profile's tabs from its bar, so a tab added later goes through every check here.
+const tabsOf = (page) => page.locator('#profile-tabs a').evaluateAll((as) => as.map((a) => new URL(a.href).hash.slice(1)));
 
 // SHOTS=<dir> saves full-page screenshots for the visual check.
 const shots = process.env.SHOTS;
@@ -118,7 +119,7 @@ test('profile hierarchy, long names and room cards', async ({ browser, request }
   expect(h3).toBeGreaterThan(hint);
   expect(weight).toBe('600');
   await tab.setViewportSize(desktop);
-  for (const t of tabs) {
+  for (const t of await tabsOf(tab)) {
     await openTab(tab, t);
     // Each hint's width in ch of its own font: the runner's fonts differ from a workstation's.
     const wide = await tab.locator('main .hint').evaluateAll((els) => {
@@ -145,8 +146,9 @@ test('one primary per tab, empty states and the skill sheet', async ({ browser, 
     await route.fulfill({ response: res, json: (await res.json()).filter((st) => st.library !== 'instance') });
   });
   await tab.goto('/profile');
-  const primary = { rooms: ['+ New room'], starters: [], skills: ['Add a skill'], tokens: ['New token'], account: ['Send me a link'] };
-  for (const t of tabs) {
+  const primary = { rooms: ['+ New room'], starters: [], personas: [], skills: ['Add a skill'], tokens: ['New token'], account: ['Send me a link'] };
+  expect(Object.keys(primary)).toEqual(await tabsOf(tab));
+  for (const t of await tabsOf(tab)) {
     await openTab(tab, t);
     expect(await filled(tab), t).toEqual(primary[t]);
   }
@@ -202,7 +204,7 @@ test('profile wording and the signed-out card', async ({ browser, request }) => 
   const tab = await profilePage(pat);
   await tab.goto('/profile');
   let text = '';
-  for (const t of tabs) {
+  for (const t of await tabsOf(tab)) {
     await openTab(tab, t);
     text += await tab.locator('body').innerText();
   }
@@ -250,7 +252,7 @@ test('tabs and identity strip at desktop and phone widths', async ({ browser, re
         await expect(tab.locator(sel), where).toContainText(said);
         for (const other of Object.values(strip).map(([s]) => s).filter((s) => s !== sel)) await expect(tab.locator(other), where).toBeHidden();
         expect((await rect(tab.locator(sel))).bottom, `${where}: strip above the fold`).toBeLessThanOrEqual(size.height);
-        for (const t of tabs) {
+        for (const t of await tabsOf(tab)) {
           await tab.goto('/profile#' + t);
           await expect(tab.locator('#panel-' + t), `${where} #${t}`).toBeVisible();
           await expect(tab.locator('#tab-' + t)).toHaveAttribute('aria-current', 'page');

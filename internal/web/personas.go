@@ -248,7 +248,7 @@ func (s *Server) removeTemplate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) personaDone(w http.ResponseWriter, sess session, p *store.RoomPersona, m *store.Message, err error, status int) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		httpError(w, http.StatusNotFound, "no such persona or template")
+		httpError(w, http.StatusNotFound, "no such persona")
 	case errors.Is(err, store.ErrNameTaken), errors.Is(err, store.ErrPersonaBusy), errors.Is(err, store.ErrLimit):
 		httpError(w, http.StatusConflict, err.Error())
 	case err != nil:
@@ -383,6 +383,8 @@ func (s *Server) libraryError(w http.ResponseWriter, event string, err error) bo
 		httpError(w, http.StatusNotFound, "no such persona")
 	case errors.Is(err, store.ErrPreset):
 		httpError(w, http.StatusForbidden, "built-in personas are read-only: duplicate one to change it")
+	case errors.Is(err, store.ErrAlreadyShared), errors.Is(err, store.ErrNotShared):
+		httpError(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, store.ErrForbidden):
 		httpError(w, http.StatusForbidden, "only the persona's author can do this")
 	case errors.Is(err, store.ErrLimit), errors.Is(err, store.ErrStaleVersion):
@@ -407,7 +409,8 @@ func (s *Server) myPersonas(w http.ResponseWriter, r *http.Request) {
 }
 
 // getLibraryPersona answers one library persona the profile sees, at its latest version, with its
-// version history and the models and efforts the editor offers (035-AC2).
+// version history, the models and efforts the editor offers, and the voices with whether personas
+// speak on this server, as the room page reads them (035-AC2, 035-AC3).
 func (s *Server) getLibraryPersona(w http.ResponseWriter, r *http.Request) {
 	p := s.profileFor(w, r)
 	if p == nil {
@@ -422,7 +425,9 @@ func (s *Server) getLibraryPersona(w http.ResponseWriter, r *http.Request) {
 		Versions []store.TemplateVersionInfo `json:"versions"`
 		Models   []string                    `json:"models"`
 		Efforts  []string                    `json:"efforts"`
-	}{t, vs, turn.Models, turn.Efforts})
+		Voices   []voices.Voice              `json:"voices"`
+		TTS      bool                        `json:"tts"`
+	}{t, vs, turn.Models, turn.Efforts, voices.All(), s.tts != nil})
 }
 
 // editLibraryPersona saves the author's edit of one of their library personas, made on `version`,

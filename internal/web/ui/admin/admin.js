@@ -181,7 +181,7 @@ const actionLabels = {
   'document.restore': 'Document restored', 'profile.delete': 'Profile deleted', 'profile.recovery_link': 'Recovery link made',
   'profile.recovery_link_used': 'Recovery link used', 'profile.merge': 'Profiles merged', 'profile.purge': 'Empty profiles deleted',
   'profile.oidc_bind': 'Signed in with the provider', 'profile.oidc_unbind': 'Provider sign-in unbound',
-  'profile.max_rooms': 'Room limit set', 'template.remove': 'Persona template removed', 'template.share': 'Persona shared', 'template.unshare': 'Persona unshared', 'skill.remove': 'Shared skill removed',
+  'profile.max_rooms': 'Room limit set', 'template.remove': 'Library persona removed', 'template.share': 'Persona shared', 'template.unshare': 'Persona unshared', 'skill.remove': 'Shared skill removed',
   'starter.publish': 'Starter shared', 'starter.delete': 'Starter removed', 'instance.settings': 'Server settings changed',
   'tts.lexicon.add': 'Pronunciation added', 'tts.lexicon.edit': 'Pronunciation changed', 'tts.lexicon.delete': 'Pronunciation removed',
   'api_token.create': 'API token created', 'api_token.revoke': 'API token revoked', 'persona.remove': 'Persona removed',
@@ -512,12 +512,12 @@ const label = (p) => `${p.name || '—'}${p.email ? ' · ' + p.email : ''} · ${
 const listed = (names) => (names.length ? new Intl.ListFormat('en').format(names) : 'none');
 /** @type {[string, string, string][]} */
 const mergeKinds = [['seats', 'seat', 'seats'], ['skills', 'personal skill', 'personal skills'], ['shared_skills', 'shared skill', 'shared skills'],
-  ['templates', 'persona template', 'persona templates'], ['starters', 'starter', 'starters'], ['rooms_created', 'room created', 'rooms created'],
+  ['templates', 'library persona', 'library personas'], ['starters', 'starter', 'starters'], ['rooms_created', 'room created', 'rooms created'],
   ['room_admins', 'room-admin role', 'room-admin roles'], ['sessions', 'sign-in', 'sign-ins']];
 /** @type {[string, string, string][]} */
 const revokedKinds = [['api_tokens_revoked', 'API token', 'API tokens']];
 /** @type {Record<string, string>} */
-const limitKinds = { skills: 'Personal skills', templates: 'Persona templates', starters: 'Starters', rooms_created: 'Rooms created' };
+const limitKinds = { skills: 'Personal skills', templates: 'Library personas', starters: 'Starters', rooms_created: 'Rooms created' };
 
 /**
  * MergeSheet merges profile B into profile A (011-AC10): it previews what moves and what A ends
@@ -590,7 +590,7 @@ function MergeSheet({ profiles, from, done }) {
     <div class="sheet-head"><h2 id="merge-title">Merge two profiles?</h2>
       <button type="button" class="btn-icon btn-ghost" aria-label="Close" disabled=${busy} onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
     <p class="hint">${unbound
-      ? 'The merged profile\'s rooms, skills, templates and starters move to the kept one, then the merged profile is deleted. This cannot be undone.'
+      ? 'The merged profile\'s rooms, skills, library personas and starters move to the kept one, then the merged profile is deleted. This cannot be undone.'
       : 'Everything of the merged profile moves to the kept one, then the merged profile is deleted. This cannot be undone.'}</p>
     <div class="row merge-pick">
       ${pick('merge-keep', 'Keep', keep, setKeep)}
@@ -615,7 +615,7 @@ function MergeSheet({ profiles, from, done }) {
       ${p.skills.renamed.length > 0 && html`<ul id="merge-renamed">${p.skills.renamed.map((x) => html`<li>${x.from} becomes ${x.to}</li>`)}</ul>`}
       <h3>The rest</h3>
       <dl id="merge-counts">
-        ${[['Seats', p.seats], ['Shared skills', p.shared_skills], ['Persona templates', p.templates], ['Starters', p.starters], ['Rooms created', p.rooms_created]]
+        ${[['Seats', p.seats], ['Shared skills', p.shared_skills], ['Library personas', p.templates], ['Starters', p.starters], ['Rooms created', p.rooms_created]]
           .map(([k, n]) => html`<div><dt>${k}</dt><dd>${(/** @type {MergeCount} */ (n)).keep} + ${(/** @type {MergeCount} */ (n)).merge}</dd></div>`)}
         <div><dt>Room admin, kept</dt><dd>${listed(p.room_admin.keep)}</dd></div>
         <div><dt>Room admin, moved</dt><dd>${listed(p.room_admin.merge)}</dd></div>
@@ -688,6 +688,8 @@ function RoomLimit({ p, perProfile, reload, done }) {
   <//>`;
 }
 
+// Libraries lists what every profile shares: the personas (shared and built-in; private ones are
+// their owner's, 035-AC19), the shared skills and starters, each removable but the built-ins.
 function Libraries() {
   const [templates, setTemplates] = useState(/** @type {Template[] | null} */ (null));
   const [skills, setSkills] = useState(/** @type {Skill[] | null} */ (null));
@@ -707,15 +709,15 @@ function Libraries() {
   const menu = (id, what, path) => html`<${RowMenu} id=${id} label=${'More actions on ' + what}
     items=${[['Remove…', () => remove(what, path), 'danger', 'Remove ' + what]]}/>`;
   return html`
-    <h2>Persona templates</h2>
+    <h2>Personas</h2>
     ${templates && (templates.length ? html`<div class="cols" id="templates">
       <div class="list-row head"><span>Title</span><span>Author</span><span>Version</span><span>Updated</span><span></span></div>
       <ul class="list-rows">${templates.map((t) => html`<li class="list-row" id=${'template-' + t.id} key=${t.id}>
         <div class="main"><span class="name">${t.title}</span>${t.preset && html` <span class="badge" data-tip="Ships with grill-room: it cannot be removed.">shipped</span>`}</div>
         <div class="cells"><span class="cell" data-label="Author">${t.author}</span><span class="cell" data-label="Version">v${t.version}</span>
           <span class="cell" data-label="Updated">${ago(t.created_at)}</span></div>
-        <div class="actions">${!t.preset && menu('template-menu-' + t.id, `the template ${t.title}`, '/api/admin/templates/' + t.id)}</div>
-      </li>`)}</ul></div>` : html`<p class="empty">No persona template yet.</p>`)}
+        <div class="actions">${!t.preset && menu('template-menu-' + t.id, `the persona ${t.title}`, '/api/admin/templates/' + t.id)}</div>
+      </li>`)}</ul></div>` : html`<p class="empty">No shared persona yet.</p>`)}
     <h2>Shared skills</h2>
     ${skills && (skills.length ? html`<div class="cols" id="skills">
       <div class="list-row head"><span>Name</span><span>Author</span><span>Version</span><span>Size</span><span>Updated</span><span></span></div>

@@ -813,13 +813,12 @@ func TestShareAndRemoveTemplate(t *testing.T) {
 	if got := sees(bob.ProfileID); got != SectionInstance {
 		t.Fatalf("bob sees %q, want instance", got)
 	}
-	for _, c := range []struct {
-		who   int64
-		share bool
-	}{{alice.ProfileID, true}, {bob.ProfileID, false}} {
-		if err := s.ShareTemplate(ctx, c.who, t1.ID, c.share); !errors.Is(err, ErrForbidden) {
-			t.Errorf("share %v by %d: %v", c.share, c.who, err)
-		}
+	// 035-AC5: sharing it again says it is already shared; another profile is refused.
+	if err := s.ShareTemplate(ctx, alice.ProfileID, t1.ID, true); !errors.Is(err, ErrAlreadyShared) || err.Error() != "Grill is already shared" {
+		t.Errorf("alice shares it twice: %v", err)
+	}
+	if err := s.ShareTemplate(ctx, bob.ProfileID, t1.ID, false); !errors.Is(err, ErrForbidden) {
+		t.Errorf("bob unshares it: %v", err)
 	}
 	// Bob takes its next version into his room copy only while he sees it.
 	if _, err := s.EditTemplate(ctx, alice.ProfileID, t1.ID, TemplateEdit{StarterPersona: StarterPersona{PersonaFields: PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#123456",

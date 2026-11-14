@@ -862,6 +862,20 @@ button.doc { display: block; overflow: hidden; text-overflow: ellipsis; white-sp
 .starter-list > li { display: flex; align-items: center; gap: var(--sp-2); min-height: 44px; padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
 .starter-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .starter-text .hint { margin: 0; overflow-wrap: anywhere; }
+/* The profile's personas (035-AC1, 035-AC2): a starter row with the badge first, the name opening the persona's page. */
+.persona-lib-badge { flex: none; width: 2rem; text-align: center; font-size: var(--fs-lg); }
+.persona-lib-name { align-self: flex-start; max-width: 100%; height: auto; min-width: 44px; min-height: 44px; padding: 0; border: 0; background: none; color: var(--primary-text); font-weight: 600; text-align: left; overflow-wrap: anywhere; }
+.persona-lib-name:hover { text-decoration: underline; }
+#personas .said:empty, #persona-lib-status:empty { display: none; }
+.persona-lib-read h3 { margin: var(--sp-4) 0 var(--sp-2); font-size: var(--fs-md); }
+.persona-lib-facts { gap: var(--sp-2) var(--sp-4); }
+.persona-lib-swatch { display: inline-block; width: 1em; height: 1em; vertical-align: -0.15em; border: 1px solid var(--border-strong); border-radius: var(--r-sm); }
+.persona-lib-caps { margin: 0; padding-left: var(--sp-5); overflow-wrap: anywhere; }
+/* Newest first: no numbers that would count down. */
+.persona-lib-history { list-style: none; margin: 0; padding: 0; overflow-wrap: anywhere; }
+.persona-lib-edit fieldset { margin: var(--sp-3) 0; }
+#persona-lib-sheet .sheet-head h2 { min-width: 0; overflow-wrap: anywhere; }
+#persona-room { width: 100%; }
 /* New room (006-AC8, 006-AC9): the starters on the left, the selected one's preview on the right. */
 .starter-picker { display: grid; grid-template-columns: minmax(14rem, 1fr) 2fr; gap: var(--sp-4); }
 .starter-picker > .said, .starter-picker > .actions { grid-column: 1 / -1; }
