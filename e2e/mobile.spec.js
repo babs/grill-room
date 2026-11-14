@@ -2,7 +2,7 @@ import { devices } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import http from 'node:http';
 import { adminToken } from './playwright.config.js';
-import { roomWith, menuItem, personaRow, personaSheet, closePersonas } from './helpers.js';
+import { roomWith, menuItem, personaRow, personaSheet, closePersonas, line, live, smallTargets, playEvents, messageAction } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -292,3 +292,252 @@ for (const name of ['iPhone 15', 'Pixel 7']) {
     await inside(page.locator('#body'));
   });
 }
+
+// The phone room (spec 037) at 390 × 844.
+const phone = { width: 390, height: 844 };
+const rect = (page, sel) => page.locator(sel).evaluate((e) => {
+  const r = e.getBoundingClientRect();
+  return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height, mid: r.top + r.height / 2 };
+});
+// addPersonas adds n personas to the room from its templates, in turn.
+const addPersonas = (page, id, n) => page.evaluate(async ([id, n]) => {
+  const tpls = await (await fetch(`/api/rooms/${id}/templates`)).json();
+  for (let i = 0; i < n; i++) {
+    await fetch(`/api/rooms/${id}/personas`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ template_id: tpls[i % tpls.length].id }) });
+  }
+}, [id, n]);
+// withVoice turns the room's voice on, as a server with LiveKit and the room's setting would.
+async function withVoice(page, roomID) {
+  await page.route(`**/api/rooms/${roomID}`, async (r) => {
+    const res = await r.fetch();
+    return r.fulfill({ response: res, json: { ...(await res.json()), voice: true } });
+  });
+  await page.evaluate(() => loadRoom());
+}
+
+// 037-AC3: a phone shows the chat filter once the room has voice, a voice line or someone in its
+// audio, with the filter last chosen, and keeps it; until then the chat shows every line and the
+// stored choice stays. A server that offers audio is no voice yet.
+test('the phone chat filter waits for voice', async ({ request, browser }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.evaluate(() => localStorage.setItem('grill-room-chat-filter', 'voice'));
+  await alice.setViewportSize(phone);
+  await withVoice(alice, room.id);
+  await alice.reload();
+  await expect(alice.locator('#voice-join')).toBeVisible();
+  await expect(alice.locator('#messages')).toContainText('Alice joined');
+  const filter = alice.locator('#chat-filter');
+  await expect(filter).toBeHidden();
+  await expect(alice.locator('#messages')).toHaveAttribute('data-filter', 'all');
+  expect(await alice.evaluate(() => localStorage.getItem('grill-room-chat-filter'))).toBe('voice');
+  await live(alice, line(1e9, 'voice', 'spoken'));
+  await expect(filter).toBeVisible();
+  await expect(filter.getByRole('button', { name: /Voice/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(alice.locator('#messages')).toHaveAttribute('data-filter', 'voice');
+
+  // Nobody in the audio keeps it hidden; someone joining shows it, and it stays once they leave.
+  const person = (audio) => ['presence', { people: [{ id: 999999, here: true, audio }] }];
+  await playEvents(alice, room.id, [person(false)]);
+  await alice.waitForFunction(() => presence.has('999999'));
+  await expect(filter).toBeHidden();
+  await playEvents(alice, room.id, [person(true), person(false)]);
+  await alice.waitForFunction(() => presence.get('999999')?.audio === false);
+  await expect(filter).toBeVisible();
+  // From 40rem, as before: the filter shows in a room without voice.
+  await alice.unroute(`**/api/rooms/${room.id}`);
+  await alice.unroute(`**/api/rooms/${room.id}/events*`);
+  await alice.setViewportSize({ width: 900, height: 844 });
+  await alice.reload();
+  await expect(alice.locator('#messages')).toContainText('Alice joined');
+  await expect(filter).toBeVisible();
+});
+
+// 037-AC3: the filter coming back keeps a line holding focus in view: an open edit box of a written
+// line under a stored Voice shows All for the visit, the box still focused.
+test('the phone filter coming back keeps an open edit box', async ({ request, browser }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.evaluate(() => localStorage.setItem('grill-room-chat-filter', 'voice'));
+  await alice.setViewportSize(phone);
+  await alice.reload();
+  await alice.locator('#body').fill('my written line');
+  await alice.locator('#body').press('Enter');
+  const mine = alice.locator('#messages > li', { hasText: 'my written line' });
+  await messageAction(mine, 'Edit');
+  const box = alice.locator('#messages form.edit textarea');
+  await expect(box).toBeFocused();
+  await alice.evaluate(() => events.dispatchEvent(new MessageEvent('presence', { data: JSON.stringify({ people: [{ id: 999999, here: true, audio: true }] }) })));
+  await expect(alice.locator('#chat-filter')).toBeVisible();
+  await expect(alice.locator('#chat-filter [data-filter=all]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(box).toBeVisible();
+  await expect(box).toBeFocused();
+  expect(await alice.evaluate(() => localStorage.getItem('grill-room-chat-filter'))).toBe('voice');
+});
+
+// 037-AC4: at rest the phone composer is one row, its placeholder on one line; the box grows with
+// its text up to 5 lines, then scrolls, and shrinks back once sent. From 40rem it is as before.
+test('the phone composer rests on one row and grows to 5 lines', async ({ request, browser }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize(phone);
+  const body = alice.locator('#body');
+  // The wide layout's grid goes once room.js has seen the resize.
+  await expect(alice.locator('body')).not.toHaveClass(/transcript-room/);
+  const send = await rect(alice, '#send');
+  // A failure names what took the height.
+  const parts = await alice.evaluate(() => [...document.getElementById('send').children].filter((e) => e.getClientRects().length)
+    .map((e) => `${e.id || e.tagName.toLowerCase()} ${Math.round(e.getBoundingClientRect().height)}`).join(', '));
+  expect(send.height, 'composer at rest: ' + parts).toBeLessThanOrEqual(60);
+  const [plus, box, submit] = await Promise.all(['#plus-open', '#body', '#send > [type=submit]'].map((s) => rect(alice, s)));
+  expect(Math.abs(plus.mid - box.mid), '+ on the row').toBeLessThanOrEqual(1);
+  expect(Math.abs(submit.mid - box.mid), 'Send on the row').toBeLessThanOrEqual(1);
+  expect(await body.evaluate((t) => {
+    const ctx = document.createElement('canvas').getContext('2d');
+    const s = getComputedStyle(t);
+    ctx.font = s.font;
+    return ctx.measureText(t.placeholder).width <= t.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
+  }), 'placeholder on one line').toBe(true);
+  const height = () => body.evaluate((t) => t.getBoundingClientRect().height);
+  const rest = await height();
+  expect(rest, 'one line').toBeLessThanOrEqual(44.5);
+  const lines = (n) => Array.from({ length: n }, (_, i) => 'line ' + i).join('\n');
+  await body.fill(lines(3));
+  const three = await height();
+  expect(three).toBeGreaterThan(rest);
+  await body.fill(lines(4));
+  const four = await height();
+  await body.fill(lines(5));
+  const five = await height();
+  expect(five).toBeGreaterThan(four);
+  expect(await body.evaluate((t) => t.scrollHeight <= t.clientHeight), '5 lines without a scroll').toBe(true);
+  await body.fill(lines(9));
+  expect(await height(), 'capped at 5 lines').toBeCloseTo(five, 0);
+  expect(await body.evaluate((t) => t.scrollHeight > t.clientHeight), 'then scrolls').toBe(true);
+  await body.press('Enter');
+  await expect(alice.locator('#messages')).toContainText('line 8');
+  await expect(body).toHaveValue('');
+  expect(await height(), 'back to one line').toBeCloseTo(rest, 0);
+
+  await alice.setViewportSize({ width: 900, height: 844 });
+  await expect(alice.locator('#plus-open')).toBeHidden();
+  await expect(alice.getByRole('button', { name: 'Attach files' })).toBeVisible();
+});
+
+// 037-AC4: the empty box stays one row, its placeholder cut rather than wrapped, at 375 px, and
+// beside a raised hand at the XL text size (028).
+test('the phone composer stays one row when narrower', async ({ request, browser }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const rest = () => expect.poll(() => rect(alice, '#send').then((r) => r.height)).toBeLessThanOrEqual(60);
+  await alice.setViewportSize({ width: 375, height: 812 });
+  await rest();
+  await alice.evaluate(() => localStorage.setItem('grill-room-text-size', JSON.stringify({ chat: 'xl' })));
+  await alice.setViewportSize(phone);
+  await alice.reload();
+  await alice.getByRole('button', { name: 'Attach and more' }).click();
+  await alice.locator('#plus-menu').getByRole('button', { name: 'Raise my hand' }).click();
+  await expect(alice.locator('#hand-raise')).toBeVisible();
+  await rest();
+  await alice.setViewportSize({ width: 375, height: 812 });
+  await rest();
+});
+
+// 037-AC5 037-AC8: "+" opens the composer's tools by keyboard, its first item focused, arrows
+// moving, Escape back on "+"; each item does what its button does, in its state; a raised hand
+// shows in the row to be lowered in one tap. Every target 44 px, "+" with its focus ring.
+test('the phone composer "+" menu', async ({ request, browser }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize(phone);
+  const menu = alice.locator('#plus-menu');
+  const focused = () => alice.evaluate(() => document.activeElement.id);
+  await alice.locator('#body').focus();
+  await alice.keyboard.press('Shift+Tab');
+  expect(await focused()).toBe('plus-open');
+  expect(await alice.locator('#plus-open').evaluate((e) => getComputedStyle(e).outlineStyle)).toBe('solid');
+  await alice.keyboard.press('Enter');
+  await expect(menu).toBeVisible();
+  await expect.poll(focused).toBe('plus-attach');
+  // A desktop browser at this width offers the capture: the item shows as its button would.
+  await expect(menu.getByRole('button')).toHaveText(['Attach files', 'Capture screen', 'Raise my hand']);
+  expect(await focused()).toBe('plus-attach');
+  await alice.keyboard.press('ArrowDown');
+  expect(await focused()).toBe('plus-capture');
+  await alice.keyboard.press('ArrowDown');
+  expect(await focused()).toBe('plus-hand');
+  expect(await smallTargets(alice), 'menu open').toEqual([]);
+  await alice.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  expect(await focused()).toBe('plus-open');
+
+  await alice.locator('#plus-open').click();
+  const [chooser] = await Promise.all([alice.waitForEvent('filechooser'), menu.getByRole('button', { name: 'Attach files' }).click()]);
+  expect(chooser.isMultiple()).toBe(true);
+  await expect(menu).toBeHidden();
+
+  // The hand's state follows its button while the menu is open.
+  await alice.evaluate(() => { document.getElementById('hand-raise').disabled = true; });
+  await alice.locator('#plus-open').click();
+  await expect(menu.getByRole('button', { name: 'Raise my hand' })).toBeDisabled();
+  await alice.evaluate(() => { document.getElementById('hand-raise').disabled = false; });
+  await expect(menu.getByRole('button', { name: 'Raise my hand' })).toBeEnabled();
+  await menu.getByRole('button', { name: 'Raise my hand' }).click();
+  const hand = alice.locator('#hand-raise');
+  await expect(hand).toBeVisible();
+  await expect(hand).toHaveAccessibleName('Lower my hand');
+  const [h, b] = await Promise.all([rect(alice, '#hand-raise'), rect(alice, '#body')]);
+  expect([Math.round(h.width), Math.round(h.height)]).toEqual([44, 44]);
+  expect(Math.abs(h.mid - b.mid), 'the hand on the row').toBeLessThanOrEqual(1);
+  await alice.locator('#plus-open').click();
+  await expect(menu.getByRole('button', { name: 'Lower my hand' })).toBeVisible();
+  await alice.keyboard.press('Escape');
+  await hand.click();
+  await expect(hand).toBeHidden();
+  expect(await smallTargets(alice), 'composer').toEqual([]);
+});
+
+// 037-AC6 037-AC8: a phone's pills are compact, on their own row under the room's name, with or
+// without voice; a 44 px slot follows the bar for 035's "Add a persona"; the name keeps 6rem.
+test('the phone header', async ({ request, browser }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  // One full pill fits a phone's row: compact all the same.
+  await alice.setViewportSize(phone);
+  await expect(alice.locator('.persona-pill')).toHaveCount(1);
+  await expect(alice.locator('#persona-buttons')).toHaveClass(/compact/);
+  expect((await request.patch(`/api/rooms/${room.id}`, { headers: admin, data: { name: 'A room name long enough to take the header from the personas' } })).status()).toBe(200);
+  await addPersonas(alice, room.id, 2);
+  await alice.setViewportSize(phone);
+  await alice.reload();
+  await expect(alice.locator('.persona-pill')).toHaveCount(3);
+  const check = async (label) => {
+    const [header, name, bar, zone] = await Promise.all(['.room-header', '#room-open .name', '#persona-buttons', '#agent'].map((s) => rect(alice, s)));
+    await expect(alice.locator('#persona-buttons')).toHaveClass(/compact/);
+    expect(Math.min(name.right, header.right) - name.left, `${label}: name`).toBeGreaterThanOrEqual(96);
+    expect(bar.top, `${label}: pills under the name`).toBeGreaterThanOrEqual(name.bottom);
+    expect(zone.right - bar.right, `${label}: slot after the bar`).toBeGreaterThanOrEqual(44);
+    // The bar scrolls its pills: the page itself never scrolls sideways.
+    expect(await alice.evaluate(() => document.documentElement.scrollWidth - innerWidth), label).toBeLessThanOrEqual(0);
+    expect(await smallTargets(alice), label).toEqual([]);
+  };
+  await check('3 personas');
+  await addPersonas(alice, room.id, 6);
+  await alice.reload();
+  await expect(alice.locator('.persona-pill')).toHaveCount(9);
+  await check('9 personas');
+  await expect(alice.locator('.persona-more.right')).toBeVisible();
+  await withVoice(alice, room.id);
+  await expect(alice.locator('#voice-join')).toBeVisible();
+  await check('9 personas, voice');
+  await expect(alice.locator('.persona-more.right')).toBeVisible();
+});
+
+// 037-AC7: three personas, no voice, no audio: the messages take three quarters of the screen.
+test('the phone gives the messages the screen', async ({ request, browser }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  await addPersonas(alice, room.id, 2);
+  await alice.setViewportSize(phone);
+  // A server with audio, nobody in it.
+  await withVoice(alice, room.id);
+  await alice.reload();
+  await expect(alice.locator('.persona-pill')).toHaveCount(3);
+  await expect(alice.locator('#messages')).toContainText('Bob joined');
+  await expect(alice.locator('#voice-join')).toBeVisible();
+  await expect(alice.locator('#chat-filter')).toBeHidden();
+  expect((await rect(alice, '#messages')).height).toBeGreaterThanOrEqual(633);
+});

@@ -1,7 +1,7 @@
 import { request as pwRequest } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, menuItem, appointAdmin, personaSheet, startDaemon, openDaemonPage, unfoldTabs, uniq } from './helpers.js';
+import { roomWith, signIn, menuItem, appointAdmin, personaSheet, startDaemon, openDaemonPage, unfoldTabs, uniq, upload } from './helpers.js';
 
 // Layout guards of the /admin lists, the room sheets and the data pages (004b-AC16): one primary
 // action per view, no action past an edge, a phone's list in short cards with no sideways scroll,
@@ -233,3 +233,160 @@ for (const [size, viewport] of Object.entries({ phone: sizes.phone, desktop: siz
     }
   });
 }
+
+// folds reads the side drawers' folds on screen and in storage, as [people, docs].
+const folds = (page) => page.evaluate(() => ['people', 'docs'].map((n) => [document.body.classList.contains('fold-' + n), localStorage.getItem('grill-room-fold-' + n)]));
+// tablet measures the room beside a document: the side panel and chat widths, how far Send sits
+// off the box's row, and the page's sideways overflow.
+const tablet = (page) => page.evaluate(() => {
+  const r = (s) => document.querySelector(s).getBoundingClientRect();
+  const [box, send] = [r('#body'), r('#send > [type=submit]')];
+  return { side: r('#side').width, chat: r('.chat').width, offRow: Math.abs(box.top + box.height / 2 - (send.top + send.height / 2)),
+    sendAfter: send.left >= box.right, overflow: document.documentElement.scrollWidth - innerWidth };
+});
+// pastViewer names what in the viewer ends past its right edge, over the chat.
+const pastViewer = (page) => page.locator('#viewer').evaluate((v) => {
+  const edge = v.getBoundingClientRect().right + 0.5;
+  return [...v.querySelectorAll('*')].filter((e) => e.getClientRects().length && e.getBoundingClientRect().right > edge)
+    .map((e) => `${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''}`);
+});
+
+// 037-AC1 037-AC2: from 40 to 64rem a document folds People and Documents to the rail, unstored;
+// the chat keeps 22rem with Send on the box's row. Its close gives back the folds from before, but
+// one the person changed meanwhile; leaving the band and coming back undoes and redoes the fold, but
+// that one. The docs window folds nothing, nor the Video stage beside drawers folded by hand.
+for (const viewport of [{ width: 820, height: 1180 }, { width: 768, height: 1024 }]) {
+  test(`a document on a tablet, ${viewport.width} px`, async ({ browser, request }) => {
+    test.setTimeout(60_000);
+    const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+    await alice.setViewportSize(viewport);
+    const open = () => alice.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
+    const close = () => alice.locator('#doc-close').click();
+    const fitted = async () => {
+      await expect.poll(async () => Math.round((await tablet(alice)).side)).toBe(56);
+      const m = await tablet(alice);
+      expect.soft(m.chat, 'chat width').toBeGreaterThanOrEqual(352);
+      expect.soft(m.offRow, 'Send off the box row').toBeLessThanOrEqual(1);
+      expect.soft(m.sendAfter, 'Send after the box').toBe(true);
+      expect.soft(m.overflow, 'page wider than the screen').toBeLessThanOrEqual(0);
+    };
+
+    // Unfolded before: both fold, nothing stored; back unfolded on close.
+    await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+    await expect(alice.locator('#viewer')).toBeVisible();
+    await expect.poll(() => folds(alice)).toEqual([[true, null], [true, null]]);
+    await fitted();
+    await alice.setViewportSize({ width: 1100, height: viewport.height });
+    await expect.poll(() => folds(alice)).toEqual([[false, null], [false, null]]);
+    await alice.setViewportSize(viewport);
+    await expect.poll(() => folds(alice)).toEqual([[true, null], [true, null]]);
+    await fitted();
+    // The band's narrow end: the viewer keeps its toolbar and frame to itself.
+    await alice.setViewportSize({ width: 656, height: viewport.height });
+    await fitted();
+    expect.soft(await pastViewer(alice), 'past the viewer at 656 px').toEqual([]);
+    await alice.setViewportSize(viewport);
+    await close();
+    await expect.poll(() => folds(alice)).toEqual([[false, null], [false, null]]);
+
+    // People folded before: it stays folded on close, Documents unfolds.
+    await alice.locator('#people-fold').click();
+    await open();
+    await expect.poll(() => folds(alice)).toEqual([[true, '1'], [true, null]]);
+    await fitted();
+    await close();
+    await expect.poll(() => folds(alice)).toEqual([[true, '1'], [false, null]]);
+
+    // People unfolded while the document is open: the person's choice outlasts the close.
+    await open();
+    await expect.poll(() => folds(alice)).toEqual([[true, '1'], [true, null]]);
+    await alice.locator('#people-fold').click();
+    await expect.poll(() => folds(alice)).toEqual([[false, '0'], [true, null]]);
+    expect.soft((await tablet(alice)).overflow, 'page wider than the screen').toBeLessThanOrEqual(0);
+    // A turn of the tablet and back folds Documents again, not People.
+    await alice.setViewportSize({ width: 1180, height: viewport.height });
+    await expect.poll(() => folds(alice)).toEqual([[false, '0'], [false, null]]);
+    await alice.setViewportSize(viewport);
+    await expect.poll(() => folds(alice)).toEqual([[false, '0'], [true, null]]);
+    await close();
+    await expect.poll(() => folds(alice)).toEqual([[false, '0'], [false, null]]);
+    // Unfolded and folded back by the person, People stays folded on close.
+    await open();
+    await alice.locator('#people-fold').click();
+    await alice.locator('#people-fold').click();
+    await expect.poll(() => folds(alice)).toEqual([[true, '1'], [true, null]]);
+    await close();
+    await expect.poll(() => folds(alice)).toEqual([[true, '1'], [false, null]]);
+
+    // That choice holds for its document only: reopened, or another one shown, People folds again.
+    const show = async (name) => {
+      await upload(alice, name, 'text/markdown', '# ' + name + '\n');
+      await expect(alice.locator('#doc-name')).toHaveText(name);
+    };
+    await open();
+    await alice.locator('#people-fold').click();
+    await expect.poll(() => folds(alice)).toEqual([[false, '0'], [true, null]]);
+    await close();
+    await open();
+    await expect.poll(() => folds(alice)).toEqual([[true, '0'], [true, null]]);
+    // Documents unfolded for one document folds for the next, the chat back to 22rem.
+    await alice.locator('#docs-fold').click();
+    await expect.poll(() => folds(alice)).toEqual([[true, '0'], [false, '0']]);
+    await show('notes.md');
+    await expect.poll(() => folds(alice)).toEqual([[true, '0'], [true, '0']]);
+    await fitted();
+    await alice.locator('#people-fold').click();
+    await expect.poll(() => folds(alice)).toEqual([[false, '0'], [true, '0']]);
+    await show('third.md');
+    await expect.poll(() => folds(alice)).toEqual([[true, '0'], [true, '0']]);
+    await alice.setViewportSize({ width: 1180, height: viewport.height });
+    await expect.poll(() => folds(alice)).toEqual([[false, '0'], [false, '0']]);
+    await alice.setViewportSize(viewport);
+    await expect.poll(() => folds(alice)).toEqual([[true, '0'], [true, '0']]);
+    await close();
+    await expect.poll(() => folds(alice)).toEqual([[false, '0'], [false, '0']]);
+
+    // A drawer set on a desktop is no choice for the tablet: there, it folds.
+    await alice.setViewportSize(sizes.desktop);
+    await open();
+    await alice.locator('#people-fold').click();
+    await alice.locator('#people-fold').click();
+    await alice.setViewportSize(viewport);
+    await expect.poll(() => folds(alice)).toEqual([[true, '0'], [true, '0']]);
+    await fitted();
+    await close();
+    await expect.poll(() => folds(alice)).toEqual([[false, '0'], [false, '0']]);
+
+    // The docs window folds nothing, and keeps its toolbar on one row.
+    const docs = await alice.context().newPage();
+    await docs.setViewportSize(viewport);
+    await docs.goto(`/r/${room.id}/docs`);
+    await docs.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
+    await expect(docs.locator('#viewer')).toBeVisible();
+    expect(await folds(docs)).toEqual([[false, '0'], [false, '0']]);
+    expect.soft((await docs.locator('#viewer > .viewer-head').boundingBox()).height, 'docs window head').toBeLessThanOrEqual(57);
+    await docs.close();
+
+    await alice.locator('#people-fold').click();
+    await alice.locator('#docs-fold').click();
+    await alice.locator('#video-open').evaluate((b) => { b.hidden = false; b.click(); });
+    await expect(alice.locator('#stage')).toBeVisible();
+    expect.soft((await tablet(alice)).chat, 'chat beside the stage').toBeLessThan(352);
+  });
+}
+
+// 037-AC2: under 40rem and from 64rem, a document folds nothing.
+test('a document on a phone and a desktop folds nothing', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize(sizes.desktop);
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await expect(alice.locator('#viewer')).toBeVisible();
+  expect(await folds(alice)).toEqual([[false, null], [false, null]]);
+  expect((await tablet(alice)).side).toBeGreaterThan(56);
+  await alice.locator('#doc-close').click();
+  await alice.setViewportSize(sizes.phone);
+  await alice.locator('#tabbar').getByRole('button', { name: /Docs/ }).click();
+  await alice.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
+  await expect(alice.locator('#viewer')).toBeVisible();
+  expect(await folds(alice)).toEqual([[false, null], [false, null]]);
+});

@@ -457,11 +457,17 @@ button.doc:hover { background: var(--border); }
   .doc-title { flex: 1 1 calc(100% - var(--control-h) - var(--sp-2)); }
   .doc-tools { margin-left: auto; }
 }
+/* So does a tablet's room page: beside a 22rem chat the toolbar ran past the viewer (037-AC2). */
+@media (width > 40rem) and (width < 64rem) {
+  body:not(.docs-window) .viewer-head { flex-wrap: wrap; row-gap: 0; }
+  body:not(.docs-window) .doc-title { flex: 1 1 calc(100% - var(--control-h) - var(--sp-2)); }
+  body:not(.docs-window) .doc-tools { margin-left: auto; }
+}
 .btn-ghost.danger { color: var(--danger); }
 #doc-rename-form, #revisions { margin: 0; padding: var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--border); }
 #doc-rename-form input { min-width: 12rem; }
 #doc-frame { flex: 1; display: flex; min-height: 0; background: var(--surface); }
-#doc-frame iframe { flex: 1; border: 0; }
+#doc-frame iframe { flex: 1; min-width: 0; border: 0; }
 /* The frame is another document: over it, a dragged file or a pane handle's drag would go to it. */
 body:is(.drag-files, :has(.pane-handle.dragging)) #doc-frame iframe { pointer-events: none; }
 #doc-frame img { max-width: 100%; max-height: 100%; margin: auto; object-fit: contain; }
@@ -660,8 +666,20 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
 .msg.mentions-me { margin-left: calc(-1 * var(--sp-2)); padding-left: var(--sp-2); background: var(--highlight); box-shadow: inset 3px 0 0 var(--accent); }
 #send { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border); container-type: inline-size; }
 #send textarea { flex: 1; resize: vertical; }
-/* A narrow chat (beside a document or the Video stage, on a phone): the box takes the whole width, the tools and Send go under it. */
+/* A narrow chat (beside a document or the Video stage): the box takes the whole width, the tools and Send go under it. */
 @container (width < 30rem) { #send textarea { order: -1; flex-basis: 100%; } #send > [type=submit] { margin-left: auto; } }
+/* A phone's composer rests on one row: "+" holds the tools, a raised hand stays to be lowered, and
+   the box grows with its text up to 5 lines (037-AC4, 037-AC5). */
+#plus-open { display: none; }
+@media (max-width: 40rem) {
+  #send { padding: var(--sp-1) var(--sp-3); }
+  #plus-open { display: inline-flex; }
+  #send > :is(#attach-open, #capture-open, #hand-raise:not([aria-pressed=true])) { display: none; }
+  #send textarea { order: 0; flex: 1 1 0; min-width: 0; min-height: 44px; max-height: calc(5lh + 2 * var(--sp-2) + 2px); field-sizing: content; resize: none; }
+  #send > [type=submit] { margin-left: 0; }
+  /* A narrower box (a raised hand, a larger text size) cuts the placeholder, never wraps it. */
+  #send textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
 #send-hint { flex-basis: 100%; margin: 0; }
 /* Files to send (029-AC3): one chip each under the box, an image with its preview. */
 #pending { display: flex; flex-wrap: wrap; flex-basis: 100%; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
@@ -701,6 +719,11 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
   /* The phone's floor comes from the audio bar's controls moving into ⋯ (030-AC14), not a width. */
   .room-header .zone-room { min-width: 0; }
   .zone-agents { order: 1; flex: 1 0 100%; }
+  /* Room for spec 035's "Add a persona" button after the pills' scroll area, clear of the right
+     "+N" (035-AC14, 037-AC6). */
+  .persona-bar { margin-right: 44px; }
+  /* Without voice, nothing to filter (037-AC3). */
+  body:not(.has-voice) #chat-filter { display: none; }
   #persona-buttons { scrollbar-width: none; }
   .zone-me { gap: 0; }
   #voice-join { padding: 0 var(--sp-3); }
@@ -785,6 +808,13 @@ input[aria-invalid=true] { border-color: var(--danger); }
   body.fold-docs:is(.docs-window, .fold-people) #side .pane-head { justify-content: center; }
   body.fold-docs:is(.docs-window, .fold-people) #side :is(.head-action, .sec-label), body.fold-docs:is(.docs-window, .fold-people) #side-handle { display: none; }
   body.docs-window #viewer[hidden] + #viewer-empty { display: flex; flex: 1; align-items: flex-start; padding: var(--sp-6); }
+}
+/* room.js sets .doc-fit while a document folds the side panel on a tablet (037-AC1): beside the rail
+   the chat keeps 22rem, Send on the box's row (037-AC2); with a drawer unfolded it gives way, as it did. */
+body.doc-fit.fold-docs.fold-people:not(.chat-folded) .chat { min-width: 22rem; }
+@container (width < 30rem) {
+  body.doc-fit.fold-docs.fold-people #send textarea { flex-basis: calc(100% - var(--control-h) - var(--sp-2)); }
+  body.doc-fit.fold-docs.fold-people #send > [type=submit] { order: -1; }
 }
 /* A phone shows one pane at a time: the list, the document, then Notes (008-AC9). */
 @media (max-width: 40rem) {

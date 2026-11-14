@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures.js';
+import { adminToken } from './playwright.config.js';
 import { roomWith, playSTT, noOverflow, menuItem } from './helpers.js';
 
 // The e2e server has no LiveKit: this LiveKit stand-in keeps the room page's own mic handling and
@@ -60,6 +61,29 @@ async function voicePage(browser, request) {
   await expect(page.locator('#voice-join')).toBeVisible();
   return page;
 }
+
+// 037-AC6 037-AC7: in the audio at 390 × 844 with three personas, the header keeps the pills' row,
+// 100 px at most, and the messages keep 65% of the screen.
+test('the audio on a phone leaves the messages two thirds of the screen', async ({ browser, request }) => {
+  const page = await voicePage(browser, request);
+  const room = await page.evaluate(() => roomID);
+  const admin = { Authorization: `Bearer ${adminToken}` };
+  const inv = await (await request.post(`/api/rooms/${room}/invites`, { headers: admin })).json();
+  expect((await request.post('/api/join', { data: { invite: inv.token, name: 'Bob' } })).status()).toBe(201);
+  await page.evaluate(async (id) => {
+    const tpls = await (await fetch(`/api/rooms/${id}/templates`)).json();
+    for (let i = 0; i < 2; i++) await fetch(`/api/rooms/${id}/personas`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ template_id: tpls[i].id }) });
+  }, room);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await expect(page.locator('.persona-pill')).toHaveCount(3);
+  await expect(page.locator('#messages')).toContainText('Bob joined');
+  await page.locator('#voice-join').click();
+  await expect(page.locator('#voice-more')).toBeVisible();
+  const height = (sel) => page.locator(sel).evaluate((e) => e.getBoundingClientRect().height);
+  expect(await height('.room-header')).toBeLessThanOrEqual(100);
+  expect(await height('#messages')).toBeGreaterThanOrEqual(549);
+});
 
 // A denied unmute shows a banner; the next unmute that works clears it (the lab's banner stayed
 // with the mic live).

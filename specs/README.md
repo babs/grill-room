@@ -38,3 +38,4 @@
 | [033](033-timekeeper-in-starters.md) | Timekeeper in the Retro and Incident starters; starters carry the time-keeper role | shipped |
 | [034](034-compact-persona-bar.md) | A persona bar that fits: compact pills, edge "+N" with the hidden signal | shipped |
 | [036](036-announcements.md) | What screen readers hear in a room: quiet lists, one log of new lines, transcription read aloud on request | shipped |
+| [037](037-room-layout.md) | A room that fits tablets and phones: side panel folds for a document, one-row composer, compact pills on their own row | shipped |

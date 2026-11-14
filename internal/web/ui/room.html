@@ -111,6 +111,12 @@
 <div id="person-card" class="person-card" role="tooltip" popover="manual"></div>
 <div id="persona-card" class="menu persona-card" popover role="dialog" aria-labelledby="persona-card-title"></div>
 <div id="person-tip" class="tip" popover="manual" aria-hidden="true"></div>
+<!-- The phone's composer tools (037-AC5): each item presses the composer's own button. -->
+<div id="plus-menu" class="menu row-menu" popover>
+  <button type="button" id="plus-attach" data-icon="clip">Attach files</button>
+  <button type="button" id="plus-capture" data-icon="screen" hidden>Capture screen</button>
+  <button type="button" id="plus-hand" data-icon="hand"><span>Raise my hand</span></button>
+</div>
 <div id="msg-menu" class="menu msg-menu" popover>
   <button type="button" id="msg-edit">Edit</button>
   <button type="button" id="msg-delete">Delete</button>
@@ -491,6 +497,7 @@
     </aside>
     <form id="send">
       <ul id="mention-list" class="mention-list" role="listbox" aria-label="Mention" hidden></ul>
+      <button type="button" id="plus-open" class="btn-icon btn-ghost" popovertarget="plus-menu" aria-label="Attach and more" data-tip="Attach files and more" data-icon="plus"></button>
       <button type="button" id="attach-open" class="btn-icon btn-ghost" aria-label="Attach files" data-tip="Attach files" data-icon="clip"></button>
       <input type="file" id="attach-input" multiple hidden>
       <button type="button" id="capture-open" class="btn-icon btn-ghost" aria-label="Capture screen" data-tip="Capture screen" data-icon="screen" hidden></button>

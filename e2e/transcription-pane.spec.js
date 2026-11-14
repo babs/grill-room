@@ -61,9 +61,9 @@ test('with a document open the pane is above the messages', async ({ browser, re
   await expect(inPane(alice, 1e9 + 39)).toBeInViewport();
 });
 
-// The composer in a narrow chat (beside a document, on a phone) gives the box the whole width, the
-// tools and Send on a row under it; in a wide chat the tools and Send are centred on the box. The pane
-// head never draws "Voice-to-text is off" over its title.
+// The composer in a narrow chat beside a document gives the box the whole width, the tools and Send
+// on a row under it; a phone's rests on one row, "+", the box and Send (037-AC4); in a wide chat the
+// tools and Send are centred on the box. The pane head never draws "Voice-to-text is off" over its title.
 test('the composer and the pane head fit a narrow chat', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   const boxes = () => Promise.all(['#send', '#body', '#attach-open', '#send > [type=submit]'].map((s) => alice.locator(s).boundingBox()));
@@ -80,7 +80,10 @@ test('the composer and the pane head fit a narrow chat', async ({ browser, reque
     expect(submit.x + submit.width).toBeGreaterThanOrEqual(body.x + body.width - 1);
   };
   await alice.setViewportSize({ width: 390, height: 800 });
-  await narrowChat();
+  await expect.poll(async () => {
+    const [plus, box, sub] = await Promise.all(['#plus-open', '#body', '#send > [type=submit]'].map((s) => alice.locator(s).boundingBox()));
+    return plus && Math.max(Math.abs(mid(plus) - mid(box)), Math.abs(mid(sub) - mid(box)));
+  }).toBeLessThanOrEqual(1);
 
   await alice.setViewportSize(wide);
   await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
