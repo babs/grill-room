@@ -210,7 +210,7 @@ func (d *database) locked(ctx context.Context, fn func(t *txn) error) error {
 	return t.Commit()
 }
 
-// unlockedTries bounds the runs of an unlocked transaction PostgreSQL aborted to break a deadlock.
+// unlockedTries bounds the runs of a transaction PostgreSQL aborted to break a deadlock (rerun).
 const unlockedTries = 3
 
 // unlocked runs fn in a transaction without the write lock, for writes to the tables no id cursor
@@ -218,9 +218,14 @@ const unlockedTries = 3
 // locks can deadlock: a transaction PostgreSQL aborted for that runs again, so fn must be safe to
 // rerun.
 func (d *database) unlocked(ctx context.Context, fn func(t *txn) error) error {
+	return rerun(func() error { return d.unlockedOnce(ctx, fn) })
+}
+
+// rerun runs f, then again while it fails retryable, at most unlockedTries runs; f must be safe to rerun.
+func rerun(f func() error) error {
 	var err error
 	for range unlockedTries {
-		if err = d.unlockedOnce(ctx, fn); !retryable(err) {
+		if err = f(); !retryable(err) {
 			return err
 		}
 	}
