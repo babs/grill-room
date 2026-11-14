@@ -259,6 +259,7 @@
   <p id="push-status" class="said" role="status"></p>
   <h3>This tab</h3>
   <label><input type="checkbox" id="count-voice"> Count voice lines in the tab title</label>
+  <label><input type="checkbox" id="read-voice"> Read the transcription aloud</label>
   <div class="actions"><button type="button" id="push-toggle" class="btn-primary" hidden>Turn on notifications</button></div>
 </dialog>
 <!-- Text size per area (028): saved on the profile, or in this browser for a seat without one. -->
@@ -469,7 +470,7 @@
       <button type="button" data-filter="written" aria-pressed="true">Written<span class="count"></span></button>
       <button type="button" data-filter="voice" aria-pressed="false">Voice<span class="count"></span></button>
     </div>
-    <ol id="messages" aria-live="polite"></ol>
+    <ol id="messages" aria-labelledby="chat-title"></ol>
     <p id="filter-empty" class="empty"></p>
     <div id="chat-empty" class="empty" hidden>
       <p>Invite people to start.</p>
@@ -485,7 +486,7 @@
         <span id="transcript-off" hidden>Voice-to-text is off</span>
         <span id="transcript-count" class="badge"></span>
       </div>
-      <ol id="voice-lines" aria-live="polite"></ol>
+      <ol id="voice-lines" aria-labelledby="transcript-title"></ol>
       <p id="transcript-empty" class="empty">Nobody has been transcribed yet.</p>
     </aside>
     <form id="send">
@@ -516,5 +517,7 @@
 </nav>
 <div id="toasts" class="toasts" popover="manual"></div>
 <div id="toast-live" class="sr-only" role="status" aria-live="polite" aria-atomic="false"></div>
+<!-- What screen readers hear of the chat: the lists above are not live (036). -->
+<div id="chat-log" class="sr-only" role="log" aria-live="polite" aria-relevant="additions"></div>
 </body>
 </html>

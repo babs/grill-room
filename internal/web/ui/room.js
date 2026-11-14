@@ -302,6 +302,86 @@ window.addEventListener('focus', () => {
 $('count-voice').checked = localStorage.getItem(voiceKey) === '1';
 $('count-voice').addEventListener('change', () => localStorage.setItem(voiceKey, $('count-voice').checked ? '1' : '0'));
 
+// #chat-log is all screen readers hear of the chat (036): the lists are not live, so history
+// replayed on load and lines redrawn in place stay silent. New lines from others are said once.
+const readVoiceKey = 'grill-room-read-voice';
+const readVoice = () => localStorage.getItem(readVoiceKey) === '1';
+$('read-voice').checked = readVoice();
+$('read-voice').addEventListener('change', () => localStorage.setItem(readVoiceKey, $('read-voice').checked ? '1' : '0'));
+// logTimes: when the entries of the last 2 s went out; folded: those held back since, said as one (036-AC4).
+const logTimes = [];
+let folded = 0;
+// voiceNamed: the voice paragraph whose speaker was said. One slot: only the room's latest line
+// other than a typed one grows (018-AC4).
+let voiceNamed = 0;
+
+function logEntry(text) {
+  // Any entry between two growths names the speaker again; the paragraph's own sets it back (036-AC7).
+  voiceNamed = 0;
+  const log = $('chat-log');
+  log.append(Object.assign(document.createElement('p'), { textContent: text }));
+  // aria-relevant="additions": the oldest goes unannounced (036-AC8).
+  while (log.childElementCount > 20) log.firstElementChild.remove();
+}
+
+// announce answers whether text went out on its own, not folded into "N more".
+function announce(text) {
+  const now = Date.now();
+  while (logTimes.length && now - logTimes[0] >= 2000) logTimes.shift();
+  if (logTimes.length < 3 && !folded) {
+    logTimes.push(now);
+    logEntry(text);
+    return true;
+  }
+  if (!folded++) {
+    setTimeout(() => {
+      logEntry(folded === 1 ? '1 more new message' : folded + ' more new messages');
+      logTimes.push(Date.now());
+      folded = 0;
+    }, logTimes[0] + 2000 - now);
+  }
+  return false;
+}
+
+// plainText is a line as it reads on screen: its rendered body, then its files by name (036-AC3).
+function plainText(li) {
+  const body = li.querySelector(':scope > .body')?.cloneNode(true);
+  if (!body) return '';
+  for (const b of body.querySelectorAll('p, li, br, h1, h2, h3, h4, h5, h6, pre, blockquote, tr, td, th')) b.after(' ');
+  const files = [...li.querySelectorAll(':scope > .msg-docs [data-name]')].map((d) => d.dataset.name);
+  return [body.textContent, ...files].join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function cut(text) {
+  if (text.length <= 280) return text;
+  const at = text.lastIndexOf(' ', 280);
+  return (at > 0 ? text.slice(0, at) : text.slice(0, 280)) + '…, more in the chat';
+}
+
+// hear says new line m, shown as li, unless it is history, the viewer's own, or an unread voice line.
+// The docs window shows no chat: the room's window says it.
+function hear(m, li) {
+  if (docsMode || !isLive(m) || String(m.participant_id) === myID || m.deleted_at) return;
+  if (m.kind === 'voice' && !readVoice()) return;
+  const text = plainText(li);
+  if (!text) return;
+  // A system line is a sentence naming its actor (036-AC3).
+  const said = announce(m.kind === 'system' ? cut(text) : m.sender + ': ' + cut(text));
+  if (m.kind === 'voice' && said) voiceNamed = m.id;
+}
+
+// heardGrowth says the words voice paragraph m gained from li to fresh (018-AC5), the speaker too
+// until said (036-AC7). A rewrite, an edit or a delete says nothing (036-AC5); an append never
+// sets edited_at (018-AC5).
+function heardGrowth(m, li, fresh) {
+  if (docsMode || !readVoice() || m.edited_at || m.deleted_at || String(m.participant_id) === myID) return;
+  const was = plainText(li);
+  const text = plainText(fresh);
+  const more = text.startsWith(was) ? text.slice(was.length).trim() : '';
+  if (!more) return;
+  if (announce(voiceNamed === m.id ? cut(more) : m.sender + ': ' + cut(more))) voiceNamed = m.id;
+}
+
 // Chat filter (020-AC4, 020-AC5): Written by default, one stored choice per browser. Applied by CSS
 // on the list, so it leaves the unread count alone (020-AC16). A jump or a send shows another
 // filter for this visit only (viewFilter), the stored choice kept.
@@ -378,8 +458,6 @@ function placeVoice() {
   const focused = document.activeElement;
   const held = focused?.closest?.(lineSel);
   if ($('msg-menu').matches(':popover-open')) $('msg-menu').hidePopover();
-  // One change for screen readers, not one announcement per line moved.
-  for (const l of [messages, voiceLines]) l.setAttribute('aria-busy', 'true');
   if (show) {
     const frag = document.createDocumentFragment();
     for (const li of [...moving]) frag.append(li);
@@ -395,7 +473,6 @@ function placeVoice() {
       messages.insertBefore(li, at);
     }
   }
-  requestAnimationFrame(() => { for (const l of [messages, voiceLines]) l.removeAttribute('aria-busy'); });
   if (held) setPinned(held.parentElement, false);
   if (held && filterHides(lineKind(held))) setFilter('all');
   if (focused instanceof HTMLElement && focused !== document.activeElement && focused.isConnected) focused.focus({ preventScroll: true });
@@ -454,8 +531,10 @@ function addMessage(m) {
     refreshTimer = setTimeout(() => loadRoom().catch(console.error), 200);
   }
   const list = m.kind === 'voice' && paneShows() ? voiceLines : messages;
-  list.append(renderMessage(m));
+  const li = renderMessage(m);
+  list.append(li);
   stick(list);
+  hear(m, li);
   if (m.id === jumpTo) jump(m.id);
 }
 
@@ -469,8 +548,13 @@ function replaceMessage(m) {
   // anchor scrolling (Safari): keep the next line in place, a no-op where it does (Chrome).
   const below = !isPinned(list) && li.getBoundingClientRect().bottom <= list.getBoundingClientRect().top ? li.nextElementSibling : null;
   const was = below ? below.getBoundingClientRect().top : 0;
-  li.replaceWith(renderMessage(m));
+  const fresh = renderMessage(m);
+  li.replaceWith(fresh);
   if (below) list.scrollTop += below.getBoundingClientRect().top - was;
+  if (m.kind === 'voice') heardGrowth(m, li, fresh);
+  // A blocked website's outcome is a room event: said once, for everyone (036-AC5).
+  const outcome = fresh.dataset.outcome;
+  if (!docsMode && outcome && outcome !== li.dataset.outcome) grillAnnounce(outcome);
   // A voice paragraph grows in place (018-AC5): its new words must not land below the fold.
   stick(list);
 }
@@ -478,6 +562,11 @@ function replaceMessage(m) {
 // blockedLines are the shown lines of websites a turn was refused, by id: their buttons follow the
 // agent state (014-AC9).
 const blockedLines = new Map();
+
+// allowBlocked asks to allow blocked line id's website for scope and says so: the pressed button
+// goes (036).
+const allowBlocked = (id, scope, domain) => sendJSON('POST', api + '/blocked/' + id + '/allow', { scope })
+  .then((done) => done && grillAnnounce('Allowing ' + domain + '…'));
 
 // blockedActions are an undecided blocked line's buttons for whoever may approve it: the AI host
 // for the room or everywhere, a room admin the host lets for the room only; disabled, with why,
@@ -507,7 +596,7 @@ function blockedActions(m) {
     btn.disabled = !!why;
     btn.addEventListener('click', () => {
       for (const x of box.querySelectorAll('button')) x.disabled = true;
-      sendJSON('POST', api + '/blocked/' + m.id + '/allow', { scope }).catch((err) => {
+      allowBlocked(m.id, scope, b.domain).catch((err) => {
         showNotice(err.message);
         for (const x of box.querySelectorAll('button')) x.disabled = !!why;
       });
@@ -540,7 +629,8 @@ function proposalCard(li, body, m, retry = true) {
   if (hasProfile) box.append(button('Create…', '', () => window.grillCreateProposal?.(m)), ' ');
   if (meAdmin || participants.some((x) => x.self && x.id === p.trigger)) {
     box.append(button('Dismiss', '', () => {
-      sendJSON('POST', api + '/proposals/' + p.id + '/dismiss').catch((err) => showNotice(err.message));
+      // The pressed button goes: say what it did (036).
+      sendJSON('POST', api + '/proposals/' + p.id + '/dismiss').then((done) => done && grillAnnounce('Proposal dismissed'), (err) => showNotice(err.message));
     }));
   }
   if (box.childNodes.length) li.append(' ', box);
@@ -658,6 +748,7 @@ function renderMessage(m) {
     if (m.blocked) {
       blockedLines.set(m.id, m);
       li.classList.add('blocked');
+      li.dataset.outcome = m.blocked.decision ? m.body : m.blocked.error ? 'Not allowed: ' + m.blocked.error : '';
       const acts = blockedActions(m);
       if (acts) li.append(' ', acts);
     }
@@ -1039,6 +1130,8 @@ function fillMentions(li) {
 
 // noticeText says to a note's author why the personas it names will not run (009-AC29).
 const noticeText = (ns) => (ns || []).map((n) => '@' + n.name + ': ' + n.reason + '. Only you see this.').join(' ');
+// sayNotices tells the author: the chat is not a live region, and their own line is not logged (036).
+const sayNotices = (ns) => { if (ns.length) grillAnnounce(noticeText(ns)); };
 
 function mentionChip(s) {
   const p = personaByID(s.persona_id);
@@ -1107,8 +1200,6 @@ function editMessage(li, m) {
   list.setAttribute('role', 'listbox');
   list.setAttribute('aria-label', 'Mention');
   list.hidden = true;
-  // #messages is a live region: the suggestions must not be read out on each keystroke.
-  list.setAttribute('aria-live', 'off');
   const mentions = mentionAutocomplete(box, list);
   form.append(list, box, save, cancel);
   form.addEventListener('submit', (e) => {
@@ -1119,6 +1210,7 @@ function editMessage(li, m) {
       // (016-AC21); the stream may have redrawn the line before this answer came.
       if (saved && saved.mention_notices) {
         notices.set(saved.id, saved.mention_notices);
+        sayNotices(saved.mention_notices);
         const live = lineOf(saved.id);
         if (live) fillMentions(live);
       }
@@ -2990,18 +3082,23 @@ function blockedItems() {
       li.append(' Allowing…');
       return li;
     }
-    const acts = [['Allow for this room', () => sendJSON('POST', api + '/blocked/' + b.message_id + '/allow', { scope: 'room' })]];
-    if (host) acts.push(['Allow everywhere', () => sendJSON('POST', api + '/blocked/' + b.message_id + '/allow', { scope: 'server' })]);
-    acts.push(['Dismiss', () => sendJSON('POST', api + '/blocked/' + b.message_id + '/dismiss')]);
+    const acts = [['Allow for this room', () => allowBlocked(b.message_id, 'room', b.domain)]];
+    if (host) acts.push(['Allow everywhere', () => allowBlocked(b.message_id, 'server', b.domain)]);
+    acts.push(['Dismiss', () => sendJSON('POST', api + '/blocked/' + b.message_id + '/dismiss').then((done) => done && grillAnnounce('Dismissed ' + b.domain))]);
     for (const [label, run] of acts) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.textContent = label;
       btn.setAttribute('aria-label', label + ': ' + b.domain);
       btn.disabled = !!why && label !== 'Dismiss';
+      // The whole row, as the chat card's: one request per website at a time.
       btn.addEventListener('click', () => {
-        btn.disabled = true;
-        run().catch((err) => { btn.disabled = false; agentError(err.message); });
+        const was = [...li.querySelectorAll('button')].map((x) => [x, x.disabled]);
+        for (const [x] of was) x.disabled = true;
+        run().catch((err) => {
+          for (const [x, off] of was) x.disabled = off;
+          agentError(err.message);
+        });
       });
       li.append(' ', btn);
     }
@@ -5672,6 +5769,7 @@ async function send() {
   offerPush();
   if (m.mention_notices) {
     notices.set(m.id, m.mention_notices);
+    sayNotices(m.mention_notices);
     const li = lineOf(m.id);
     if (li) fillMentions(li);
   }

@@ -470,6 +470,8 @@ In the chat, `@Grill` shows as a chip in the persona's colour with its badge, an
 
 While the room's tab is not focused, its title counts new lines from others and syntheses, "(3) Pricing review · grill-room", and resets once the tab is focused again. "(4 @)" says one of them names you. Voice lines count only when "Count voice lines in the tab title" is ticked, under Notifications.
 
+Screen readers hear the chat through one hidden log, not the lists: each line from someone else written after the page loaded is said once, "Carol: text", cut past 280 characters, and more than 3 in 2 seconds fold into "N more new messages" ("1 more new message" for one). A system line, as "Bob joined", is said as its text alone. History, edits, deletes and cards that change stay silent. The transcription is silent unless "Read the transcription aloud" is ticked, under Notifications: a paragraph is then said with its speaker, and each growth says only its new words.
+
 The server hands out LiveKit tokens valid for 5 minutes, and LiveKit refreshes them for connected clients. LiveKit has no way to revoke a token. So when someone loses their seat, the server also removes them from the LiveKit room, and deleting a room closes its LiveKit room. A revoked participant could still rejoin with a token minted before the revoke, until it expires.
 
 Media needs no published UDP port (spike S4): ICE runs over TCP 7881, or TURN over TLS on 443, where traefik terminates TLS and routes `turn.<dev-domain>` by SNI to LiveKit's plain TURN port.

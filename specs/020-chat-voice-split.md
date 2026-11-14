@@ -51,7 +51,7 @@ On a wide screen, the chat shows the written exchange: typed messages, persona r
 - [x] **AC11** A voice message in the pane keeps what it has in the chat today: speaker, time, source (device/server), the mention state of a voice trigger (006-AC18), and the edit/delete menu for its author.
 - [x] **AC12** A fold button in the pane header folds it to a strip with an unfold button and a count of the voice lines the chat has not shown since it was folded; folding brings the filter back (AC4). The folded state is kept in the browser.
 - [x] **AC13** With no voice message yet, the pane says "Nobody has been transcribed yet." While the STT worker is down (001-AC10), the pane header shows "Voice-to-text is off", the words of the audio menu.
-- [x] **AC14** The pane is an `aside` labelled "Transcription", its list `aria-live="polite"`; the fold button carries `aria-expanded`. Keyboard and screen reader reach it in order after the chat's messages.
+- [x] **AC14** The pane is an `aside` labelled "Transcription", its list `aria-live="polite"` (amended by 036-AC1: named "Transcription", not live); the fold button carries `aria-expanded`. Keyboard and screen reader reach it in order after the chat's messages.
 
 ### Type size
 
@@ -82,7 +82,7 @@ On a wide screen, the chat shows the written exchange: typed messages, persona r
 - Work: pane markup and CSS (right of the chat, above it with a document open), fold strip and count, live updates, empty and unavailable states, filter hidden while the pane shows.
 - **Covers**: AC8, AC9, AC10, AC11, AC12, AC13, AC14
 - **Data model impact**: none
-- **DoD**: `make e2e` green with cases: at 1280 px a voice line lands in the pane, not the chat, and a paragraph append updates it in place; with a document open the pane is above the messages and the composer is the column's last element; fold shows the filter and the count, reload keeps it folded; at 900 px no pane and the filter shows; the author's menu edits a line in the pane; the AC14 test checks the pane's name, `aria-live`, `aria-expanded`, DOM order, focus ring and target size.
+- **DoD**: `make e2e` green with cases: at 1280 px a voice line lands in the pane, not the chat, and a paragraph append updates it in place; with a document open the pane is above the messages and the composer is the column's last element; fold shows the filter and the count, reload keeps it folded; at 900 px no pane and the filter shows; the author's menu edits a line in the pane; the AC14 test checks the pane's name, `aria-live` (amended by 036-AC1: named "Transcription", not live), `aria-expanded`, DOM order, focus ring and target size.
 
 ### Phase 4 — Pane text and width (user, 2026-10-27)
 - Work: pane text at `--fs-sm`; a `transcript` entry in the room's pane widths (`--transcript-w`, `grill-room-transcript-w`), its handle on the pane's left edge, the fit test and the drag cap on the chat's 22rem.
