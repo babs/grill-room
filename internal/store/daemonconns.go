@@ -6,13 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
-// DaemonStatus is what a daemon's heartbeat last said: whether it can host and why not, its
-// version, whether it applies website approvals, its connectors as JSON.
+// DaemonStatus is what a daemon's heartbeat last said: whether it can host and why not, as a code
+// and words, its version, whether it applies website approvals, its connectors as JSON.
 type DaemonStatus struct {
 	CanHost    bool
+	ReasonCode string
 	Reason     string
 	Version    string
 	Egress     bool
@@ -102,6 +104,26 @@ func (s *Store) DropDaemonConnections(ctx context.Context, id int64) error {
 	return nil
 }
 
+// reasonSep joins a reason's code to its words in the reason column: a code takes no column of its
+// own, the table having none for it (039).
+// ponytail: packed column; a reason_code column when daemon_status next migrates.
+const reasonSep = "\x1f"
+
+// packReason is the reason column for st; unpackReason reads it back, a row with no code whole.
+func packReason(st DaemonStatus) string {
+	if st.ReasonCode == "" {
+		return st.Reason
+	}
+	return st.ReasonCode + reasonSep + st.Reason
+}
+
+func unpackReason(col string) (code, reason string) {
+	if c, r, ok := strings.Cut(col, reasonSep); ok {
+		return c, r
+	}
+	return "", col
+}
+
 // SetDaemonStatus records daemon id's status; changed is false when it said the same already,
 // its version aside.
 func (s *Store) SetDaemonStatus(ctx context.Context, id int64, st DaemonStatus) (changed bool, err error) {
@@ -110,15 +132,17 @@ func (s *Store) SetDaemonStatus(ctx context.Context, id int64, st DaemonStatus) 
 	}
 	err = s.db.unlocked(ctx, func(t *txn) error {
 		old := DaemonStatus{Connectors: "[]"}
+		reason := packReason(st)
+		var oldReason string
 		err := t.QueryRowContext(ctx, `SELECT can_host, reason, egress, connectors FROM daemon_status WHERE daemon_id = ?`, id).
-			Scan(&old.CanHost, &old.Reason, &old.Egress, &old.Connectors)
+			Scan(&old.CanHost, &oldReason, &old.Egress, &old.Connectors)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		changed = old.CanHost != st.CanHost || old.Reason != st.Reason || old.Egress != st.Egress || old.Connectors != st.Connectors
+		changed = old.CanHost != st.CanHost || oldReason != reason || old.Egress != st.Egress || old.Connectors != st.Connectors
 		_, err = t.ExecContext(ctx, `INSERT INTO daemon_status(daemon_id, can_host, reason, version, egress, connectors) VALUES(?, ?, ?, ?, ?, ?)
 			ON CONFLICT(daemon_id) DO UPDATE SET can_host = excluded.can_host, reason = excluded.reason, version = excluded.version,
-				egress = excluded.egress, connectors = excluded.connectors`, id, st.CanHost, st.Reason, st.Version, st.Egress, st.Connectors)
+				egress = excluded.egress, connectors = excluded.connectors`, id, st.CanHost, reason, st.Version, st.Egress, st.Connectors)
 		return err
 	})
 	if err != nil {
@@ -149,9 +173,11 @@ func (s *Store) LiveDaemons(ctx context.Context, roomID string, nowMS int64) ([]
 	for rows.Next() {
 		var d LiveDaemon
 		var since int64
-		if err := rows.Scan(&d.ID, &d.RoomID, &d.ParticipantID, &since, &d.CanHost, &d.Reason, &d.Version, &d.Egress, &d.Connectors); err != nil {
+		var reason string
+		if err := rows.Scan(&d.ID, &d.RoomID, &d.ParticipantID, &since, &d.CanHost, &reason, &d.Version, &d.Egress, &d.Connectors); err != nil {
 			return nil, fmt.Errorf("live daemons: %w", err)
 		}
+		d.ReasonCode, d.Reason = unpackReason(reason)
 		d.Since = time.UnixMilli(since)
 		out = append(out, d)
 	}

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/babs/grill-room/internal/anchor"
+	"github.com/babs/grill-room/internal/daemon"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
 )
@@ -164,6 +165,43 @@ func nextEvent(t *testing.T, ch <-chan sseEvent, name string) sseEvent {
 		if ev := next(t, ch); ev.event == name {
 			return ev
 		}
+	}
+}
+
+// 039-AC3 039-AC11: the host's reason code reaches the agent state, live, for the room's words;
+// a code the room does not know is dropped and the reason shows as sent; online carries none.
+func TestReasonCode(t *testing.T) {
+	e := newEnv(t)
+	room := e.createRoom(t, "R").ID
+	alice := e.daemonFor(t, room, "Alice")
+	e.connect(t, room, alice, true)
+	e.waitAgent(t, room, alice.p.Token, hostIs(alice.p.Participant.ID, true))
+	ch, _ := e.openStream(t, "/api/rooms/"+room+"/events", alice.p.Token, "")
+	nextEvent(t, ch, "agent")
+	// The daemon's own constants: a code renamed on either side fails here.
+	for _, tc := range []struct{ sent, want string }{
+		{daemon.ReasonDocker, "docker"}, {daemon.ReasonAccount, "account"}, {daemon.ReasonImagePending, "image_pending"},
+		{daemon.ReasonImageFailed, "image_failed"}, {"bogus", ""}, {"", ""},
+	} {
+		// The reason stays the same words: the code alone is a change the room hears.
+		body := map[string]any{"can_host": false, "reason": "not now", "reason_code": tc.sent}
+		if code, b := e.do(t, "POST", "/api/rooms/"+room+"/daemon/status", alice.tok, body); code != http.StatusNoContent {
+			t.Fatalf("status: %d %s", code, b)
+		}
+		st := e.agent(t, room, alice.p.Token)
+		if st.Online || st.Reason != "not now" || st.ReasonCode != tc.want {
+			t.Errorf("sent %q: agent %q %q", tc.sent, st.Reason, st.ReasonCode)
+		}
+		if d := daemonOf(st.Daemons, alice.p.Participant.ID, false); d == nil || d.ReasonCode != tc.want || d.Reason != "not now" {
+			t.Errorf("sent %q: daemon %+v", tc.sent, d)
+		}
+		if tc.want != "" && !strings.Contains(nextEvent(t, ch, "agent").data, `"reason_code":"`+tc.want+`"`) {
+			t.Errorf("sent %q: no live agent event", tc.sent)
+		}
+	}
+	e.status(t, room, alice, true)
+	if st := e.agent(t, room, alice.p.Token); !st.Online || st.ReasonCode != "" || st.Reason != "" {
+		t.Errorf("online: %+v", st)
 	}
 }
 

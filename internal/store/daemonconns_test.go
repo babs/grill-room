@@ -58,6 +58,18 @@ func TestDaemonConnections(t *testing.T) {
 	if err != nil || len(live) != 1 || live[0].ID != da.ID || !live[0].CanHost || live[0].Version != "2" || live[0].Since.UnixMilli() != now {
 		t.Fatalf("live = %+v %v", live, err)
 	}
+	// 039-AC3: a reason code round-trips beside its words, and a code alone is a change.
+	for _, st := range []DaemonStatus{{ReasonCode: "account", Reason: "no account"}, {ReasonCode: "docker", Reason: "no account"}, {Reason: "no account"}} {
+		if changed, err := s.SetDaemonStatus(ctx, da.ID, st); err != nil || !changed {
+			t.Fatalf("status %+v: %v %v", st, changed, err)
+		}
+		if live, _ := s.LiveDaemons(ctx, "r", now); len(live) != 1 || live[0].ReasonCode != st.ReasonCode || live[0].Reason != st.Reason {
+			t.Fatalf("status %+v: live %+v", st, live)
+		}
+	}
+	if _, err := s.SetDaemonStatus(ctx, da.ID, DaemonStatus{CanHost: true, Version: "2"}); err != nil {
+		t.Fatal(err)
+	}
 	if gone, err := s.DaemonDisconnected(ctx, "on-a", da.ID, now); err != nil || gone {
 		t.Fatalf("one of two ended: gone %v %v", gone, err)
 	}

@@ -246,7 +246,7 @@ func (d *Daemon) Status() Status {
 	st.Rooms = make([]RoomStatus, 0, len(d.rooms))
 	for _, r := range d.rooms {
 		rs := r.st
-		rs.CanHost, rs.Reason = d.readinessLocked(rs.Room)
+		rs.CanHost, _, rs.Reason = d.readinessLocked(rs.Room)
 		rs.Plugins, rs.Fetches = d.hostPluginsLocked(r), hostFetchesLocked(r)
 		st.Rooms = append(st.Rooms, rs)
 	}
@@ -254,7 +254,7 @@ func (d *Daemon) Status() Status {
 	if c := d.cur; c != nil {
 		st.Room, st.Pairing, st.Code, st.ApproveURL, st.Connection, st.Error = c.st.Room, c.st.Pairing, c.st.Code, c.st.ApproveURL, c.st.Connection, c.st.Error
 	}
-	st.CanHost, st.Reason = d.readinessLocked(st.Room)
+	st.CanHost, _, st.Reason = d.readinessLocked(st.Room)
 	return st
 }
 
@@ -268,7 +268,7 @@ func (d *Daemon) update(f func(*Status)) {
 	imageChanged := d.st.Image.State != image
 	changed := map[string]string{}
 	for room := range d.rooms {
-		_, reason := d.readinessLocked(room)
+		_, _, reason := d.readinessLocked(room)
 		if old, ok := d.ready[room]; !ok || old != reason {
 			changed[room] = reason
 		}
@@ -298,8 +298,8 @@ func (d *Daemon) changes() <-chan struct{} {
 	return d.changed
 }
 
-// readiness is whether this machine can host room now, and why not.
-func (d *Daemon) readiness(room string) (bool, string) {
+// readiness is whether this machine can host room now, and why not: a code and its words.
+func (d *Daemon) readiness(room string) (ok bool, code, reason string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.readinessLocked(room)
@@ -385,21 +385,37 @@ func (d *Daemon) proxyLocked(room string) (Proxy, error) {
 	return p, nil
 }
 
+// Reason codes let the room word why a host cannot host without matching these sentences, which
+// may change (039-AC3). A reason with no code is shown as sent.
+const (
+	ReasonDocker       = "docker"
+	ReasonAccount      = "account"
+	ReasonImagePending = "image_pending"
+	ReasonImageFailed  = "image_failed"
+)
+
 // readinessLocked is whether this machine can host room, and why not; the caller holds mu.
-func (d *Daemon) readinessLocked(room string) (bool, string) {
+func (d *Daemon) readinessLocked(room string) (ok bool, code, reason string) {
 	s := &d.st
 	_, accessErr := d.proxyLocked(room)
 	switch {
 	case !s.Docker.OK:
-		return false, s.Docker.Reason
+		return false, ReasonDocker, s.Docker.Reason
 	case accessErr != nil:
-		return false, accessErr.Error()
+		// A room paused or cut off by the host is a choice of theirs, not a missing account.
+		if errors.Is(accessErr, errCutOff) || accessErr.Error() == pausedReason {
+			return false, "", accessErr.Error()
+		}
+		if accessErr.Error() == proxyDockerReason {
+			return false, ReasonDocker, accessErr.Error()
+		}
+		return false, ReasonAccount, accessErr.Error()
 	case s.Image.State == "failed":
-		return false, "the sandbox image is unavailable on the host's machine: " + s.Image.Error
+		return false, ReasonImageFailed, "the sandbox image is unavailable on the host's machine: " + s.Image.Error
 	case s.Image.State != "ready":
-		return false, "the sandbox image is not ready yet on the host's machine"
+		return false, ReasonImagePending, "the sandbox image is not ready yet on the host's machine"
 	}
-	return true, ""
+	return true, "", ""
 }
 
 // SetRoom serves room beside the others, pairing first if no token is stored for it, and makes it
@@ -886,7 +902,7 @@ func (r *roomRun) heartbeat(ctx context.Context, tok string) {
 	for {
 		changed := d.changes()
 		st := d.Status()
-		canHost, reason := d.readiness(room.String())
+		canHost, code, reason := d.readiness(room.String())
 		// 014-AC19: the room shows which connectors are on, from its host's word.
 		connectors := []map[string]any{}
 		if px, err := d.proxyFor(room.String()); err == nil {
@@ -896,7 +912,7 @@ func (r *roomRun) heartbeat(ctx context.Context, tok string) {
 		}
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		resp, err := d.roomRequest(rctx, http.MethodPost, room.Base+"/api/rooms/"+room.ID+"/daemon/status", tok,
-			map[string]any{"can_host": canHost, "reason": reason, "version": d.o.Version, "egress": true, "connectors": connectors,
+			map[string]any{"can_host": canHost, "reason": reason, "reason_code": code, "version": d.o.Version, "egress": true, "connectors": connectors,
 				"max_model": st.Settings.MaxModel, "max_effort": st.Settings.MaxEffort, "approve_all": st.Settings.ApproveAll})
 		if err == nil {
 			if resp.StatusCode != http.StatusNoContent {

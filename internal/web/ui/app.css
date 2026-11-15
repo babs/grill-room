@@ -316,6 +316,16 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); }
 .persona-pick-text .hint { margin: 0; }
 .persona-preview { margin: var(--sp-3) 0; }
 .persona-preview h3 { margin: 0 0 var(--sp-2); font-size: var(--fs-md); }
+/* AI in this room (039): the state icon sits on the row's first line; actions wrap under the text when they do not fit. */
+.ai-row { flex-wrap: wrap; align-items: flex-start; padding-block: var(--sp-2); }
+.ai-row > .main { flex: 1 1 16rem; }
+.ai-state { flex: none; display: grid; place-items: center; width: 20px; height: 1.45em; }
+.ai-state.ready { color: var(--success); }
+.ai-state.waiting { color: var(--warning); }
+.ai-state.blocked { color: var(--danger); }
+.ai-row > .actions { flex-wrap: wrap; gap: var(--sp-2); margin-left: auto; }
+.ai-choices { margin: 0; padding-left: var(--sp-5); }
+.ai-choices > li { margin: var(--sp-1) 0; }
 /* The Personas list: one line per persona, its name and settings cut by an ellipsis (009-AC1). */
 .persona-rows { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); margin: 0 0 var(--sp-4); padding: 0; list-style: none; }
 /* The card holds the row's link, then its ⋯ (035-AC17). */

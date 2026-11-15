@@ -92,19 +92,36 @@ func TestReadiness(t *testing.T) {
 	if bytes.Contains(b, []byte(testBearer)) {
 		t.Fatal("status holds the bearer")
 	}
+	// 039-AC3: each reason carries the code the room words it by; a paused or cut-off room none.
 	for _, tc := range []struct {
-		access Access
-		reason string
+		access       Access
+		code, reason string
 	}{
-		{Access{}, "the host has no Claude account ready for this room yet"},
-		{Access{Proxies: map[string]Proxy{"": {Error: "the host's Claude login has expired"}}}, "the host's Claude login has expired"},
-		{Access{Proxies: map[string]Proxy{"": {Addr: "127.0.0.1:1", Bearer: testBearer}}, CutOff: true}, errCutOff.Error()},
-		{Access{Proxies: map[string]Proxy{"": {Addr: "127.0.0.1:1", Bearer: testBearer}}}, ""},
+		{Access{}, ReasonAccount, "the host has no Claude account ready for this room yet"},
+		{Access{Proxies: map[string]Proxy{"": {Error: "the host's Claude login has expired"}}}, ReasonAccount, "the host's Claude login has expired"},
+		{Access{Proxies: map[string]Proxy{"": {Error: pausedReason}}}, "", pausedReason},
+		{Access{Proxies: map[string]Proxy{"": {Error: proxyDockerReason}}}, ReasonDocker, proxyDockerReason},
+		{Access{Proxies: map[string]Proxy{"": {Addr: "127.0.0.1:1", Bearer: testBearer}}, CutOff: true}, "", errCutOff.Error()},
+		{Access{Proxies: map[string]Proxy{"": {Addr: "127.0.0.1:1", Bearer: testBearer}}}, "", ""},
 	} {
 		d.SetAccess(tc.access)
 		if s := d.Status(); s.CanHost != (tc.reason == "") || s.Reason != tc.reason {
 			t.Errorf("access %+v: status %+v", tc.access, s)
 		}
+		if ok, code, reason := d.readiness(""); ok != (tc.reason == "") || code != tc.code || reason != tc.reason {
+			t.Errorf("access %+v: readiness %v %q %q", tc.access, ok, code, reason)
+		}
+	}
+	for _, tc := range []struct{ state, code string }{{"failed", ReasonImageFailed}, {"pulling", ReasonImagePending}, {"ready", ""}} {
+		d.update(func(s *Status) { s.Image.State, s.Image.Error = tc.state, "no space left" })
+		if ok, code, _ := d.readiness(""); ok != (tc.code == "") || code != tc.code {
+			t.Errorf("image %s: readiness %v %q", tc.state, ok, code)
+		}
+	}
+	d.o.Docker = dockerDown
+	d.Refresh(context.Background())
+	if _, code, _ := d.readiness(""); code != ReasonDocker {
+		t.Errorf("docker down: code %q", code)
 	}
 }
 
@@ -206,6 +223,7 @@ type roomDaemon struct {
 	ParticipantID int64  `json:"participant_id"`
 	CanHost       bool   `json:"can_host"`
 	Reason        string `json:"reason"`
+	ReasonCode    string `json:"reason_code"`
 }
 
 // hostsFor reports whether participant's own daemon is connected and can host.
@@ -279,7 +297,8 @@ func TestPairAndConnect(t *testing.T) {
 	}
 	waitFor(t, "room sees the daemon", func() bool {
 		ds := rs.daemons(t, alice)
-		return len(ds) == 1 && !ds[0].CanHost && strings.HasPrefix(ds[0].Reason, "Docker is not running")
+		// 039-AC3: the code crosses to the room with the words.
+		return len(ds) == 1 && !ds[0].CanHost && strings.HasPrefix(ds[0].Reason, "Docker is not running") && ds[0].ReasonCode == ReasonDocker
 	})
 	// Docker comes up: the heartbeat tells the room right away.
 	d.o.Docker = dockerUp

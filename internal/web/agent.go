@@ -24,8 +24,11 @@ type agentState struct {
 	YouHost bool `json:"you_host,omitempty"`
 	// Online is true when the host's daemon is connected and can host (D8).
 	Online bool `json:"online"`
-	// Reason says why the agent is offline.
-	Reason string `json:"reason,omitempty"`
+	// Reason says why the agent is offline; ReasonCode names it for the room's words: the host
+	// app's code while it is connected and cannot host (039-AC3), "removed" once the host removed
+	// the room from their app (039-AC2).
+	Reason     string `json:"reason,omitempty"`
+	ReasonCode string `json:"reason_code,omitempty"`
 	// Turn is the room's latest turn; Running, the turns running now, those the host's daemon
 	// queued under its cap included (003-AC18).
 	Turn    *store.Turn  `json:"turn"`
@@ -156,7 +159,7 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 	case h == nil:
 		st.Reason = "No one runs the AI for this room right now."
 	case !h.CanHost:
-		st.Reason = h.Reason
+		st.Reason, st.ReasonCode = h.Reason, h.ReasonCode
 	default:
 		st.Online = true
 	}
@@ -178,7 +181,7 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 		host = nil
 		// A host with no daemon row removed the room from their app: pairing again keeps the row (003b-AC10).
 		if !st.Online && r.HostParticipantID != 0 {
-			st.Reason = "The AI host removed this room from their computer."
+			st.Reason, st.ReasonCode = "The AI host removed this room from their computer.", "removed"
 		}
 	case err != nil:
 		return nil, err
