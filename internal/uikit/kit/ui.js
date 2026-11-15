@@ -90,6 +90,21 @@
     return n + ' ' + (words ? unit + (n === 1 ? '' : 's') : short) + ' ago';
   };
 
+  /**
+   * grillUnread is a room row's unread marker (041-AC12): "4", "4 · @", "99+" at 100 to the eye,
+   * "4 unread", "4 unread, mentions you" to a screen reader; nothing at 0 or with no count.
+   * @param {{unread?: number, unread_mention?: boolean}} r
+   * @returns {(string | HTMLElement)[]}
+   */
+  window.grillUnread = (r) => {
+    if (!r.unread) return [];
+    const n = r.unread >= 100 ? '99+' : String(r.unread);
+    const badge = Object.assign(document.createElement('span'), { className: 'badge unread', textContent: n + (r.unread_mention ? ' · @' : '') });
+    badge.setAttribute('aria-hidden', 'true');
+    const said = Object.assign(document.createElement('span'), { className: 'sr-only', textContent: n + ' unread' + (r.unread_mention ? ', mentions you' : '') });
+    return [' ', badge, said];
+  };
+
   /** @type {WeakMap<HTMLButtonElement, number>} */
   const cooldowns = new WeakMap();
   /**

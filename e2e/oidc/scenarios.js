@@ -1,11 +1,9 @@
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { test, expect } from '../fixtures.js';
 import { rowAction, confirmSheet } from '../helpers.js';
 import { adminToken } from '../playwright.config.js';
+import { execSQL } from '../pgdb.js';
 
 export const admin = { Authorization: `Bearer ${adminToken}` };
-const pgdb = fileURLToPath(new URL('../../bin/pgdb', import.meta.url));
 export const signInButton = 'Sign in with your organisation account';
 
 // helpers are the steps the restricted-mode tests share, against provider, an adapter as
@@ -14,7 +12,7 @@ export function helpers(provider, db) {
   // expire ages sub's last sign-in past the revalidation: no test clock reaches the e2e server.
   const expire = (sub) => {
     const at = new Date(Date.now() - 200 * 3600_000).toISOString();
-    execFileSync(pgdb, ['exec', process.env.GRILL_ROOM_TEST_DATABASE_URL, db, `UPDATE profiles SET oidc_signed_in_at = '${at}' WHERE oidc_subject = '${sub}'`]);
+    execSQL(db, `UPDATE profiles SET oidc_signed_in_at = '${at}' WHERE oidc_subject = '${sub}'`);
   };
 
   async function invite(request, name) {

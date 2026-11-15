@@ -400,6 +400,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/rooms/{room}/hand", s.participant(s.putHand))
 	mux.Handle("DELETE /api/rooms/{room}/hand", s.participant(s.putHand))
 	mux.Handle("DELETE /api/rooms/{room}/hands/{participant}", s.participant(s.lowerHand))
+	mux.Handle("PUT /api/rooms/{room}/read", s.participant(s.putRead))
 	mux.Handle("GET /api/rooms/{room}/push", s.participant(s.getPush))
 	mux.Handle("PUT /api/rooms/{room}/push", s.participant(s.putPush))
 	mux.Handle("DELETE /api/rooms/{room}/push", s.participant(s.putPush))

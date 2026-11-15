@@ -47,20 +47,37 @@ const sheet = /** @type {HTMLDialogElement} */ (document.getElementById('room-cr
 const close = () => sheet.close();
 // Each opening starts on the picker; closing empties the sheet. A press outside closes it, as every
 // sheet does (005-AC13).
-sheet.addEventListener('close', () => render(null, sheet));
+// The close event comes a task later: a sheet opened again by then keeps its content.
+sheet.addEventListener('close', () => { if (!sheet.open) render(null, sheet); });
 sheet.addEventListener('click', (e) => {
   const r = sheet.getBoundingClientRect();
   if (e.target === sheet && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) sheet.close();
 });
 /**
- * newRoom opens the New room sheet, on the picker or on the starter given.
+ * newRoom opens the New room sheet, on the picker or on the starter given; needProfile leaves it
+ * shut for a browser without a profile.
  * @param {import('./starters.js').StarterView | null} [start]
+ * @param {boolean} [needProfile]
  */
-async function newRoom(start = null) {
+async function newRoom(start = null, needProfile = false) {
   // The name the profile chose (005-AC1), else the one it last joined with.
   const { profile } = await fetchJSON('GET', '/api/profile').catch(() => ({ profile: null }));
+  if (needProfile && !profile) return;
   const name = profile ? profile.name || (profile.rooms[0] || {}).name || '' : '';
   render(html`<${NewRoom} api=${fetchJSON} displayName=${name} close=${close} start=${start}/>`, sheet);
   sheet.showModal();
 }
 document.getElementById('room-new')?.addEventListener('click', () => newRoom());
+// The room switcher's "New room…" (041-AC5); signed out, the page's sign-in card shows as today.
+// The address becomes #rooms at once: closing the sheet leaves it, and Back from the new room
+// does not open the sheet again.
+const newRoomFromHash = () => {
+  if (location.hash !== '#rooms/new' || sheet.open) return;
+  history.replaceState(null, '', '#rooms');
+  newRoom(null, true);
+};
+addEventListener('hashchange', newRoomFromHash);
+newRoomFromHash();
+// Back from the room made here can restore this page as it was left, the sheet open on a room
+// already created.
+addEventListener('pageshow', (e) => { if (e.persisted && sheet.open) sheet.close(); });

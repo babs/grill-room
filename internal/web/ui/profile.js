@@ -12,7 +12,13 @@ async function post(url, body) {
 // ttl is the emailed link's lifetime in seconds, as the server's mail words it.
 let ttl = 0;
 let emailEnabled = false;
+// The name the profile chose in a room (005-AC1), else the one it last joined with.
+/** @param {{name?: string, rooms: {name: string}[]}} p */
+const nameOf = (p) => p.name || (p.rooms[0] || {}).name || '';
+// roomsSeq counts full renders: a rooms refresh that started before one is out of date.
+let roomsSeq = 0;
 function render({ email_enabled: enabled, profile, magic_link_ttl_s: linkTTL, internal }) {
+  roomsSeq++;
   ttl = linkTTL || 0;
   // A guest signed out has no way back to its profile without an email: only internals get it.
   $('sign-out-item').hidden = !internal;
@@ -23,11 +29,31 @@ function render({ email_enabled: enabled, profile, magic_link_ttl_s: linkTTL, in
   $('signed-out-text').textContent = 'You\'re not signed in on this browser. Open an invite link to join a room, or '
     + (emailEnabled ? 'sign in below.' : 'open your recovery link here.');
   if (!profile) return;
-  // The name the profile chose in a room (005-AC1), else the one it last joined with.
-  const name = profile.name || (profile.rooms[0] || {}).name || '';
+  const name = nameOf(profile);
+  renderRooms(profile, name);
+  showMe(name);
+  $('profile-name').textContent = name;
+  $('account-name').textContent = name || 'Set when you join a room.';
+  $('account-name').dataset.name = name;
+  $('name-change').textContent = name ? 'Change' : 'Set';
+  showName(false);
+  $('email').hidden = !emailEnabled;
+  shown = profile;
+  pending = profile.pending_email || '';
+  // Seconds on the server clock, anchored to this one on arrival: a wrong client clock does not matter.
+  const at = Date.now();
+  pendingExpires = profile.pending_ttl_s != null ? at + profile.pending_ttl_s * 1000 : 0;
+  pendingSent = profile.pending_age_s != null ? at - profile.pending_age_s * 1000 : 0;
+  showEmail(false);
+  showTextSizes(profile.text_sizes);
+  showPush(profile.rooms);
+}
+
+function renderRooms(profile, name) {
   // Each room is a card, a link as a whole (011b-AC16): its name, its people and last activity
   // (005-AC41); the admin badge leads the meta line, where a long name cannot run under it, and
-  // your name there shows only when it differs from the profile's.
+  // your name there shows only when it differs from the profile's. A focused card keeps the focus.
+  const held = document.activeElement?.closest('#rooms a')?.getAttribute('href');
   $('rooms').replaceChildren(...profile.rooms.map((r) => {
     const li = document.createElement('li');
     li.className = 'card';
@@ -36,6 +62,8 @@ function render({ email_enabled: enabled, profile, magic_link_ttl_s: linkTTL, in
     const a = document.createElement('a');
     a.href = '/r/' + encodeURIComponent(r.room_id);
     a.textContent = r.room_name;
+    // Inside the link: the card's accessible name carries the count (041-AC12).
+    a.append(...window.grillUnread(r));
     line.append(a);
     if (r.name !== name) line.append(' as ' + r.name);
     const meta = document.createElement('p');
@@ -62,23 +90,40 @@ function render({ email_enabled: enabled, profile, magic_link_ttl_s: linkTTL, in
     $('rooms').append(empty);
   }
   $('count-rooms').textContent = String(profile.rooms.length);
-  showMe(name);
-  $('profile-name').textContent = name;
-  $('account-name').textContent = name || 'Set when you join a room.';
-  $('account-name').dataset.name = name;
-  $('name-change').textContent = name ? 'Change' : 'Set';
-  showName(false);
-  $('email').hidden = !emailEnabled;
-  shown = profile;
-  pending = profile.pending_email || '';
-  // Seconds on the server clock, anchored to this one on arrival: a wrong client clock does not matter.
-  const at = Date.now();
-  pendingExpires = profile.pending_ttl_s != null ? at + profile.pending_ttl_s * 1000 : 0;
-  pendingSent = profile.pending_age_s != null ? at - profile.pending_age_s * 1000 : 0;
-  showEmail(false);
-  showTextSizes(profile.text_sizes);
-  showPush(profile.rooms);
+  if (held) [...$('rooms').querySelectorAll('a')].find((a) => a.getAttribute('href') === held)?.focus();
 }
+
+// A page restored by Back, or a tab come back to, redraws only the rooms, with fresh counts
+// (041-AC12): a field open elsewhere on the page stays as it is. One read at a time, a call
+// meanwhile reading once more after it, each bounded at 10 s.
+let roomsReading = false;
+let roomsAgain = false;
+async function reloadRooms() {
+  if (roomsReading) {
+    roomsAgain = true;
+    return;
+  }
+  roomsReading = true;
+  try {
+    do {
+      roomsAgain = false;
+      if (!shown) return;
+      const seq = roomsSeq;
+      try {
+        const res = await fetch('/api/profile', { signal: AbortSignal.timeout(10000) });
+        const p = res.ok ? (await res.json()).profile : null;
+        // Another profile signed in elsewhere: its rooms would show under this one's name.
+        if (p && p.id === shown.id && seq === roomsSeq) renderRooms(p, nameOf(p));
+      } catch (err) {
+        console.error(err);
+      }
+    } while (roomsAgain);
+  } finally {
+    roomsReading = false;
+  }
+}
+addEventListener('pageshow', (e) => { if (e.persisted) reloadRooms(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) reloadRooms(); });
 
 // showMe draws the header's user menu button as the room does (011b-AC17): initials in a ring, the
 // name beside them on a wide screen.
@@ -117,7 +162,7 @@ function deviceText(email) {
 
 // The Email section's states (011-AC21): none, a link pending at an address (the sent panel,
 // 011-AC28), or an address on the profile. editing opens the address field over the other states.
-/** @type {{email?: string} | null} */
+/** @type {{id?: number, email?: string} | null} */
 let shown = null;
 let pending = '';
 // When the pending link expires and was sent, in local ms: a reload shows what is left of both.

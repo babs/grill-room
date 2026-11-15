@@ -5,6 +5,8 @@ import { withFreshDB } from './pgdb.js';
 const port = process.env.GRILL_ROOM_E2E_PORT || '7690';
 const baseURL = `http://127.0.0.1:${port}`;
 export const gitPort = String(Number(port) + 2);
+// The parallel server's database, which specs reach through execSQL (pgdb.js).
+export const db = `e2e_${port}`;
 
 export const adminToken = 'e2e-admin-token';
 
@@ -54,7 +56,7 @@ export default defineConfig({
     port: Number(gitPort),
     reuseExistingServer: false,
   }, {
-    command: withFreshDB(`e2e_${port}`, 'mkdir -p test-results && exec ../bin/grill-room-e2e'),
+    command: withFreshDB(db, 'mkdir -p test-results && exec ../bin/grill-room-e2e'),
     url: `${baseURL}/healthz`,
     reuseExistingServer: false,
     env: {

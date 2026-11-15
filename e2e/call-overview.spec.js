@@ -172,7 +172,7 @@ test('call overview: the viewer, the room and the server, live', async ({ browse
   await expect(sheet(alice)).toBeHidden();
   await alice.locator('#room-open').click();
   await expect(alice.locator('#room-menu > :is(a, button):visible')).toHaveText(['Invite people', 'Room settings', 'Link a room…', 'Personas', 'Call and voice-to-text…', 'AI in this room',
-    'Open documents in a new window', 'Open chat in a new window', 'Run the AI on my computer']);
+    'Open documents in a new window', 'Open chat in a new window', 'Run the AI on my computer', 'Switch room…']);
   await alice.keyboard.press('Escape');
   // In markup order: the phone-only and the device toggles count, hidden or not.
   await alice.locator('#voice-more').click();

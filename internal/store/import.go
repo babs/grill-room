@@ -264,6 +264,9 @@ func (im *importer) run() error {
 		notes_mark = `+latestNote+` WHERE room_id = ?`, im.room, im.room); err != nil {
 		return fmt.Errorf("import room: %w", err)
 	}
+	if err := startReads(im.ctx, im.tx, im.room, 0); err != nil {
+		return fmt.Errorf("import room: %w", err)
+	}
 	used, _, err := roomUsage(im.ctx, im.tx, im.room, im.o.DefaultQuota)
 	if err != nil {
 		return err

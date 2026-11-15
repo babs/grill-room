@@ -390,7 +390,13 @@ test('persona library: the Personas sheet rows', async ({ browser, request }, te
   await expect(personaRow(alice, 'Secretary')).toHaveCount(0);
   await expect(add).toBeFocused();
 
-  // Without a profile, saving says why and does nothing.
+  // Without a profile, saving says why and does nothing. Every room reload sets hasProfile again
+  // (the removal above posts a line): the room answer is served without its profile from here on.
+  await alice.route(`**/api/rooms/${room.id}`, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: { ...(await res.json()), profile: null } });
+  });
   await alice.evaluate(() => { hasProfile = false; });
   await more.click();
   const noProfile = menu.getByRole('button', { name: 'Saving personas needs a profile', exact: true });
@@ -408,6 +414,7 @@ test('persona library: the Personas sheet rows', async ({ browser, request }, te
   await noProfile.hover();
   expect(await noProfile.evaluate((b) => getComputedStyle(b).backgroundColor)).toBe('rgba(0, 0, 0, 0)');
   await alice.keyboard.press('Escape');
+  await alice.unroute(`**/api/rooms/${room.id}`);
   await alice.evaluate(() => { hasProfile = true; });
 
   // Remove asks first, as the persona sheet's ⋯ does.

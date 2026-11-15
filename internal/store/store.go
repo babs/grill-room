@@ -389,7 +389,26 @@ CREATE TABLE IF NOT EXISTS persona_template_files (
 	data bytea NOT NULL,
 	PRIMARY KEY (version_id, name)
 );`,
+	// 66 (041 Phase 2): a read marker per profile and room, never exported, started at each room's
+	// newest line so nothing is unread on upgrade (041-AC7, 041-AC13); the written lines' index
+	// bounds the unread count (041-AC14).
+	`CREATE TABLE IF NOT EXISTS room_reads (
+	profile_id BIGINT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	read_through BIGINT NOT NULL DEFAULT 0,
+	PRIMARY KEY (profile_id, room_id)
+);
+CREATE INDEX IF NOT EXISTS room_reads_room ON room_reads(room_id);
+CREATE INDEX IF NOT EXISTS messages_room_written ON messages(room_id, id) WHERE ` + written + `;
+INSERT INTO room_reads(profile_id, room_id, read_through)
+	SELECT DISTINCT p.profile_id, p.room_id, (SELECT COALESCE(MAX(m.id), 0) FROM messages m WHERE m.room_id = p.room_id)
+	FROM participants p WHERE p.profile_id IS NOT NULL AND p.removed_at IS NULL
+	ON CONFLICT DO NOTHING;`,
 }
+
+// written is the predicate of the written lines' index, literal SQL in every query that uses it,
+// as nonText is (041-AC14).
+const written = "kind IN ('text', 'agent')"
 
 // nonText is the predicate of the non-typed message indexes, written into every query that uses
 // them (020-AC1): it must stay literal SQL, as a bind parameter keeps the planner off a partial index.
@@ -1131,6 +1150,11 @@ func join(ctx context.Context, tx *txn, inviteHash, name, tokenHash string, prof
 	if err := tx.QueryRowContext(ctx, `INSERT INTO participants(room_id, invite_id, name, token_hash, joined_at, profile_id) VALUES(?,?,?,?,?,?) RETURNING id`,
 		p.RoomID, p.InviteID, p.Name, tokenHash, formatTS(p.JoinedAt), nullID(p.ProfileID)).Scan(&p.ID); err != nil {
 		return nil, nil, fmt.Errorf("join: %w", err)
+	}
+	if p.ProfileID != 0 {
+		if err := startReads(ctx, tx, p.RoomID, p.ProfileID); err != nil {
+			return nil, nil, fmt.Errorf("join: %w", err)
+		}
 	}
 	m := &Message{RoomID: p.RoomID, Kind: KindSystem, ParticipantID: p.ID, Sender: name, Body: name + " joined"}
 	if err := insertMessage(ctx, tx, m); err != nil {
