@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"slices"
 	"strconv"
 	"strings"
@@ -222,9 +223,14 @@ func (d *database) unlocked(ctx context.Context, fn func(t *txn) error) error {
 }
 
 // rerun runs f, then again while it fails retryable, at most unlockedTries runs; f must be safe to rerun.
+// A rerun first waits a few random milliseconds: at once, it can lock the row again before the
+// transaction it deadlocked with wakes up to take it, and deadlock with that one again.
 func rerun(f func() error) error {
 	var err error
-	for range unlockedTries {
+	for i := range unlockedTries {
+		if i > 0 {
+			time.Sleep(rand.N(time.Duration(i) * 20 * time.Millisecond)) //nolint:gosec // jitter needs no crypto randomness
+		}
 		if err = f(); !retryable(err) {
 			return err
 		}

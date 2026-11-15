@@ -534,8 +534,9 @@ func TestUnlockedRetriesDeadlock(t *testing.T) {
 			t.Fatalf("a deadlocked transaction failed: %v", err)
 		}
 	}
-	if n := runs.Load(); n != 3 {
-		t.Errorf("%d runs, want 3: one deadlock victim run again", n)
+	// A rerun may deadlock again with a partner that has not woken yet: 3 runs at least, not exactly.
+	if n := runs.Load(); n < 3 {
+		t.Errorf("%d runs, want 3 or more: the deadlock victim runs again", n)
 	}
 }
 
