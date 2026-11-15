@@ -31,8 +31,14 @@ test('text annotation appears live in the other browser', async ({ browser, requ
   await expect(item).toContainText('"rollback step"');
   await expect.poll(() => marked(bobFrame)).toEqual(['rollback step']);
 
-  // A click on the mark in the frame opens its thread in the room page.
-  await bob.frameLocator('#doc-frame iframe').getByText('rollback step').click();
+  // A click on the mark in the frame opens its thread in the room page. The mark is a highlight,
+  // not an element: click its own text, not the middle of its paragraph, where the font decides the word.
+  const at = await bobFrame.evaluate(() => {
+    const r = [...CSS.highlights.get('gr-annot')][0].getBoundingClientRect();
+    const html = document.documentElement.getBoundingClientRect();
+    return { x: r.x + r.width / 2 - html.x, y: r.y + r.height / 2 - html.y };
+  });
+  await bob.frameLocator('#doc-frame iframe').locator('html').click({ position: at });
   await expect(item).toHaveClass(/active/);
   await item.getByLabel('Reply').fill('Ten minutes.');
   await item.getByRole('button', { name: 'Reply' }).click();
