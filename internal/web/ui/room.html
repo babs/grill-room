@@ -327,11 +327,13 @@
     <h2 id="host-title">Run the AI on my computer</h2>
     <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
   </div>
-  <p>The AI host app runs this room's personas on your computer, with your Claude subscription. It needs Docker.</p>
+  <p id="host-intro">The AI host app runs this room's personas on your computer, with your Claude subscription. It needs Docker.</p>
+  <div id="host-has-app">
   <h3>Already have the app?</h3>
   <p>Open <a href="http://127.0.0.1:47680/" target="_blank" rel="noopener noreferrer">its page</a> on the computer that runs it, Rooms, and paste this room's link under "Add a room".</p>
   <p class="copy-row"><input id="host-room-link" readonly aria-label="This room's link">
     <button type="button" id="host-room-copy">Copy link</button></p>
+  </div>
   <div id="host-install" hidden>
   <h3>Not yet? Install it</h3>
   <label>System <select id="host-os">
@@ -356,6 +358,7 @@
     <button type="button" id="host-copy">Copy</button>
   </details>
   </div>
+  <p><button type="button" id="host-ask" class="btn-secondary">Ask someone to run it</button></p>
 </dialog>
 <dialog id="recovery" class="sheet" aria-labelledby="recovery-title">
   <div class="sheet-head">
@@ -373,7 +376,7 @@
 <dialog id="why" class="sheet" aria-labelledby="why-title">
   <h2 id="why-title"></h2>
   <p id="why-text"></p>
-  <form method="dialog" class="actions"><button type="submit" class="btn-secondary">OK</button></form>
+  <form method="dialog" class="actions"><button type="button" id="why-ask" class="btn-secondary" hidden>Ask someone to run it</button><button type="submit" class="btn-secondary">OK</button></form>
 </dialog>
 <dialog id="skills-disclaimer" class="sheet" aria-labelledby="skills-disclaimer-title">
   <h2 id="skills-disclaimer-title">Before you turn on a skill</h2>

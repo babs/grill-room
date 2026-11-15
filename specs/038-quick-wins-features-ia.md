@@ -1,6 +1,6 @@
 # 038 — Quick wins: dead ends, wording, places
 
-**Status**: approved
+**Status**: in progress
 **Requested by**: babs
 **Date**: 2026-11-14
 **Context**: UX audit part B, quick wins Q1, Q3-Q5, Q8-Q17 (Q2, Q6 and Q7 are in 035). Part A's quick wins (layout and accessibility) ship apart; this spec does not touch the Personas sheet (035) or the announcement and layout specs (036, 037). Builds on 005 (room menu), 006 (starters), 009 (skills, plugins), 011 (invites, admins), 012 (API tokens), 020 (chat filter), 023 (links, proposals), 028 (text size).
@@ -121,3 +121,7 @@ None.
 - The hand-off message carries the room link, not an invite. Because whoever runs the AI pairs through the room link and a member approves them (005), and a plain member may not make invites.
 - "Stop hearing the call", not "Deafen": the audit found "Mute the room" read as silencing everyone.
 - The longer tab names depend on part A's tab fold on overflow (A10) at 820 px. If A10 has not shipped, phase 2 waits for it.
+- AC2: the room link field and its Copy button hide on a phone with the "its page" section: the hand-off message carries the link. Diagnostics' "Open my AI host app" hides there too. Known limit: an Android tablet in Chrome's desktop mode sends a Linux user agent, on UA-CH too, and sees the computer sheet.
+- AC3: the pill's tip is a plain tooltip and holds no button, so "Ask someone to run it" sits in the pill's card. The card and the ▶ dialog offer it only when the room has no AI host at all; a known host whose app is away is named, and members ask that host. The host sheet always offers it. A failed copy shows the message to copy by hand.
+- AC4: a toast holds one action, a button ("Undo") or a link ("Open").
+- AC5: "Create a room from this" opens the new-room sheet in that starter's editor (006-AC9); Back returns to the picker.

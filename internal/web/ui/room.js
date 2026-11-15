@@ -16,6 +16,10 @@ const chatMode = location.pathname.split('/')[3] === 'chat';
 if (chatMode) document.body.classList.add('chat-window');
 const narrow = matchMedia('(max-width: 40rem)');
 const phone = () => narrow.matches;
+const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+// A phone or tablet by its OS, not its pointer: a touch laptop can still run the AI host (038-AC2).
+// ponytail: an Android tablet in Chrome's desktop mode sends a Linux UA and sees the computer sheet; no reliable OS signal exists.
+const mobileOS = ios || /Android/.test(navigator.userAgent);
 const messages = $('messages');
 // Voice lines move here while the Transcription pane shows (020-AC8): a line is in one list or
 // the other, so lookups go through lineSel.
@@ -1021,10 +1025,13 @@ function agentError(text) {
   if (!r.width || r.left < z.left - 0.5 || r.right > z.right + 0.5) showNotice(text);
 }
 
-function explain(title, text) {
+function explain(title, text, ask = false) {
   $('why-title').textContent = title;
   $('why-text').textContent = text;
-  $('why').showModal();
+  $('why-ask').hidden = !ask;
+  // The hand-off's fallback replaces the reason already shown: its hidden button held the focus.
+  if ($('why').open) $('why').querySelector('[type=submit]').focus();
+  else $('why').showModal();
 }
 
 function showNotice(text) {
@@ -1292,13 +1299,13 @@ $('msg-edit').addEventListener('click', () => {
 });
 $('msg-delete').addEventListener('click', () => { if (menuFor) deleteMessage(menuFor.m); });
 
-// The Preact panels say what they did through a toast too (006-AC15).
-addEventListener('grill:toast', (e) => toast(e.detail));
+// The Preact panels say what they did through a toast too (006-AC15); open is a link to where it went.
+addEventListener('grill:toast', (e) => (typeof e.detail === 'string' ? toast(e.detail) : toast(e.detail.text, e.detail.open ? { text: 'Open', href: e.detail.open } : undefined)));
 // A revoke from Room settings may have cut people off: People and the empty-chat card follow.
 addEventListener('grill:revoked', () => loadRoom().catch(console.error));
 
-// toast says what an action did, with at most one action of its own (005-AC39); onEnd runs when it
-// goes, undone or not.
+// toast says what an action did, with at most one action of its own (005-AC39), a button or a
+// {text, href} link; onEnd runs when it goes, undone or not.
 function toast(text, action, onEnd) {
   const el = document.createElement('div');
   el.className = 'toast';
@@ -1310,7 +1317,8 @@ function toast(text, action, onEnd) {
     if (!$('toasts').children.length && $('toasts').matches(':popover-open')) $('toasts').hidePopover();
     if (onEnd) onEnd(undone);
   };
-  if (action) {
+  if (action?.href) el.append(Object.assign(document.createElement('a'), { className: 'btn btn-ghost', href: action.href, textContent: action.text }));
+  else if (action) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'btn-ghost';
@@ -1428,6 +1436,15 @@ $('chat-window-menu').addEventListener('click', (e) => {
 function copyField(input) {
   navigator.clipboard.writeText(input.value).then(() => toast('Copied'), () => input.select());
 }
+
+// askToRun copies the hand-off message (038-AC3).
+function askToRun() {
+  const text = 'Can you run the AI for our grill-room room? Open ' + $('host-room-link').value + ', then click the room\'s name › Run the AI on my computer.';
+  // A refused clipboard shows the message to copy by hand.
+  (navigator.clipboard?.writeText(text) ?? Promise.reject()).then(() => toast('Message copied.'), () => explain('Ask someone to run it', text));
+}
+$('why-ask').addEventListener('click', askToRun);
+$('host-ask').addEventListener('click', askToRun);
 
 // The join page leaves the recovery link of a profile it just created. This tab keeps it for the
 // user menu's "Use on another device" until its holder says they saved it (005-AC32); the server
@@ -2686,11 +2703,15 @@ function personaState(p) {
   return { cls: 'on', word: 'ready', label: p.name + ' ready' };
 }
 
+// noOneRuns is when the room has no AI host at all, not one whose app is away.
+const noOneRuns = () => !agent.online && !participants.some((x) => x.id === agent.host_participant_id);
+
 // whyNot says why a pill does nothing on a press, or '' when it asks (005-AC35): a title tooltip
 // never shows on touch, so a press opens the reason instead.
 function whyNot(p, st) {
   const host = participants.find((x) => x.id === agent.host_participant_id);
-  if (!agent.online) return host ? host.name + '\'s AI host app is not connected: ' + p.name + ' answers once it is.' : 'No one runs the AI for this room yet. Anyone can: click the room\'s name › Run the AI on my computer.';
+  if (noOneRuns()) return 'No one runs the AI for this room yet. Anyone can: click the room\'s name › Run the AI on my computer.';
+  if (!agent.online) return host.name + '\'s AI host app is not connected: ' + p.name + ' answers once it is.';
   if (!canPress()) return 'Only ' + (host ? host.name : 'the AI host') + ' can let you ask ' + p.name + '. Ask them to tick "Can ask the AI" next to your name. You can still mention @' + p.name + ' in a message.';
   if (st.cls === 'pending') return p.name + ' waits for the AI host\'s approval.';
   if (st.cls === 'queued') return p.name + ' already waits for its turn.';
@@ -2771,7 +2792,7 @@ function askPersona(id) {
   const p = personaByID(id);
   if (!p) return;
   const why = whyNot(p, personaState(p));
-  if (why) return explain(p.badge + ' ' + p.name, why);
+  if (why) return explain(p.badge + ' ' + p.name, why, noOneRuns());
   pressPersona(id, false);
 }
 
@@ -2874,6 +2895,12 @@ function renderPersonaCard() {
   ask.id = 'persona-card-ask';
   edit.id = 'persona-card-edit';
   foot.append(ask, edit);
+  if (noOneRuns()) {
+    // A pill's tip is a tooltip: its card carries the hand-off instead (038-AC3).
+    const handOff = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-secondary', id: 'persona-card-handoff', textContent: 'Ask someone to run it' });
+    handOff.addEventListener('click', askToRun);
+    foot.append(handOff);
+  }
   parts.push(foot);
   card.replaceChildren(...parts);
   if (focused) $(focused)?.focus();
@@ -2904,7 +2931,7 @@ async function loadVoices() {
 function renderAgent() {
   hidePairingOnceConnected();
   // The app's page is on this computer only when one of my apps is connected (daemon-r2).
-  $('host-app-open').hidden = docsMode || !agent.daemons.some((d) => String(d.participant_id) === myID);
+  $('host-app-open').hidden = docsMode || mobileOS || !agent.daemons.some((d) => String(d.participant_id) === myID);
   const bar = $('persona-buttons');
   const kept = new Map([...bar.children].map((b) => [b.dataset.id, b]));
   const buttons = agent.personas.map((p) => {
@@ -3585,7 +3612,9 @@ function skillsBlock(p) {
   }
   const offered = skillLib.skills.filter((x) => !(p.skills || []).some((k) => k.skill_id === x.id));
   if (!offered.length) {
-    box.append(Object.assign(document.createElement('p'), { className: 'hint', textContent: 'Upload skills from your profile page.' }));
+    const hint = Object.assign(document.createElement('p'), { className: 'hint' });
+    hint.append('Add a skill on ', Object.assign(document.createElement('a'), { href: '/profile#skills', textContent: 'your profile page' }), '.');
+    box.append(hint);
     return box;
   }
   const add = document.createElement('div');
@@ -3707,7 +3736,9 @@ function pluginsBlock(p) {
   }
   box.append(legend);
   if (!plugins.length) {
-    box.append(Object.assign(document.createElement('p'), { className: 'empty', textContent: 'No plugins in this room yet. A room admin adds them in Room settings › Plugins.' }));
+    const empty = Object.assign(document.createElement('p'), { className: 'empty' });
+    empty.append('No plugins in this room yet. A room admin adds them in ', Object.assign(document.createElement('a'), { href: '#manage/plugins', textContent: 'Room settings › Plugins' }), '.');
+    box.append(empty);
     return box;
   }
   box.append(list);
@@ -4896,7 +4927,6 @@ document.addEventListener('visibilitychange', () => { if (events) beat(); });
 // turns notifications on. Turning them off here leaves the other rooms' alone.
 const pushKey = 'grill-room-push:' + roomID;
 const pushable = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
-const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const homeScreen = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
 function pushStatus(text) {
@@ -6315,6 +6345,12 @@ async function showHostAgent() {
 $('host-room-link').value = location.origin + roomPath;
 $('host-room-copy').addEventListener('click', () => copyField($('host-room-link'), $('host-room-copy')));
 $('host-open').hidden = docsMode;
+// No download and no loopback page on a phone or tablet: only the hand-off (038-AC2).
+if (mobileOS) {
+  $('host-intro').textContent = 'Running the AI needs a computer with Docker.';
+  $('host-has-app').hidden = true;
+  $('diag-host-app').closest('section').hidden = true;
+}
 
 function fitViewport() {
   const s = document.body.style;
@@ -6364,7 +6400,7 @@ firstLoad().then((ok) => {
     history.replaceState(null, '', location.pathname + (query.size ? '?' + query : '') + location.hash);
     $('invite-open').click();
   }
-  showHostAgent().catch(console.error);
+  if (!mobileOS) showHostAgent().catch(console.error);
   const pair = new URLSearchParams(location.search).get('pair');
   if (pair) showPairing(pair).catch(console.error);
 }).catch(console.error);

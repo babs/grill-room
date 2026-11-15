@@ -22,7 +22,8 @@ function Starters() {
   return html`<h2 id="starters-title">Room starters</h2>
     <p class="hint">Set up a new room in one go: agenda, AI personas, documents and skills. Changing a starter later leaves existing rooms alone.</p>
     <p class="said" role="status">${said}</p>
-    <${StarterList} starters=${starters} api=${fetchJSON} reload=${load} say=${setSaid} edit=${(/** @type {import('./starters.js').Starter} */ st) => editStarter(st, load, setSaid)}/>`;
+    <${StarterList} starters=${starters} api=${fetchJSON} reload=${load} say=${setSaid} edit=${(/** @type {import('./starters.js').Starter} */ st) => editStarter(st, load, setSaid)}
+      create=${(/** @type {import('./starters.js').Starter} */ st) => fetchJSON('GET', '/api/profile/starters/' + st.id).then(newRoom).catch((err) => setSaid(err.message))}/>`;
 }
 
 /**
@@ -51,10 +52,15 @@ sheet.addEventListener('click', (e) => {
   const r = sheet.getBoundingClientRect();
   if (e.target === sheet && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) sheet.close();
 });
-document.getElementById('room-new')?.addEventListener('click', async () => {
+/**
+ * newRoom opens the New room sheet, on the picker or on the starter given.
+ * @param {import('./starters.js').StarterView | null} [start]
+ */
+async function newRoom(start = null) {
   // The name the profile chose (005-AC1), else the one it last joined with.
   const { profile } = await fetchJSON('GET', '/api/profile').catch(() => ({ profile: null }));
   const name = profile ? profile.name || (profile.rooms[0] || {}).name || '' : '';
-  render(html`<${NewRoom} api=${fetchJSON} displayName=${name} close=${close}/>`, sheet);
+  render(html`<${NewRoom} api=${fetchJSON} displayName=${name} close=${close} start=${start}/>`, sheet);
   sheet.showModal();
-});
+}
+document.getElementById('room-new')?.addEventListener('click', () => newRoom());

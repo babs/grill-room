@@ -78,11 +78,11 @@ export const meta = (st) => html`v${st.version} · by ${st.author}${st.size ? ' 
 /**
  * StarterList is the profile's view of the library (006-AC1 to 006-AC3): its own, the shared ones and
  * the built-ins. Any starter duplicates into "Yours"; its own it shares with everyone or deletes.
- * Its own it also edits, which saves the next version (006-AC3).
+ * Its own it also edits, which saves the next version (006-AC3). create starts a room from any (038-AC5).
  * @param {{starters: Starter[], api: import('./room-panel.js').Api, reload: () => void, say: (text: string) => void,
- *   edit?: (st: Starter) => void}} props
+ *   edit?: (st: Starter) => void, create?: (st: Starter) => void}} props
  */
-export function StarterList({ starters, api, reload, say, edit }) {
+export function StarterList({ starters, api, reload, say, edit, create }) {
   /** @param {unknown} err */
   const show = (err) => say(/** @type {Error} */ (err).message);
   /** @param {Starter} st */
@@ -90,6 +90,7 @@ export function StarterList({ starters, api, reload, say, edit }) {
     const base = '/api/profile/starters/' + st.id;
     /** @type {[string, () => void][]} */
     const out = [['Duplicate to yours', () => api('POST', base + '/duplicate').then(() => { say('Duplicated "' + st.title + '".'); reload(); }).catch(show)]];
+    if (create) out.unshift(['Create a room from this', () => create(st)]);
     if (st.mine && edit) out.push(['Edit', () => edit(st)]);
     if (st.mine && st.library === 'personal') {
       out.push(['Share with everyone', () => window.grillConfirm('Share "' + st.title + '" with everyone?', 'Every profile on this server will see it and create rooms from it. You stay its author.', 'Share')
@@ -426,11 +427,12 @@ export function Editor({ view, api, displayName = '', back, mode = 'create', pat
 }
 
 /**
- * NewRoom is "New room": the picker, then the editor, in one sheet (006-AC8, 006-AC9).
- * @param {{api: import('./room-panel.js').Api, displayName: string, close: () => void}} props
+ * NewRoom is "New room": the picker, then the editor, in one sheet (006-AC8, 006-AC9); start opens
+ * it on that starter, already picked (038-AC5).
+ * @param {{api: import('./room-panel.js').Api, displayName: string, close: () => void, start?: StarterView | null}} props
  */
-export function NewRoom({ api, displayName, close }) {
-  const [view, setView] = useState(/** @type {StarterView | null} */ (null));
+export function NewRoom({ api, displayName, close, start = null }) {
+  const [view, setView] = useState(/** @type {StarterView | null} */ (start));
   return html`<div class="sheet-head"><h2 id="room-create-title">${view ? 'New room' : 'New room: pick a starter'}</h2>
       <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
     ${view ? html`<${Editor} key=${view.id} view=${view} api=${api} displayName=${displayName} back=${() => setView(null)}/>`

@@ -188,6 +188,8 @@ test('a persona proposes a room; a member creates it from the card', async ({ br
     // 023-AC17: Bob, a plain member, gets Create… with no link boxes and no Dismiss.
     await bob.goto(`/r/${pricing}`);
     await expect(card(bob).getByRole('button', { name: 'Dismiss' })).toHaveCount(0);
+    // The card's buttons keep their control height: a page-wide .link style once shrank them (038).
+    expect((await card(bob).getByRole('button', { name: 'Create…' }).boundingBox()).height).toBeGreaterThanOrEqual(36);
     await card(bob).getByRole('button', { name: 'Create…' }).click();
     let sheet = bob.locator('#proposal-sheet');
     await expect(sheet.locator('#proposal-brief strong')).toHaveText('its own');

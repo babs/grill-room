@@ -650,6 +650,8 @@ body.room :is(.msg:not(.system) .body, #send textarea) { font-size: calc(var(--f
 .msg .body blockquote { border-left: 3px solid var(--border); padding-left: var(--sp-2); color: var(--text-muted); }
 .msg.deleted .body { color: var(--text-muted); font-style: italic; }
 .msg.deleting { opacity: .45; }
+/* A button that reads as a link inside a sentence; .link is taken by room.js button() and the panel labels. */
+button.text-link { display: inline; min-height: 0; padding: 0; border: 0; background: none; color: var(--primary-text); font: inherit; text-decoration: underline; cursor: pointer; }
 .msg .meta button.link { display: inline; min-height: 0; padding: 0; border: 0; background: none; color: var(--text-muted); font-size: var(--fs-xs); font-weight: 400; text-decoration: underline; }
 /* One actions button per message: on hover or focus on a desktop, always on a phone (005-AC35). */
 .msg .msg-more { position: absolute; top: 0; right: 0; border-color: transparent; background: transparent; color: var(--text-muted); opacity: 0; }

@@ -1,6 +1,7 @@
+import { devices } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, openDaemonPage, stopDaemon, menuItem, connectedRow } from './helpers.js';
+import { roomWith, startDaemon, openDaemonPage, stopDaemon, menuItem, connectedRow, fakeDaemon } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -70,4 +71,98 @@ test('add a room from the AI host app page', async ({ browser, request, baseURL 
   } finally {
     daemon.cleanup();
   }
+});
+
+const handOff = (url) => `Can you run the AI for our grill-room room? Open ${url}, then click the room's name › Run the AI on my computer.`;
+
+// 038-AC2 038-AC3: on a phone or tablet, by its OS, the host sheet says what running the AI needs,
+// offers no download and no app page, and gives a message to send instead; the room menu hides
+// "Open my AI host app" even with this participant's app connected. A touch laptop keeps the download.
+test('phone host sheet: no download, a message to send', async ({ browser, request, baseURL }) => {
+  const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Phone host' } })).json();
+  const mac = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+  const linux = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+  const cases = [['Android', devices['Pixel 7'].userAgent, true], ['iPhone', devices['iPhone 13'].userAgent, true], ['iPad', mac, true, 5],
+    ['touch laptop', linux, false]];
+  for (const [name, userAgent, mobile, touchPoints] of cases) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, userAgent, hasTouch: true, permissions: ['clipboard-read', 'clipboard-write'] });
+    // iPadOS reports a Mac: only its touch points tell it apart.
+    if (touchPoints) await ctx.addInitScript((n) => {
+      Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'MacIntel' });
+      Object.defineProperty(Navigator.prototype, 'maxTouchPoints', { get: () => n });
+    }, touchPoints);
+    const page = await ctx.newPage();
+    const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
+    await page.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
+    await page.getByLabel('Your name').fill(name);
+    await page.getByRole('button', { name: 'Join the room' }).click();
+    await expect(page.locator('#me')).toHaveText(name);
+    const stop = await fakeDaemon(page, baseURL, room.id, name + ' app');
+    try {
+      await page.locator('#room-open').click();
+      await expect(page.locator('#host-app-open'), name).toBeVisible({ visible: !mobile });
+      await page.keyboard.press('Escape');
+      // Diagnostics keeps no AI host app link either.
+      const diag = page.locator('section', { has: page.locator('#diag-host-app') });
+      if (mobile) await expect(diag, name).toHaveAttribute('hidden', '');
+      else await expect(diag, name).not.toHaveAttribute('hidden', '');
+      await menuItem(page, 'Run the AI on my computer');
+      const sheet = page.locator('#host-agent');
+      await expect(sheet.getByText('Running the AI needs a computer with Docker.'), name).toBeVisible({ visible: mobile });
+      await expect(sheet.locator('#host-download'), name).toBeVisible({ visible: !mobile });
+      await expect(sheet.getByRole('link', { name: 'its page' }), name).toBeVisible({ visible: !mobile });
+      if (mobile) {
+        await sheet.getByRole('button', { name: 'Ask someone to run it' }).click();
+        await expect(page.locator('.toast', { hasText: 'Message copied.' })).toBeVisible();
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(handOff(`${baseURL}/r/${room.id}`));
+      }
+    } finally {
+      stop();
+      await ctx.close();
+    }
+  }
+});
+
+// 038-AC3: with no one running the AI, the ▶ of an offline pill and the pill's card offer the same
+// message; a room with an AI host whose app is away does not.
+test('offline pill: ask someone to run it', async ({ browser, request, baseURL }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const copied = handOff(`${baseURL}/r/${room.id}`);
+  await alice.locator('.persona-pill .persona-run').first().click({ force: true });
+  await expect(alice.locator('#why-text')).toContainText('No one runs the AI for this room yet');
+  await alice.locator('#why').getByRole('button', { name: 'Ask someone to run it' }).click();
+  await expect(alice.locator('.toast', { hasText: 'Message copied.' })).toBeVisible();
+  expect(await alice.evaluate(() => navigator.clipboard.readText())).toBe(copied);
+  await alice.locator('#why').getByRole('button', { name: 'OK' }).click();
+
+  await alice.evaluate(() => navigator.clipboard.writeText(''));
+  await alice.locator('button.persona').first().click();
+  await alice.locator('#persona-card').getByRole('button', { name: 'Ask someone to run it' }).click();
+  await expect(alice.locator('.toast', { hasText: 'Message copied.' }).last()).toBeVisible();
+  expect(await alice.evaluate(() => navigator.clipboard.readText())).toBe(copied);
+  await alice.keyboard.press('Escape');
+
+  // No clipboard: the message shows, to copy by hand.
+  await alice.evaluate(() => Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true }));
+  await alice.locator('.persona-pill .persona-run').first().click({ force: true });
+  await alice.locator('#why').getByRole('button', { name: 'Ask someone to run it' }).click();
+  await expect(alice.locator('#why-title')).toHaveText('Ask someone to run it');
+  await expect(alice.locator('#why-text')).toHaveText(copied);
+  await expect(alice.locator('#why-ask')).toBeHidden();
+  await expect(alice.locator('#why').getByRole('button', { name: 'OK' })).toBeFocused();
+  await alice.locator('#why').getByRole('button', { name: 'OK' }).click();
+
+  // An AI host whose app went away: the room names them, and the hand-off goes.
+  const stop = await fakeDaemon(alice, baseURL, room.id, 'Alice laptop');
+  await expect(alice.locator('.persona-pill .persona-run').first()).toHaveAttribute('aria-disabled', 'false');
+  stop();
+  await expect(alice.locator('.persona-pill .persona-run').first()).toHaveAttribute('aria-disabled', 'true', { timeout: 30_000 });
+  await alice.locator('.persona-pill .persona-run').first().click({ force: true });
+  await expect(alice.locator('#why-text')).toContainText("AI host app is not connected");
+  await expect(alice.locator('#why-ask')).toBeHidden();
+  await alice.locator('#why').getByRole('button', { name: 'OK' }).click();
+  await alice.locator('button.persona').first().click();
+  await expect(alice.locator('#persona-card-ask')).toBeVisible();
+  await expect(alice.locator('#persona-card-handoff')).toHaveCount(0);
 });

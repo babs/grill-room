@@ -83,7 +83,7 @@ test('daemon page keeps a change a slower, older poll answers over', async ({ br
   try {
     const admin = await pairDaemon(alice, daemon);
     await admin.locator('#tab-general').click();
-    const box = admin.getByLabel('Approve every new AI persona and change');
+    const box = admin.getByLabel('Hold new AI personas and changes for my approval');
     await expect(box).not.toBeChecked();
     let release;
     const held = new Promise((r) => { release = r; });
@@ -111,11 +111,33 @@ test('daemon page keeps a change a slower, older poll answers over', async ({ br
     });
     await older;
     await box.check();
-    await expect(admin.locator('.toast', { hasText: 'approved at once' })).toBeVisible();
+    await expect(admin.locator('.toast', { hasText: 'wait for your approval' })).toBeVisible();
     release();
     const route = await next;
     expect(await box.isChecked()).toBe(true);
     await route.continue();
+  } finally {
+    daemon.cleanup();
+  }
+});
+
+// 038-AC1: each toast says what the stored approve_all value does, read back from the app.
+test('daemon page approval toast matches the stored setting', async ({ browser, request, baseURL }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`);
+  try {
+    const admin = await pairDaemon(alice, daemon);
+    await admin.locator('#tab-general').click();
+    const box = admin.getByLabel('Hold new AI personas and changes for my approval');
+    const stored = () => admin.evaluate(async () => {
+      const r = await fetch('/api/status', { headers: { Authorization: 'Bearer ' + localStorage.getItem('token') } });
+      return (await r.json()).instances[0].status.settings.approve_all;
+    });
+    for (const [act, on, text] of [['check', true, 'New AI personas and changes wait for your approval'], ['uncheck', false, 'New AI personas and changes apply at once']]) {
+      await box[act]();
+      await expect(admin.locator('.toast', { hasText: text })).toBeVisible();
+      expect(await stored()).toBe(on);
+    }
   } finally {
     daemon.cleanup();
   }

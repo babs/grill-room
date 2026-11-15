@@ -104,7 +104,7 @@ function Manage({ data, tab, tabs }) {
         <button type="button" class="btn-primary" onClick=${openPersonas}>Open the Personas sheet</button>`}
       ${tab === 'skills' && (skills.length ? html`<ul id="room-admin-skills">${skills.map((k) => html`<li key=${k.id}>${k.name} v${k.version}, copied by ${k.author}
           ${' '}<button type="button" class="btn-secondary" onClick=${() => removeSkill(k)} aria-label=${'Remove the room skill ' + k.name}>Remove</button></li>`)}</ul>`
-        : html`<p class="empty">None yet. Members copy their personal skills in from the Personas sheet.</p>`)}
+        : html`<p class="empty">None yet. Members copy their personal skills in from <button type="button" class="text-link" onClick=${openPersonas}>the Personas sheet</button>.</p>`)}
       ${tab === 'links' && html`<${LinksTab} data=${data} base=${base} show=${show}/>`}
       ${tab === 'plugins' && html`<${PluginsTab} base=${base} admin=${true} host=${approves(data)} personas=${personas}/>`}
       ${tab === 'network' && html`<${NetworkTab} base=${base} host=${isHost(data)} show=${show}/>`}
@@ -168,7 +168,7 @@ async function saveAsStarter(base, say) {
     <${Editor} view=${view} api=${fetchJSON} mode="save" path=${base + '/starters'} back=${close}
       done=${(/** @type {import('./starters.js').Starter} */ st) => {
         close();
-        dispatchEvent(new CustomEvent('grill:toast', { detail: 'Saved "' + st.title + '" to your starters, on your profile page' }));
+        dispatchEvent(new CustomEvent('grill:toast', { detail: { text: 'Saved "' + st.title + '" to your starters', open: '/profile#starters' } }));
       }}/>`, starterSheet);
   starterSheet.showModal();
 }

@@ -995,7 +995,7 @@ function General() {
     const on = e.currentTarget.checked;
     setApproving(on);
     api('POST', '/api/settings', { instance: inst.id, max_model: st.settings.max_model, max_effort: st.settings.max_effort, approve_all: on }).then(reload)
-      .then(() => window.grillToast(on ? 'New AI personas and changes are approved at once' : 'New AI personas and changes wait for your approval'))
+      .then(() => window.grillToast(on ? 'New AI personas and changes wait for your approval' : 'New AI personas and changes apply at once'))
       .catch((err) => setError(sentence(err.message)))
       .finally(() => setApproving(null));
   };
@@ -1035,7 +1035,7 @@ function General() {
                 <label for="max-effort">Max effort</label><div class="control"><select id="max-effort" value=${value(sk('max_effort'))} onChange=${edit(sk('max_effort'))}>
                   <option value="">no cap</option>${d.efforts.map((m) => html`<option value=${m}>${m}</option>`)}</select></div>
                 <p class="hint">An AI persona asking for more runs at this limit until you approve it in the room.</p>
-                <label class="full"><input id="approve-all" type="checkbox" checked=${approving ?? st.settings.approve_all} onChange=${approveAll} /> Approve every new AI persona and change</label>`
+                <label class="full"><input id="approve-all" type="checkbox" checked=${approving ?? st.settings.approve_all} onChange=${approveAll} /> Hold new AI personas and changes for my approval</label>`
               : html`<p class="hint">The app for ${hostOf(inst.url)} is ${inst.state}${inst.error ? ': ' + inst.error : ''}. Its limits show once it runs.</p>`}
             </div>`}
         </div>

@@ -435,3 +435,29 @@ test('plugins: saved in a starter, pending in a room made from it', async ({ bro
     for (const h of hosts) h();
   }
 });
+
+// 038-AC4: empty Capabilities link to where skills and plugins are added, and an empty Room
+// settings › Skills opens the Personas sheet.
+test('empty capabilities and room skills link to their place', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await appointAdmin(alice, request, room.id);
+  // Earlier runs' shared skills would be on offer: the library reads empty.
+  await alice.route((u) => u.pathname === `/api/rooms/${room.id}/skills`, (r) => (r.request().method() === 'GET' ? r.fulfill({ json: { skills: [] } }) : r.continue()));
+  const caps = await personaSheet(alice, 'Grill', 'Capabilities');
+  await expect(caps.locator('.persona-skills .hint')).toHaveText('Add a skill on your profile page.');
+  await expect(caps.getByRole('link', { name: 'your profile page' })).toHaveAttribute('href', '/profile#skills');
+  await caps.getByRole('link', { name: 'Room settings › Plugins' }).click();
+  await expect(alice).toHaveURL(/#manage\/plugins$/);
+  await expect(alice.locator('#panel-plugins')).toBeVisible();
+  // A fresh page: the Personas sheet stays open under Room settings.
+  await alice.goto(alice.url().split('#')[0] + '#manage/skills');
+  await alice.reload();
+  await expect(alice.locator('#personas')).toBeHidden();
+  const toSheet = alice.locator('#panel-skills').getByRole('button', { name: 'the Personas sheet' });
+  // It reads as a link inside the sentence, not on a row of its own.
+  const [btn, line] = await Promise.all([toSheet.boundingBox(), alice.locator('#panel-skills p.empty').boundingBox()]);
+  expect(btn.x).toBeGreaterThan(line.x + 50);
+  await toSheet.click();
+  await expect(alice.locator('#personas')).toBeVisible();
+  await expect(alice.locator('#panel-skills')).toBeHidden();
+});

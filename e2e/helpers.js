@@ -554,12 +554,12 @@ export const tableLayout = (page, sel) => page.locator(sel).evaluate((t) => {
   return { clipped, firstInBox: first.left >= b.left - 0.5, fits: box.scrollWidth <= box.clientWidth + 1, share: t.getBoundingClientRect().width / innerWidth };
 });
 
-// approveEverything switches the daemon page's "approve every new AI persona and change" on: it
-// applies at once and says so in a toast (003b-AC15).
+// approveEverything switches the daemon page's "hold new AI personas and changes for my approval"
+// on: it applies at once and says so in a toast (003b-AC15, 038-AC1).
 export async function approveEverything(admin) {
   await admin.locator('#tab-general').click();
-  await admin.getByLabel('Approve every new AI persona and change').check();
-  await expect(admin.locator('.toast', { hasText: 'approved at once' })).toBeVisible();
+  await admin.getByLabel('Hold new AI personas and changes for my approval').check();
+  await expect(admin.locator('.toast', { hasText: 'New AI personas and changes wait for your approval' })).toBeVisible();
 }
 
 // A name unique across parallel workers: Date.now() alone repeats when two start in the same ms.
