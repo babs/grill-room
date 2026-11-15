@@ -358,6 +358,8 @@ test('AI in this room: "What\'s missing?" links', async ({ browser, request, bas
     await bob.locator('#body').focus();
     await bob.evaluate(() => renderBlocked());
     await expect(bob.locator('#body')).toBeFocused();
+    // A redraw that drops the link while the sheet is open leaves nothing to follow: the composer.
+    await missing(bob, blockedLine, bob.locator('#body'), () => blockedLine.locator('a[href="#ai"]').evaluate((a) => a.remove()));
 
     const plugins = { plugins: [{ id: 1, name: 'opt', url: 'https://example.com/opt.git', ref: 'main', ref_name: 'main', entry: '', personas: [], running: 1,
       needs_setup: true, why: 'needs host setup on the AI host\'s computer', versions: [{ id: 1, n: 1, state: 'ok', short_commit: 'abcdef1', commit: 'abcdef1234' }] }] };
@@ -473,6 +475,15 @@ test('AI in this room: "What\'s missing?" for the AI host', async ({ browser, re
   await expect(item.getByRole('button', { name: 'Allow for this room: example.com' })).toBeVisible();
   // The strip redraws while the sheet is open: its item is gone, the strip keeps the focus.
   await missing(alice, item, alice.locator('#approvals'), () => alice.evaluate(() => renderApprovals()));
+  // Opened from the chat line, "Open the approvals" hands the focus to the strip, and a redraw of
+  // the line leaves it there.
+  await chat.getByRole('link', { name: 'What\'s missing?' }).click();
+  await expect(alice.locator('#ai')).toBeVisible();
+  await row(alice, 'waiting').getByRole('button', { name: 'Open the approvals' }).click();
+  await expect(alice.locator('#ai')).toBeHidden();
+  await expect(alice.locator('#approvals')).toBeFocused();
+  await alice.evaluate(() => renderBlocked());
+  await expect(alice.locator('#approvals')).toBeFocused();
 });
 
 // 039-AC4 039-AC10: a seat of the AI host's profile that is not the host's seat decides, but only

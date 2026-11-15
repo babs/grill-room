@@ -4340,8 +4340,9 @@ function showApprovals() {
     stripOpen = true;
     updateStrip();
   }
-  // The page's close handler gives the focus back to focusBefore.
+  // The page's close handler gives the focus back to focusBefore, not to a chat line's link.
   focusBefore = $('approvals');
+  missingLine = '';
   $('ai').close();
 }
 
@@ -4359,7 +4360,7 @@ $('ai').addEventListener('close', (e) => {
   if (location.hash === '#ai') history.replaceState(null, '', location.pathname + location.search);
   // After the page's focus return: a chat line redraws with the room's state, while the sheet is
   // open or soon after it closed, and its new link takes the focus for a few seconds, unless the
-  // user has put it somewhere else. An opener gone otherwise hands it to the composer.
+  // user has put it somewhere else or acted. An opener gone otherwise hands it to the composer.
   const id = missingLine;
   missingLine = '';
   if (!id) {
@@ -4372,17 +4373,26 @@ $('ai').addEventListener('close', (e) => {
     const now = document.activeElement;
     if (!l || l === now) return;
     if (now && now !== document.body && now !== ours && now.isConnected) {
-      watch.disconnect();
+      stop();
       return;
     }
     l.focus();
     ours = l;
   };
   const watch = new MutationObserver(follow);
+  const stop = () => {
+    watch.disconnect();
+    removeEventListener('pointerdown', stop, true);
+    removeEventListener('keydown', stop, true);
+  };
   watch.observe($('messages'), { childList: true, subtree: true });
-  setTimeout(() => watch.disconnect(), 5000);
+  // The user's first click or key ends the follow: what they reach next stays theirs.
+  addEventListener('pointerdown', stop, true);
+  addEventListener('keydown', stop, true);
+  setTimeout(stop, 5000);
   follow();
-  if (!document.querySelector(`#messages > li[data-id="${id}"]`)) focusLost(e);
+  // A line redrawn without its link, or gone, leaves nothing to follow.
+  focusLost(e);
 });
 
 async function loadTemplates() {
