@@ -3895,7 +3895,15 @@ function renderPersonas() {
     a.setAttribute('aria-label', p.name + ': ' + meta + (p.watches_notes ? ', watches the notes' : '') + ', ' + state);
     return li;
   });
-  if (rows.length !== list.children.length || rows.some((li, i) => list.children[i] !== li)) list.replaceChildren(...rows);
+  // Reconciled, never replaced: a detached row closes its open ⋯ menu and drops its focus (035-AC17).
+  const keep = new Set(rows);
+  for (const li of [...list.children]) {
+    if (keep.has(li)) continue;
+    // A removed row's focus would drop to the page: it waits on Add a persona, as after Remove (035-AC17).
+    if (li.contains(document.activeElement)) $('persona-add').focus();
+    li.remove();
+  }
+  rows.forEach((li, i) => { if (list.children[i] !== li) list.insertBefore(li, list.children[i] || null); });
 }
 
 // sheetRoute reads #personas/<id>/<tab>; null on any other hash. An unknown tab is Identity.

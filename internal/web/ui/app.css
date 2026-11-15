@@ -421,7 +421,6 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 .person-more { min-width: var(--control-h-sm); min-height: var(--control-h-sm); padding: 0; border-color: transparent; background: transparent; color: var(--text-muted); }
 .person-more.blank { visibility: hidden; }
 #person-menu input[type=range] { width: 8rem; }
-:is(#person-menu, #persona-menu) button[aria-disabled=true] { color: var(--text-muted); cursor: default; }
 /* A toggle draws both states, a box ticked or empty in the icon column, kept out of the accessible name. */
 #person-menu .ico.toggle { display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 1; }
 #person-menu [aria-pressed=true] > .ico.toggle { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }
@@ -739,9 +738,6 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
   /* The phone's floor comes from the audio bar's controls moving into ⋯ (030-AC14), not a width. */
   .room-header .zone-room { min-width: 0; }
   .zone-agents { order: 1; flex: 1 0 100%; }
-  /* Room for spec 035's "Add a persona" button after the pills' scroll area, clear of the right
-     "+N" (035-AC14, 037-AC6). */
-  .persona-bar { margin-right: 44px; }
   /* Without voice, nothing to filter (037-AC3). */
   body:not(.has-voice) #chat-filter { display: none; }
   #persona-buttons { scrollbar-width: none; }

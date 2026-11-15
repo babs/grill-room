@@ -187,6 +187,20 @@ test('persona library: add a library persona with its skill and plugin', async (
     await expect(picker.locator('#persona-preview-facts dt')).toHaveText(['Persona', 'Description', 'Model', 'Speaks up', 'Skills', 'Plugins']);
     await expect(picker.locator('#persona-preview-facts dd')).toHaveText([`🔥 ${kit}`, /./, 'sonnet · effort medium', 'On mention only', `${skillName} v1`, 'babs']);
     await capture(alice, testInfo, 'persona-picker');
+    // With speech on the server, the preview says its voice in the call too (035-AC14).
+    await alice.evaluate(() => { ttsOn = true; renderPreview(); });
+    await expect(picker.locator('#persona-preview-facts dt')).toHaveText(['Persona', 'Description', 'Model', 'Speaks up', 'In the call', 'Skills', 'Plugins']);
+    const inCall = picker.locator('#persona-preview-facts dd').nth(4);
+    await expect(inCall).toHaveText('Default voice');
+    const kept = await alice.evaluate(() => { const t = pickChoice(); const k = { speaks: t.speaks, voice: t.voice }; t.speaks = false; renderPreview(); return k; });
+    await expect(inCall).toHaveText('Silent');
+    await alice.evaluate(() => {
+      voiceList = { voices: [{ id: 'fr-ada', name: 'Ada', lang: 'fr' }] };
+      Object.assign(pickChoice(), { speaks: true, voice: 'fr-ada' });
+      renderPreview();
+    });
+    await expect(inCall).toHaveText('Ada (French)');
+    await alice.evaluate((k) => { Object.assign(pickChoice(), k); voiceList = null; ttsOn = false; renderPreview(); }, kept);
     await picker.getByRole('button', { name: 'Add', exact: true }).click();
     await expect(picker).toBeHidden();
     await expect(plus).toBeFocused();
@@ -322,8 +336,29 @@ test('persona library: the Personas sheet rows', async ({ browser, request }, te
   const menu = panel.locator('.persona-rows .menu:popover-open');
   await expect(menu.getByRole('button')).toHaveText(['Edit', 'Save to my personas', 'Remove']);
   await expect(menu.getByRole('button', { name: 'Edit Grill' })).toBeFocused();
+  // Someone adds or removes a persona meanwhile: the open ⋯ stays open, its focus kept (035-AC17).
+  const sec = (await call(alice, 'GET', `/api/rooms/${room.id}/templates`)).body.find((t) => t.section === 'builtin' && t.title === 'Secretary');
+  const added = await call(alice, 'POST', `/api/rooms/${room.id}/personas`, { template_id: sec.id });
+  expect(added.status).toBe(201);
+  await expect(personaRow(alice, 'Secretary')).toHaveCount(1);
+  await expect(menu).toHaveCount(1);
+  await expect(menu.getByRole('button', { name: 'Edit Grill' })).toBeFocused();
+  expect(await alice.evaluate(([r, id]) => fetch(`/api/rooms/${r}/personas/${id}`, { method: 'DELETE' }).then((x) => x.status), [room.id, added.body.id])).toBe(204);
+  await expect(personaRow(alice, 'Secretary')).toHaveCount(0);
+  await expect(menu).toHaveCount(1);
+  await expect(menu.getByRole('button', { name: 'Edit Grill' })).toBeFocused();
   await alice.keyboard.press('Escape');
   await expect(more).toBeFocused();
+  // Removed by someone else while its ⋯ or its row holds the focus: the focus waits on Add a persona (035-AC17).
+  for (const target of [() => panel.getByRole('button', { name: 'More actions for Secretary', exact: true }), () => personaRow(alice, 'Secretary')]) {
+    const gone = await call(alice, 'POST', `/api/rooms/${room.id}/personas`, { template_id: sec.id });
+    expect(gone.status).toBe(201);
+    await target().focus();
+    expect(await alice.evaluate(([r, id]) => fetch(`/api/rooms/${r}/personas/${id}`, { method: 'DELETE' }).then((x) => x.status), [room.id, gone.body.id])).toBe(204);
+    await expect(personaRow(alice, 'Secretary')).toHaveCount(0);
+    await expect(add).toBeFocused();
+  }
+  await more.focus();
   // At 390 px the settings stay whole and the state dot stays clear of the ⋯ and its focus ring.
   await alice.setViewportSize({ width: 390, height: 844 });
   const led = await panel.locator('.persona-row .led').first().boundingBox();
@@ -345,7 +380,6 @@ test('persona library: the Personas sheet rows', async ({ browser, request }, te
   await alice.locator('#persona-sheet').getByRole('button', { name: 'Close' }).click();
 
   // Remove from the persona sheet's own ⋯ closes it, and the focus waits on Add a persona.
-  const sec = (await call(alice, 'GET', `/api/rooms/${room.id}/templates`)).body.find((t) => t.section === 'builtin' && t.title === 'Secretary');
   expect((await call(alice, 'POST', `/api/rooms/${room.id}/personas`, { template_id: sec.id })).status).toBe(201);
   await panel.getByRole('button', { name: 'More actions for Secretary', exact: true }).click();
   await panel.locator('.persona-rows .menu:popover-open').getByRole('button', { name: 'Edit Secretary' }).click();
@@ -361,6 +395,18 @@ test('persona library: the Personas sheet rows', async ({ browser, request }, te
   await more.click();
   const noProfile = menu.getByRole('button', { name: 'Saving personas needs a profile', exact: true });
   await expect(noProfile).toHaveAttribute('aria-disabled', 'true');
+  // Drawn off in the row menu too, not only in the id-scoped ones (035-AC12); Edit stays live.
+  const looks = (item) => item.evaluate((b) => {
+    const muted = document.body.appendChild(Object.assign(document.createElement('span'), { style: 'color: var(--text-muted)' }));
+    const c = getComputedStyle(muted).color;
+    muted.remove();
+    return [getComputedStyle(b).cursor, getComputedStyle(b).color === c];
+  });
+  expect(await looks(noProfile)).toEqual(['default', true]);
+  expect((await looks(menu.getByRole('button', { name: 'Edit Grill' })))[1]).toBe(false);
+  // Hovered, it stays flat: nothing to press.
+  await noProfile.hover();
+  expect(await noProfile.evaluate((b) => getComputedStyle(b).backgroundColor)).toBe('rgba(0, 0, 0, 0)');
   await alice.keyboard.press('Escape');
   await alice.evaluate(() => { hasProfile = true; });
 

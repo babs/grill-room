@@ -1,6 +1,6 @@
 # 035 — Persona library
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-14
 **Context**: UX audit part B (journeys 1 and 2, direction S1). Builds on 002 (personas, templates), 006 (starters and their libraries), 009 (persona sheet, skills, plugins), 013 (voices), 032/033 (time keeper). Folds in part A finding A19 (Personas sheet rows).
@@ -40,36 +40,36 @@ Personas get a library like starters. `/profile` gains a Personas tab with three
 
 ### The library
 
-- [ ] **AC1** `/profile` has a "Personas" tab after "Starters", with a count, and a deep link `/profile#personas`. It lists three sections in this order: "Yours", "Shared with everyone", "Built-in". Each row shows badge, name, version, author, description and the row ⋯. Empty Yours reads "No personas of yours yet. Save one from a room, or duplicate one below."; empty Shared reads "Nobody has shared a persona yet."
-- [ ] **AC2** A row's name opens the persona's page: every setting in read-only form (identity, model, triggers, call, capabilities with skill names and versions and plugin names), its version history (number, author, date), and actions by role. On a phone the page is a full-screen sheet.
-- [ ] **AC3** The author edits their own library persona on its page with the same four tabs as the room persona sheet (Identity, Model, Triggers, Capabilities), Description included. Save makes version N+1; nothing in any room changes. A non-author has no Edit.
-- [ ] **AC4** Row ⋯ for the author: "Add to a room…", "Duplicate", "Share with everyone" or "Stop sharing", "Delete…". For anyone else: "Add to a room…", "Duplicate to yours". Duplicate makes a new library persona in Yours at version 1, titled "<name> (copy)" when the name is taken in Yours.
-- [ ] **AC5** "Share with everyone" asks: "Everyone on this server will see <name> and can add it to their rooms. Rooms keep their copies if you stop sharing." Confirming moves it to Shared. "Stop sharing" moves it back to Yours without a confirm; rooms that added it keep their copies, and other viewers lose its "Update to vN" offer.
-- [ ] **AC6** "Delete…" confirms "Rooms keep the personas they added from it." and removes the library persona with its versions and frozen files. The instance admin removes a Shared one from `/admin`; Built-in ones cannot be deleted.
-- [ ] **AC7** A profile holds at most 50 library personas of its own and 100 versions each (today's limits); past them, the action answers with the limit in words and changes nothing.
+- [x] **AC1** `/profile` has a "Personas" tab after "Starters", with a count, and a deep link `/profile#personas`. It lists three sections in this order: "Yours", "Shared with everyone", "Built-in". Each row shows badge, name, version, author, description and the row ⋯. Empty Yours reads "No personas of yours yet. Save one from a room, or duplicate one below."; empty Shared reads "Nobody has shared a persona yet."
+- [x] **AC2** A row's name opens the persona's page: every setting in read-only form (identity, model, triggers, call, capabilities with skill names and versions and plugin names), its version history (number, author, date), and actions by role. On a phone the page is a full-screen sheet.
+- [x] **AC3** The author edits their own library persona on its page with the same four tabs as the room persona sheet (Identity, Model, Triggers, Capabilities), Description included. Save makes version N+1; nothing in any room changes. A non-author has no Edit.
+- [x] **AC4** Row ⋯ for the author: "Add to a room…", "Duplicate", "Share with everyone" or "Stop sharing", "Delete…". For anyone else: "Add to a room…", "Duplicate to yours". Duplicate makes a new library persona in Yours at version 1, titled "<name> (copy)" when the name is taken in Yours.
+- [x] **AC5** "Share with everyone" asks: "Everyone on this server will see <name> and can add it to their rooms. Rooms keep their copies if you stop sharing." Confirming moves it to Shared. "Stop sharing" moves it back to Yours without a confirm; rooms that added it keep their copies, and other viewers lose its "Update to vN" offer.
+- [x] **AC6** "Delete…" confirms "Rooms keep the personas they added from it." and removes the library persona with its versions and frozen files. The instance admin removes a Shared one from `/admin`; Built-in ones cannot be deleted.
+- [x] **AC7** A profile holds at most 50 library personas of its own and 100 versions each (today's limits); past them, the action answers with the limit in words and changes nothing.
 
 ### Whole persona
 
-- [ ] **AC8** A library persona version stores every setting listed in Scope. Adding it to a room gives the room persona exactly those settings; a test round-trips each field room persona → library → another room and compares them.
-- [ ] **AC9** Saving a persona that has skills on stores a frozen copy of each skill at the version the persona uses; a skill the saver may not read (another profile's personal skill copied into the room) is stored as the room copy it is. Plugins are stored as their git URL, ref and entry, as a starter stores them.
-- [ ] **AC10** Adding a library persona to a room brings each frozen skill in as a room skill (pending under the host's "hold for approval", as starter skills are, 006-AC13) and each plugin as a room plugin awaiting the host's review (009). A skill or plugin of the same name already in the room is reused, not duplicated. The add answers with what waits for the host.
-- [ ] **AC11** The time keeper role is copied only when the room has no time keeper yet (one per room, 032); otherwise the persona arrives without it and the status line says so.
+- [x] **AC8** A library persona version stores every setting listed in Scope. Adding it to a room gives the room persona exactly those settings; a test round-trips each field room persona → library → another room and compares them.
+- [x] **AC9** Saving a persona that has skills on stores a frozen copy of each skill at the version the persona uses; a skill the saver may not read (another profile's personal skill copied into the room) is stored as the room copy it is. Plugins are stored as their git URL, ref and entry, as a starter stores them.
+- [x] **AC10** Adding a library persona to a room brings each frozen skill in as a room skill (pending under the host's "hold for approval", as starter skills are, 006-AC13) and each plugin as a room plugin awaiting the host's review (009). A skill or plugin of the same name already in the room is reused, not duplicated. The add answers with what waits for the host.
+- [x] **AC11** The time keeper role is copied only when the room has no time keeper yet (one per room, 032); otherwise the persona arrives without it and the status line says so.
 
 ### In the room
 
-- [ ] **AC12** The persona sheet ⋯ shows "Save to my personas" for a room persona not linked to one of the caller's library personas, and "Save to my personas as v<N+1>" for one that is (the linked one when it is the caller's, else the one the caller first saved from this persona). Saving uses the saved state of the persona; with unsaved changes the item reads "Save your changes first" and is disabled with that reason as text, not a tip.
-- [ ] **AC13** After a first save, the room persona is linked to the new library persona: the next save makes version 2, never a second library persona. The status line reads "Saved <name> v<N> to your personas." with a link to `/profile#personas`.
-- [ ] **AC14** "Add a persona" (Personas sheet, and a "+" button at the end of the persona bar labelled "Add a persona") opens a picker with the three sections. The "+" sits after the scrolling pills, outside the bar's scroll area, so it never mixes with 034's edge "+N" buttons; on a phone it keeps its 44 px target. Selecting a row shows a preview: description, model and effort, trigger in words, voice when the server has speech, skill and plugin names. "Add" adds it; the picker closes and the new pill shows.
-- [ ] **AC15** At 12 personas in the room, the Personas sheet's "Add a persona" and the picker's "Add" are disabled with the text "A room holds 12 personas at most."; the bar's "+" opens the picker, which says so.
-- [ ] **AC16** The persona sheet's Identity tab names the source: "From <name> v<N>, in your personas", "…, shared by <author>", "…, built in", "Came with the starter <title>" (a persona from a starter), "Made in this room" (none), or "Its library persona was deleted." only when it was added from one that no longer exists.
-- [ ] **AC17** The Personas sheet lists the room's personas as kit rows with a ⋯ (Edit, Save to my personas, Remove); "Add a persona" is its one primary button and comes before the auto-turn limit and room skills.
+- [x] **AC12** The persona sheet ⋯ shows "Save to my personas" for a room persona not linked to one of the caller's library personas, and "Save to my personas as v<N+1>" for one that is (the linked one when it is the caller's, else the one the caller first saved from this persona). Saving uses the saved state of the persona; with unsaved changes the item reads "Save your changes first" and is disabled with that reason as text, not a tip.
+- [x] **AC13** After a first save, the room persona is linked to the new library persona: the next save makes version 2, never a second library persona. The status line reads "Saved <name> v<N> to your personas." with a link to `/profile#personas`.
+- [x] **AC14** "Add a persona" (Personas sheet, and a "+" button at the end of the persona bar labelled "Add a persona") opens a picker with the three sections. The "+" sits after the scrolling pills, outside the bar's scroll area, so it never mixes with 034's edge "+N" buttons; on a phone it keeps its 44 px target. Selecting a row shows a preview: description, model and effort, trigger in words, voice when the server has speech, skill and plugin names. "Add" adds it; the picker closes and the new pill shows.
+- [x] **AC15** At 12 personas in the room, the Personas sheet's "Add a persona" and the picker's "Add" are disabled with the text "A room holds 12 personas at most."; the bar's "+" opens the picker, which says so.
+- [x] **AC16** The persona sheet's Identity tab names the source: "From <name> v<N>, in your personas", "…, shared by <author>", "…, built in", "Came with the starter <title>" (a persona from a starter), "Made in this room" (none), or "Its library persona was deleted." only when it was added from one that no longer exists.
+- [x] **AC17** The Personas sheet lists the room's personas as kit rows with a ⋯ (Edit, Save to my personas, Remove); "Add a persona" is its one primary button and comes before the auto-turn limit and room skills.
 
 ### Migration, admin, API
 
-- [ ] **AC18** On upgrade, every existing template published by a profile becomes a library persona in that profile's Yours at its current versions; presets become Built-in. Rooms keep their personas; a room persona added from another profile's template keeps its settings and stops offering updates to viewers who cannot see it. Its source line reads "From <name> v<N>, by <author>".
-- [ ] **AC19** `/admin` › Libraries › "Persona templates" becomes "Personas" and lists Shared and Built-in only, with Remove on Shared ones.
-- [ ] **AC20** `GET /api/rooms/{room}/templates` and MCP `list_templates` return, per library persona the caller can see, its section (`personal`, `instance`, `builtin`) and description. `add_persona` with such an id behaves as AC10.
-- [ ] **AC21** A profile merge (admin) moves the merged profile's library personas into the kept profile's Yours; a profile deletion deletes its library personas and leaves rooms' copies.
+- [x] **AC18** On upgrade, every existing template published by a profile becomes a library persona in that profile's Yours at its current versions; presets become Built-in. Rooms keep their personas; a room persona added from another profile's template keeps its settings and stops offering updates to viewers who cannot see it. Its source line reads "From <name> v<N>, by <author>".
+- [x] **AC19** `/admin` › Libraries › "Persona templates" becomes "Personas" and lists Shared and Built-in only, with Remove on Shared ones.
+- [x] **AC20** `GET /api/rooms/{room}/templates` and MCP `list_templates` return, per library persona the caller can see, its section (`personal`, `instance`, `builtin`) and description. `add_persona` with such an id behaves as AC10.
+- [x] **AC21** A profile merge (admin) moves the merged profile's library personas into the kept profile's Yours; a profile deletion deletes its library personas and leaves rooms' copies.
 
 ## Phases
 
@@ -100,7 +100,7 @@ Personas get a library like starters. `/profile` gains a Personas tab with three
 
 ## Open questions
 
-- [ ] None blocking. Answered on 2026-11-14: existing templates go to Yours (private); skills and plugins are frozen copies; saving goes to Yours and sharing is separate.
+- [x] None blocking. Answered on 2026-11-14: existing templates go to Yours (private); skills and plugins are frozen copies; saving goes to Yours and sharing is separate.
 
 ## Decisions
 
