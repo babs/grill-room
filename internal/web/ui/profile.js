@@ -641,7 +641,7 @@ addEventListener('storage', (e) => {
 });
 
 // Notifications per room in this browser (005-AC24, 038-AC14), turned on as a room does: the
-// explainer before the browser's permission prompt (008-AC10).
+// explainer before the browser asks for permission (008-AC10).
 const push = window.grillPush;
 let pushRooms = [];
 // The room the explainer is open for; null once answered.

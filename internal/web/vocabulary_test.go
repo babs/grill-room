@@ -370,6 +370,8 @@ func TestVocabularyInVisibleText(t *testing.T) {
 			if err != nil {
 				return err
 			}
+			// Windows walks with backslashes; the skip and allow lists name files with slashes.
+			p = filepath.ToSlash(p)
 			if vocabSkip[p] {
 				if d.IsDir() {
 					return filepath.SkipDir
@@ -389,7 +391,10 @@ func TestVocabularyInVisibleText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files = append(files, append(docs, "../../README.md")...)
+	for _, d := range docs {
+		files = append(files, filepath.ToSlash(d))
+	}
+	files = append(files, "../../README.md")
 	if len(files) < 30 {
 		t.Fatalf("found %d files: the walk no longer reaches the UI and docs", len(files))
 	}
