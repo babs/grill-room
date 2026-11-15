@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 )
 
 // phrase compiles a rule whose words may be split by any whitespace or &nbsp;.
@@ -441,10 +444,139 @@ func TestPlacesNamedExist(t *testing.T) {
 			t.Errorf("README names the room's menu as %q: name it by the room's name", old)
 		}
 	}
+	// 042: a "Room settings › <tab>" shown in the UI names one of the sheet's tabs, whole.
+	all := regexp.MustCompile(`(?s)const allTabs = \[(.*?)\];`).FindStringSubmatch(read("ui/admin/room-admin.js"))
+	panel := regexp.MustCompile(`roomTabs = \{([^}]*)\}`).FindStringSubmatch(read("ui/admin/room-panel.js"))
+	if all == nil || panel == nil {
+		t.Fatal("the Room settings tab lists moved: update this test")
+	}
+	var sheetTabs []string
+	for _, m := range regexp.MustCompile(`\['[a-z]+', '([^']+)'\]`).FindAllStringSubmatch(all[1], -1) {
+		sheetTabs = append(sheetTabs, m[1])
+	}
+	for _, m := range regexp.MustCompile(`'([^']+)'`).FindAllStringSubmatch(panel[1], -1) {
+		sheetTabs = append(sheetTabs, m[1])
+	}
+	// Pinned: a renamed tab fails here first, and every mention of its old name has to follow.
+	pinned := []string{"Links", "Personas", "Skills", "Plugins", "Websites and connectors", "Deleted documents", "Words to recognise",
+		"Call voices", "General", "Invites", "Members and admins", "Export"}
+	if strings.Join(sheetTabs, "|") != strings.Join(pinned, "|") {
+		t.Errorf("Room settings tabs = %q, pinned %q: update the pin and every \"Room settings › <old name>\"", sheetTabs, pinned)
+	}
+	// nameOf reads a mention as the longest tab name it starts with, pinned names included: a
+	// mention of a renamed tab's old name then shows on the run that breaks the pin.
+	names := append(slices.Clone(sheetTabs), pinned...)
+	nameOf := func(rest string) string {
+		best := ""
+		for _, tab := range names {
+			r, _ := utf8.DecodeRuneInString(rest[min(len(tab), len(rest)):])
+			if len(tab) > len(best) && strings.HasPrefix(rest, tab) && (len(rest) == len(tab) || !unicode.IsLetter(r)) {
+				best = tab
+			}
+		}
+		return best
+	}
+	// Any run of spaces, a wrap or &nbsp; between the words, as phrase() allows; › or its entities.
+	gap := `(?:\s|&nbsp;|\x{a0})`
+	named := regexp.MustCompile(`Room` + gap + `+settings` + gap + `+(?:›|&rsaquo;|&#8250;|&#x203[aA];)` + gap + `*`)
+	check := func(p string, spans []vspan) {
+		for _, sp := range spans {
+			// Each mention from its own start, the line's later ones too; a wrap inside a name folds.
+			for _, loc := range named.FindAllStringIndex(sp.text, -1) {
+				rest := sp.text[loc[1]:]
+				rest = strings.Join(strings.Fields(strings.ReplaceAll(rest[:min(len(rest), 80)], "&nbsp;", " ")), " ")
+				if n := nameOf(rest); !slices.Contains(sheetTabs, n) {
+					t.Errorf("%s names %q, not a tab of Room settings %q", p, "Room settings › "+rest, sheetTabs)
+				}
+			}
+		}
+	}
+	err := filepath.WalkDir("ui", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || vocabSkip[filepath.ToSlash(p)] {
+			if err == nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return err
+		}
+		switch filepath.Ext(p) {
+		case ".js":
+			check(p, jsSpans(read(p)))
+		case ".html":
+			check(p, htmlSpans(read(p)))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs, err := filepath.Glob("../../docs/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range append(docs, "../../README.md") {
+		check(p, mdSpans(read(p)))
+	}
 	// The bare "⋯ › <item>" form, for the room menu's own items; the people menu's stay.
 	roomItem := regexp.MustCompile("⋯`? › \"?(Invite people|Room settings|Personas|Open (documents|chat) in a new window|Run the AI on my computer|Open my AI host app|Linked rooms|Link a room)")
 	if m := roomItem.FindString(readme); m != "" {
 		t.Errorf("README names the room's menu as %q: name it by the room's name", m)
+	}
+}
+
+// 042-AC10 042-AC11: Help's words sit in room.html as a <dl>, each term in a <dt>, capitalised,
+// in the spec's order, where the vocabulary scan reads them: a replaced word written there as a
+// lone lowercase term, the shape the JS scan misses, fails it.
+func TestHelpWords(t *testing.T) {
+	b, err := os.ReadFile("ui/room.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(b)
+	dl := regexp.MustCompile(`(?s)<dl id="help-words"[^>]*>.*?</dl>`).FindString(page)
+	if dl == "" {
+		t.Fatal(`room.html has no <dl id="help-words">`)
+	}
+	var terms, got []string
+	for _, m := range regexp.MustCompile(`<dt>([^<]*)</dt>\s*<dd>([^<]+)</dd>`).FindAllStringSubmatch(dl, -1) {
+		terms = append(terms, m[1])
+		got = append(got, m[1]+": "+m[2])
+	}
+	// AC10's lines, the definition capitalised as a sentence of its own.
+	want := []string{
+		"Room: A place where people and personas talk, with its chat, documents and call.",
+		"Persona: An AI with a name, a prompt and a model, who answers in the room when asked or on its own.",
+		"AI host: The person whose computer runs the personas.",
+		"AI host app: The app the AI host runs for it.",
+		"Call: The room's audio, and its cameras and screens.",
+		"Voice-to-text: What writes the call down as lines in the chat.",
+		"Note: A comment pinned to a part of a document.",
+		"Starter: A saved room setup (agenda, personas, skills) to start new rooms the same way.",
+		"Skill: A set of instructions and files a persona can use.",
+		"Plugin: Code from a git repository that gives a persona tools, run by the AI host.",
+		"Linked room: Another room whose chat and documents this room's personas can read.",
+		"Room admin: A member who manages the room, its members and invites.",
+		"Server admin: The person who runs this grill-room server.",
+	}
+	if strings.Count(dl, "<dt") != len(want) || strings.Count(dl, "<dd") != len(want) {
+		t.Errorf("Help's words hold %d <dt> and %d <dd>, want %d of each", strings.Count(dl, "<dt"), strings.Count(dl, "<dd"), len(want))
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("Help's words =\n%s\nwant\n%s\n(each a <dt> followed by its <dd>)", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	for _, term := range terms {
+		if term == "" || strings.ToUpper(term[:1]) != term[:1] {
+			t.Errorf("term %q is not capitalised", term)
+		}
+	}
+	if hits := vocabHits("ui/room.html", page, nil); len(hits) > 0 {
+		t.Errorf("room.html: %v", hits)
+	}
+	// The red case: one term replaced by an old word, lowercase and alone.
+	for _, old := range []string{"daemon", "annotation"} {
+		bad := strings.Replace(page, "<dt>AI host app</dt>", "<dt>"+old+"</dt>", 1)
+		if bad == page || len(vocabHits("ui/room.html", bad, nil)) == 0 {
+			t.Errorf("a lone lowercase %q in Help's words passes the vocabulary scan", old)
+		}
 	}
 }
 
@@ -463,6 +595,8 @@ func TestVocabularyScanner(t *testing.T) {
 		{"html label", "a.html", `<optgroup label="Shared with everyone">`, true},
 		{"html aria-description", "a.html", `<b aria-description="Room muted">x</b>`, true},
 		{"html identifier value", "a.html", `<option value="daemon">AI host</option>`, false},
+		// 042-AC11: a term is a text node, read even as a lone lowercase word.
+		{"html lone lowercase term", "a.html", "<dl><dt>daemon</dt><dd>x</dd></dl>", true},
 		{"html class", "a.html", `<div class="daemon-pill">AI host</div>`, false},
 		{"html inline script", "a.html", "<script>toast('Room muted')</script>", true},
 		{"html script code", "a.html", "<script>daemon()</script>", false},

@@ -327,6 +327,11 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); }
 .ai-state.blocked { color: var(--danger); }
 /* The kit's actions do not shrink: two buttons side by side overflow a phone unless they may wrap. */
 .ai-row > .actions { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; gap: var(--sp-2); margin-left: auto; }
+/* Help's words (042-AC10): a term and its line, one row each; stacked on a phone. */
+.help-words { display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-2) var(--sp-3); margin: 0; }
+.help-words dt { font-weight: 600; }
+.help-words dd { margin: 0; }
+@media (max-width: 40rem) { .help-words { grid-template-columns: 1fr; row-gap: 0; } .help-words dd { margin-bottom: var(--sp-2); } }
 .ai-choices { margin: 0; padding-left: var(--sp-5); }
 .ai-choices > li { margin: var(--sp-1) 0; }
 /* The Personas list: one line per persona, its name and settings cut by an ellipsis (009-AC1). */

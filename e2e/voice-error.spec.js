@@ -1,63 +1,13 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, playSTT, noOverflow, menuItem } from './helpers.js';
-
-// The e2e server has no LiveKit: this LiveKit stand-in keeps the room page's own mic handling and
-// takes the mic from navigator.mediaDevices.getUserMedia on each enable, as LiveKit's restart does.
-const fakeLiveKit = `window.LivekitClient = (() => {
-  const names = new Proxy({}, { get: (_, k) => k });
-  class Room {
-    constructor() {
-      this.state = 'connected';
-      this.canPlaybackAudio = true;
-      this.remoteParticipants = new Map();
-      let track = null;
-      // No camera, no screen and no device choice (spec 030): what the page reads of them is empty.
-      this.localParticipant = {
-        isMicrophoneEnabled: false,
-        isCameraEnabled: false,
-        isScreenShareEnabled: false,
-        videoTrackPublications: new Map(),
-        trackPublications: new Map(),
-        getTrackPublication: () => (track ? { track: { mediaStreamTrack: track } } : undefined),
-        setMicrophoneEnabled: async (on) => {
-          if (on) track = (await navigator.mediaDevices.getUserMedia({ audio: true })).getAudioTracks()[0];
-          this.localParticipant.isMicrophoneEnabled = on;
-        },
-      };
-    }
-    on() { return this; }
-    getActiveDevice() { return 'default'; }
-    async switchActiveDevice() {}
-    // Counted per page: the chat window must open none (031-AC10).
-    async connect() { window.lkConnects = (window.lkConnects || 0) + 1; }
-    async disconnect() {}
-    async startAudio() {}
-  }
-  return { Room, RoomEvent: names, TrackEvent: names, Track: { Source: { Microphone: 'microphone' } }, DisconnectReason: { CLIENT_INITIATED: 1 } };
-})();
-`;
+import { roomWith, playSTT, noOverflow, menuItem, fakeCall } from './helpers.js';
 
 // Firefox's text for a denied mic: the one the lab showed raw.
 const raw = 'The request is not allowed by the user agent or the platform in the current context.';
 
 async function voicePage(browser, request) {
   const { room, pages: [page] } = await roomWith(browser, request, ['Alice']);
-  await page.context().route('**/static/vendor/livekit-client.umd.js', (r) => r.fulfill({ contentType: 'text/javascript', body: fakeLiveKit }));
-  await page.context().route(`**/api/rooms/${room.id}/voice`, (r) => r.fulfill({ json: { url: 'ws://127.0.0.1:9', token: 't' } }));
-  await page.context().route(`**/api/rooms/${room.id}`, async (r) => {
-    const res = await r.fetch();
-    return r.fulfill({ response: res, json: { ...(await res.json()), voice: true } });
-  });
-  // window.denyMic rejects getUserMedia as a browser does when the site may not use the mic.
-  await page.context().addInitScript((text) => {
-    window.denyMic = false;
-    navigator.mediaDevices.getUserMedia = async () => {
-      if (window.denyMic) throw new DOMException(text, 'NotAllowedError');
-      return new AudioContext().createMediaStreamDestination().stream;
-    };
-  }, raw);
-  await page.reload();
+  await fakeCall(page, room.id, {}, raw);
   await expect(page.locator('#voice-join')).toBeVisible();
   return page;
 }

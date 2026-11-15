@@ -247,3 +247,48 @@ func TestNativeDialogShapes(t *testing.T) {
 		}
 	}
 }
+
+// The Icons row of docs/design.md names every icon kit/ui.js draws (042 review).
+func TestIconsDocumented(t *testing.T) {
+	js, err := files.ReadFile("kit/ui.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := regexp.MustCompile(`(?s)const icons = \{\n(.*?)\n  \};`).FindSubmatch(js)
+	md, err := os.ReadFile("../../docs/design.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := regexp.MustCompile(`(?m)^\| \*\*Icons\*\* \|.*$`).Find(md)
+	if set == nil || row == nil {
+		t.Fatal("the icon map or the Icons row moved: update this test")
+	}
+	// Each " · " item opens with its name, or "a and b": prose around them names nothing.
+	items := strings.Split(string(row), " · ")
+	if f := strings.Fields(items[0]); len(f) > 0 {
+		items[0] = f[len(f)-1]
+	}
+	head := regexp.MustCompile(`^([a-z][a-z0-9-]*)(?: and ([a-z][a-z0-9-]*))?`)
+	named := map[string]bool{}
+	for _, it := range items {
+		if m := head.FindStringSubmatch(it); m != nil {
+			named[m[1]], named[m[2]] = true, m[2] != ""
+		}
+	}
+	keys := regexp.MustCompile(`(?m)^    '?([a-z][a-z0-9-]*)'?:`).FindAllSubmatch(set[1], -1)
+	if len(keys) < 40 {
+		t.Fatalf("found %d icons: the map's shape changed", len(keys))
+	}
+	drawn := map[string]bool{}
+	for _, k := range keys {
+		drawn[string(k[1])] = true
+		if !named[string(k[1])] {
+			t.Errorf("icon %q is not in docs/design.md's Icons row", k[1])
+		}
+	}
+	for n, ok := range named {
+		if ok && !drawn[n] {
+			t.Errorf("docs/design.md's Icons row names %q, which kit/ui.js does not draw", n)
+		}
+	}
+}

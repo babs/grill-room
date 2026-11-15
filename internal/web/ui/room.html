@@ -74,6 +74,7 @@
   <label id="voice-keepmic" data-tip="Keep your voice going out, and written down, while you stop hearing the call: useful when you share a physical room"><input type="checkbox"><span>Keep my mic on while I stop hearing the call</span></label>
   <label id="voice-device" data-tip="Your browser writes your voice down instead of the server. It downloads the voice-to-text model once, then tests this device." hidden><input type="checkbox"><span>Transcribe on this device</span></label>
   <p id="device-stt-status" class="hint" role="status" tabindex="-1"></p>
+  <a id="overview-voice" href="#call-overview">Call and voice-to-text…</a>
   <div id="voice-devices" role="group" aria-labelledby="voice-devices-head">
     <p id="voice-devices-head">Devices</p>
     <label>Microphone<select id="dev-audioinput"></select></label>
@@ -92,6 +93,7 @@
   <button type="button" id="text-size-open" data-icon="textsize">Text size</button>
   <button type="button" id="recovery-open" data-icon="device">Use on another device</button>
   <button type="button" id="diag-open" data-icon="pulse">Diagnostics</button>
+  <a id="help-open" href="#help" data-icon="help">Help</a>
   <a href="/profile" data-icon="profile">My rooms and profile</a>
   <button type="button" id="leave-open" data-icon="leave" aria-describedby="leave-why">Leave room…</button>
   <p id="leave-why" class="menu-note" hidden></p>
@@ -102,6 +104,7 @@
   <button type="button" id="manage-open" data-icon="settings" hidden>Room settings</button>
   <a id="links-open" href="#manage/links" data-icon="clip" hidden><span id="links-label"></span></a>
   <button type="button" id="personas-open" data-icon="personas">Personas</button>
+  <a id="overview-open" href="#call-overview" data-icon="transcribe">Call and voice-to-text…</a>
   <a id="ai-open" href="#ai" data-icon="info">AI in this room</a>
   <a id="docs-window-menu" data-icon="external">Open documents in a new window</a>
   <a id="chat-window-menu" data-icon="external">Open chat in a new window</a>
@@ -243,6 +246,54 @@
   <section aria-labelledby="ai-choices-title">
     <h3 id="ai-choices-title">The AI host's choices</h3>
     <ul id="ai-choices" class="ai-choices"></ul>
+  </section>
+</dialog>
+<!-- Read-only (042-AC1): each row says who changes it and links there; no control of its own. -->
+<dialog id="call-overview" class="sheet wide full" aria-labelledby="call-overview-title">
+  <div class="sheet-head">
+    <h2 id="call-overview-title" tabindex="-1">Call and voice-to-text</h2>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
+  </div>
+  <section aria-labelledby="ov-you-title">
+    <h3 id="ov-you-title">You</h3>
+    <ul id="ov-you" class="list-rows" aria-labelledby="ov-you-title"></ul>
+  </section>
+  <section aria-labelledby="ov-room-title">
+    <h3 id="ov-room-title">This room</h3>
+    <ul id="ov-room" class="list-rows" aria-labelledby="ov-room-title"></ul>
+  </section>
+  <section aria-labelledby="ov-server-title">
+    <h3 id="ov-server-title">This server</h3>
+    <ul id="ov-server" class="list-rows" aria-labelledby="ov-server-title"></ul>
+  </section>
+</dialog>
+<!-- The words are HTML, not script strings: 038's vocabulary test reads them, a lone lowercase term included (042-AC11). -->
+<dialog id="help" class="sheet wide full" aria-labelledby="help-title">
+  <div class="sheet-head">
+    <h2 id="help-title" tabindex="-1">Help</h2>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
+  </div>
+  <section aria-labelledby="help-can-title">
+    <h3 id="help-can-title">What you can do here</h3>
+    <ul id="help-can" class="list-rows" aria-labelledby="help-can-title"></ul>
+  </section>
+  <section aria-labelledby="help-words-title">
+    <h3 id="help-words-title">Words</h3>
+    <dl id="help-words" class="help-words">
+      <dt>Room</dt><dd>A place where people and personas talk, with its chat, documents and call.</dd>
+      <dt>Persona</dt><dd>An AI with a name, a prompt and a model, who answers in the room when asked or on its own.</dd>
+      <dt>AI host</dt><dd>The person whose computer runs the personas.</dd>
+      <dt>AI host app</dt><dd>The app the AI host runs for it.</dd>
+      <dt>Call</dt><dd>The room's audio, and its cameras and screens.</dd>
+      <dt>Voice-to-text</dt><dd>What writes the call down as lines in the chat.</dd>
+      <dt>Note</dt><dd>A comment pinned to a part of a document.</dd>
+      <dt>Starter</dt><dd>A saved room setup (agenda, personas, skills) to start new rooms the same way.</dd>
+      <dt>Skill</dt><dd>A set of instructions and files a persona can use.</dd>
+      <dt>Plugin</dt><dd>Code from a git repository that gives a persona tools, run by the AI host.</dd>
+      <dt>Linked room</dt><dd>Another room whose chat and documents this room's personas can read.</dd>
+      <dt>Room admin</dt><dd>A member who manages the room, its members and invites.</dd>
+      <dt>Server admin</dt><dd>The person who runs this grill-room server.</dd>
+    </dl>
   </section>
 </dialog>
 <dialog id="starter-save-sheet" class="sheet wide full" aria-labelledby="starter-save-title"></dialog>

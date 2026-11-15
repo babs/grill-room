@@ -22,7 +22,7 @@ import { PluginsTab, mountReview } from './plugins.js';
  * @typedef {{glossary: boolean, available?: boolean}} STTState
  */
 
-const w = /** @type {Window & {grillRoom?: RoomData, grillAgent?: AgentState, grillSTT?: STTState, grillLinks?: RoomLink[], grillShowLinks?: () => void}} */ (window);
+const w = /** @type {Window & {grillRoom?: RoomData, grillAgent?: AgentState, grillSTT?: STTState, grillLinks?: RoomLink[], grillShowLinks?: () => void, grillSheetBack?: () => boolean}} */ (window);
 const roomData = signal(w.grillRoom);
 const agentState = signal(w.grillAgent);
 // The glossary tab works only while a transcription worker reads it (007-AC14); its data stays.
@@ -60,7 +60,10 @@ document.getElementById('manage-open')?.addEventListener('click', () => { locati
 document.getElementById('manage-close')?.addEventListener('click', () => dialog.close());
 // Closed by Escape, a click outside or Close: the deep link goes too, without a history entry.
 dialog.addEventListener('close', () => {
-  if (tabOf(location.hash)) history.replaceState(null, '', location.pathname + location.search);
+  // The close event is queued: a Back then Forward may have reopened the sheet meanwhile.
+  if (dialog.open) return;
+  // Opened from a link of the overview or Help, it goes back there (042-AC7).
+  if (tabOf(location.hash) && !w.grillSheetBack?.()) history.replaceState(null, '', location.pathname + location.search);
   tab.value = '';
 });
 
@@ -84,6 +87,8 @@ function Manage({ data, tab, tabs }) {
   const skills = agentState.value?.room_skills || [];
   const personas = agentState.value?.personas || [];
   const openPersonas = () => {
+    // The Personas sheet replaces Room settings: its close must not go back to the overview (042-AC7).
+    history.replaceState(null, '', location.pathname + location.search);
     dialog.close();
     document.getElementById('personas-open')?.click();
   };

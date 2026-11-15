@@ -552,6 +552,8 @@ async function offered(next) {
   label.hidden = !ok;
   checked = rev ?? null;
   idle();
+  // The offer moves the overview's "runs on this device" line (042-AC2).
+  window.dispatchEvent(new CustomEvent('grill:device-stt', { detail: { state } }));
   if (ok && inAudio && localStorage.getItem(ON_KEY)) turnOn();
 }
 
