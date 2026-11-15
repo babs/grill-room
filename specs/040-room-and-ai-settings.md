@@ -1,6 +1,6 @@
 # 040 — Room settings and AI in this room, membership in one place
 
-**Status**: approved (v2 after council review)
+**Status**: in progress (v2 after council review)
 **Requested by**: babs
 **Date**: 2026-11-14
 **Context**: UX audit part B, directions S3 (split Room settings) and S10 (membership in one place); journeys 4, 5, 6, 7, 10. Builds on 005 (Room settings, people), 011 (invites, admins), 016 (revoke and cut, blocking), 023 (links), 035 (Personas sheet), 038 (tab names, Leave, vocabulary test), 039 (`#ai` panel, merged first), and part A's tab fold (A10). Council review (Codex, Fable) on 2026-11-15: v2 folds in its findings.
@@ -111,3 +111,7 @@ AI › Personas is the whole Personas sheet, room skills included, so Room setti
 - A stopped row does not say how many it removed; the toast does. Because the invite stores no cut result and later removals or rejoins would make a count from current seats wrong (Codex), and storing it is scope this spec does not need.
 - Tab ids stay (`admins`, `documents`): only labels change. Because renaming ids buys the user nothing and costs redirects and e2e selectors (Fable).
 - 016's revoke sheet stays; only its words change. Because it already previews who loses access and chained invites.
+- room.js owns the AI sheet: its dialog, its hash (`#ai`, `#ai/<tab>`), the ended-room guard, the tab bar, Status and Personas; room-admin.js mounts the Preact tabs into it and follows the tab room.js reports (`grill:ai-tab`). Because 039's sheet, its focus return and the Personas content are vanilla already, and one owner of the shown tab leaves no hash race between the two scripts.
+- Phase 1 keeps the old Personas and Skills lists, Remove included, as an interim AI › Personas tab until phase 2. Because every commit keeps the `skills` suite green.
+- A bar folds as soon as it overflows by more than half a pixel, so the whole-pixel scroll of a narrowed bar goes. Because AC5 folds at any width and a scrolled bar hides tabs.
+- AC5's "XL text size" is 028's XL plus a 20 px root font. Because 028's XL scales the chat and transcription only, not the sheets' bars.

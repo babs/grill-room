@@ -27,7 +27,7 @@ export async function roomWith(browser, request, names) {
 
 // playSTT replaces the page's event stream with one "stt" event, as the server sends it from the
 // workers' heartbeats, and reloads. The e2e server has no voice: by default no worker reads the
-// glossary and Room settings has no glossary tab (007-AC14).
+// glossary and AI in this room › Words to recognise says so (007-AC14, 038-AC12).
 export async function playSTT(page, roomID, st) {
   const body = { available: true, listening: false, transcribed: [], engines: [], glossary: false, ...st };
   await playEvents(page, roomID, [['stt', body]]);
@@ -339,10 +339,10 @@ export const noOverflow = (page) => page.evaluate(() => [...document.querySelect
   .filter((e) => !e.parentElement?.closest('.scroll, .tabs') && e.getBoundingClientRect().right > innerWidth + 1)
   .map((e) => `${e.tagName.toLowerCase()}#${e.id}.${e.className}`));
 
-// unfoldTabs opens the list of a tab bar folded on a phone (kit/ui.js), so that its tabs can be clicked.
+// unfoldTabs opens the list of a tab bar folded into its menu (kit/ui.js), so that its tabs can be clicked.
 export async function unfoldTabs(nav) {
   // A page folds its bar after drawing it, and again on a resize.
-  await expect.poll(() => nav.evaluate((n) => 'menu' in n.dataset || n.scrollWidth <= n.clientWidth || !matchMedia('(max-width: 40rem)').matches)).toBe(true);
+  await expect.poll(() => nav.evaluate((n) => 'menu' in n.dataset || n.scrollWidth <= n.clientWidth + 0.5)).toBe(true);
   // A page's own bar folds into its header's ☰.
   const menu = (await nav.evaluate((n) => 'header' in n.dataset)) ? nav.page().locator('.app-header > .tabs-menu') : nav.locator('.tabs-menu');
   if ((await menu.isVisible()) && (await menu.getAttribute('aria-expanded')) === 'false') await menu.click();
@@ -363,7 +363,15 @@ export async function openMenu(page, which = 'room') {
 // menuItem picks an item of a header menu (openMenu).
 export async function menuItem(page, name, which = 'room') {
   const menu = await openMenu(page, which);
-  await menu.getByRole(['My rooms and profile', 'Open documents in a new window', 'Open chat in a new window'].includes(name) ? 'link' : 'button', { name, exact: true }).click();
+  await menu.getByRole(['My rooms and profile', 'Open documents in a new window', 'Open chat in a new window', 'Personas', 'AI in this room'].includes(name) ? 'link' : 'button', { name, exact: true }).click();
+}
+
+// openPersonas opens the Personas sheet: the room menu's Personas opens AI in this room › Personas,
+// whose button opens the sheet (040 phase 1).
+export async function openPersonas(page) {
+  await menuItem(page, 'Personas');
+  await page.locator('#ai').getByRole('button', { name: 'Open the Personas sheet' }).click();
+  await expect(page.locator('#personas')).toBeVisible();
 }
 
 // messageAction runs Edit or Delete on a line through its actions button (005-AC35).
@@ -406,7 +414,7 @@ export const personaRow = (page, name) => page.locator('#persona-list .persona-r
 // personaSheet opens name's sheet from its row in the Personas list, on tab (009-AC2), and returns
 // the sheet; the list stays open under it.
 export async function personaSheet(page, name, tab = 'Identity') {
-  if (!(await page.locator('#personas').isVisible())) await menuItem(page, 'Personas');
+  if (!(await page.locator('#personas').isVisible())) await openPersonas(page);
   await personaRow(page, name).click();
   const sheet = page.locator('#persona-sheet');
   await expect(sheet.locator('#persona-sheet-title')).toHaveText(new RegExp(` ${name}$`));
@@ -482,7 +490,7 @@ export async function newRoomEditor(page) {
 // Add a persona opens (035-AC14); the Personas sheet stays open.
 export async function addFromLibrary(page, title, section = 'Built-in') {
   const panel = page.locator('#personas');
-  if (!(await panel.isVisible())) await menuItem(page, 'Personas');
+  if (!(await panel.isVisible())) await openPersonas(page);
   await panel.getByRole('button', { name: 'Add a persona', exact: true }).click();
   const picker = page.locator('#persona-picker');
   await picker.getByRole('group', { name: section }).getByRole('radio', { name: new RegExp(`^${title}, v`) }).check();

@@ -3,8 +3,8 @@ import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'nod
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { roomWith, personaSheet, agentState, uniq, appointAdmin, fakeDaemon, skillZip, patchPersona, menuItem, personaRow, confirmSheet,
-  noOverflow, smallTargets, openStrip, patchJSON, editPersona } from './helpers.js';
+import { roomWith, personaSheet, agentState, uniq, appointAdmin, fakeDaemon, skillZip, patchPersona, personaRow, confirmSheet,
+  noOverflow, smallTargets, openStrip, patchJSON, editPersona, openPersonas } from './helpers.js';
 import { adminToken, gitPort } from './playwright.config.js';
 
 // call sends a JSON request with page's session and returns its status and body.
@@ -284,7 +284,7 @@ test('persona library: a room of 12 personas', async ({ browser, request }, test
   await picker.getByRole('button', { name: 'Close' }).click();
   await expect(plus).toBeFocused();
 
-  await menuItem(alice, 'Personas');
+  await openPersonas(alice);
   const sheetAdd = alice.locator('#personas').getByRole('button', { name: 'Add a persona', exact: true });
   await expect(sheetAdd).toHaveAttribute('aria-disabled', 'true');
   await expect(alice.locator('#personas-full')).toBeVisible();
@@ -325,7 +325,7 @@ test('persona library: a room of 12 personas', async ({ browser, request }, test
 // At 390 and 1440 px.
 test('persona library: the Personas sheet rows', async ({ browser, request }, testInfo) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice' + uniq()]);
-  await menuItem(alice, 'Personas');
+  await openPersonas(alice);
   const panel = alice.locator('#personas');
   const add = panel.getByRole('button', { name: 'Add a persona', exact: true });
   await expect(add).toHaveClass(/btn-primary/);
@@ -434,7 +434,7 @@ test('persona library: the picker after a failed add', async ({ browser, request
   const grill = (await agentState(alice, room.id)).personas[0].id;
   const saved = await call(alice, 'POST', `/api/rooms/${room.id}/personas/${grill}/library`);
   expect(saved.status).toBe(201);
-  await menuItem(alice, 'Personas');
+  await openPersonas(alice);
   await alice.locator('#personas').getByRole('button', { name: 'Add a persona', exact: true }).click();
   const picker = alice.locator('#persona-picker');
   const yours = picker.getByRole('group', { name: 'Yours' });

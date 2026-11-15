@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, menuItem, personaRow, personaSheet, agentState, unfoldTabs, appointAdmin, patchPersona, addFromLibrary, editPersona } from './helpers.js';
+import { roomWith, personaRow, personaSheet, agentState, unfoldTabs, appointAdmin, patchPersona, addFromLibrary, editPersona, openPersonas } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const sizes = { phone: { width: 390, height: 844 }, desktop: { width: 1440, height: 900 } };
@@ -102,7 +102,7 @@ for (const [size, viewport] of Object.entries(sizes)) {
   test(`persona sheet: keyboard only at ${viewport.width} px`, async ({ browser, request }) => {
     const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
     await alice.setViewportSize(viewport);
-    await menuItem(alice, 'Personas');
+    await openPersonas(alice);
     await personaRow(alice, 'Grill').focus();
     await alice.keyboard.press('Enter');
     const sheet = alice.locator('#persona-sheet');
@@ -203,7 +203,7 @@ test('persona sheet: every 005 control is reachable', async ({ browser, request 
   }));
   await alice.reload();
 
-  await menuItem(alice, 'Personas');
+  await openPersonas(alice);
   const list = alice.locator('#personas');
   for (const id of old005.ids) await expect(list.locator('#' + id), id).toHaveCount(1);
   await expect(list.locator('#room-skill-copy')).toBeVisible();
@@ -229,10 +229,10 @@ test('persona sheet: every 005 control is reachable', async ({ browser, request 
 });
 
 // 009-AC2: the sheet owns one history entry, whatever tabs were opened: Back after closing stays
-// closed. Opened from Room settings › Personas, closing goes back there.
-test('persona sheet: history and the way back to Room settings', async ({ browser, request }) => {
+// closed. Opened from AI in this room › Personas, closing goes back there.
+test('persona sheet: history and the way back to AI in this room', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
-  await menuItem(alice, 'Personas');
+  await openPersonas(alice);
   const sheet = await personaSheet(alice, 'Grill', 'Model');
   await sheet.getByRole('link', { name: 'Triggers', exact: true }).click();
   await expect(alice).toHaveURL(/#personas\/\d+\/triggers$/);
@@ -244,13 +244,13 @@ test('persona sheet: history and the way back to Room settings', async ({ browse
   const me = await alice.evaluate(() => window.grillRoom.me.id);
   expect((await request.put(`/api/rooms/${room.id}/admins/${me}`, { headers: { Authorization: `Bearer ${adminToken}` } })).status()).toBe(204);
   await alice.reload();
-  await alice.evaluate(() => { location.hash = '#manage/personas'; });
+  await alice.evaluate(() => { location.hash = '#ai/personas'; });
   await alice.locator('#manage-personas').getByRole('link', { name: '🔥 Grill' }).click();
-  await expect(alice.locator('#manage')).toBeHidden();
+  await expect(alice.locator('#ai')).toBeHidden();
   await expect(sheet.locator('#persona-sheet-title')).toHaveText('🔥 Grill');
   await sheet.getByRole('button', { name: 'Close' }).click();
-  await expect(alice.locator('#manage')).toBeVisible();
-  await expect(alice).toHaveURL(/#manage\/personas$/);
+  await expect(alice.locator('#ai')).toBeVisible();
+  await expect(alice).toHaveURL(/#ai\/personas$/);
   await expect(alice.locator('#manage-personas')).toBeVisible();
 });
 

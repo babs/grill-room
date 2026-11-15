@@ -162,12 +162,12 @@ function AdminRow({ p, base, api, show, done, me, makeHost }) {
 /**
  * TabBar is a row of tab links, each a deep link (005-AC15, 005-AC16): links keep every tab in the
  * keyboard's reach and in the history, with no ARIA tab widget to drive.
- * header folds a page's own bar into its app header's ☰ on a phone (kit/ui.js).
+ * header folds a page's own bar, when it overflows, into its app header's ☰ (kit/ui.js).
  * @param {{tabs: string[][], active: string, href: (id: string) => string, label: string, cls?: string, header?: boolean}} props
  */
 export function TabBar({ tabs, active, href, label, cls, header }) {
   const nav = useRef(/** @type {HTMLElement | null} */ (null));
-  // A bar folded on a phone names its current tab; one that scrolls keeps it in sight (005-AC35).
+  // A bar that overflows folds into its menu, named after the current tab (005-AC35, kit/ui.js).
   // A tab added later, Glossary once its engine shows, may make the bar overflow.
   useEffect(() => { window.grillShowTab(nav.current); }, [active, tabs.length]);
   return html`<nav ref=${nav} class=${'tabs' + (cls ? ' ' + cls : '')} data-header=${header ? '' : undefined} aria-label=${label}>${tabs.map(([id, name]) => html`<a key=${id} href=${href(id)}

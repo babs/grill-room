@@ -214,6 +214,15 @@ for (const [size, viewport] of Object.entries({ phone: sizes.phone, desktop: siz
       expect.soft(m.clipped, t).toEqual([]);
     }
     await manage.getByRole('button', { name: 'Close' }).first().click();
+    // AI in this room, its tabs moved from Room settings (040-AC1): one primary per tab, nothing clipped.
+    for (const t of ['status', 'personas', 'plugins', 'network', 'glossary', 'voices']) {
+      await alice.goto(alice.url().split('#')[0] + '#ai/' + t);
+      await expect(alice.locator('#ai #panel-' + t)).toBeVisible();
+      const m = await probe(alice, '#ai');
+      expect.soft(m.primaries.length, `ai ${t}: ${m.primaries}`).toBeLessThanOrEqual(1);
+      expect.soft(m.clipped, 'ai ' + t).toEqual([]);
+    }
+    await alice.locator('#ai .sheet-head .close').click();
 
     // Notifications: full screen on a phone, the push explanation before the tab-title setting (004b-AC12).
     await menuItem(alice, 'Notifications', 'me');

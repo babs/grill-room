@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon, menuItem, confirmSheet, personaRow, personaSheet, addSecretary, upload, commentOnDocument } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, confirmSheet, personaRow, personaSheet, addSecretary, upload, commentOnDocument, openPersonas } from './helpers.js';
 
 const agentLines = (page) => page.locator('#messages li.msg.agent');
 
@@ -23,7 +23,7 @@ test('triggers: chain pause, re-arm, suspend', async ({ browser, request, baseUR
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     await pairDaemon(alice, daemon);
-    await menuItem(alice, 'Personas');
+    await openPersonas(alice);
     panel = alice.locator('#personas');
     await panel.getByLabel('Auto-turn limit').fill('3');
     await panel.getByRole('button', { name: 'Set' }).click();

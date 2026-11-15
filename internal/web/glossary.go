@@ -21,7 +21,7 @@ const (
 	promptBudget = 240
 	// promptFrame is what the sentence's own words cost.
 	promptFrame = 12
-	// glossaryCapacity is how many terms of a usual size fit, as Manage says it: 3 tokens each on
+	// glossaryCapacity is how many terms of a usual size fit, as AI in this room's Words to recognise says it: 3 tokens each on
 	// the S10 terms.
 	glossaryCapacity = 70
 	maxGlossaryTerm  = 60

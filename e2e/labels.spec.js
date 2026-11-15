@@ -1,11 +1,11 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, menuItem, personaRow, personaSheet } from './helpers.js';
+import { roomWith, personaRow, personaSheet, openPersonas } from './helpers.js';
 
 // 005-AC9 009-AC1: the persona sheet offers explicit models and efforts only, never a default, and
 // the Personas list says what a persona runs on in full words.
 test('persona panel: no default model or effort', async ({ browser, request }) => {
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
-  await menuItem(alice, 'Personas');
+  await openPersonas(alice);
   await expect(personaRow(alice, 'Grill').locator('.pr-meta')).toHaveText('sonnet · effort medium · on mention only');
   const grill = await personaSheet(alice, 'Grill', 'Model');
   await expect(grill.getByLabel('Model').locator('option')).toHaveText(['haiku', 'sonnet', 'opus', 'fable']);

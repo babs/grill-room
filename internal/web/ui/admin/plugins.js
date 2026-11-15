@@ -1,4 +1,4 @@
-// Room plugins (spec 009): Room settings › Plugins, the add sheet and the host's approval sheet.
+// Room plugins (spec 009): AI in this room › Plugins, the add sheet and the host's approval sheet.
 // Preact, htm and signals, like /admin. room.js loads the list (GET .../plugins) on each "plugins"
 // event and hands it over as window.grillPlugins, followed by a grill:plugins event; its status
 // strip opens the approval sheet with a grill:plugin-review event.
@@ -225,7 +225,7 @@ function AddSheet({ base, personas, close }) {
     const picked = names.split(/[\s,]+/).filter(Boolean);
     fetchJSON('POST', base + '/plugins/host-fetch', { url, ref, entries: picked, personas: on }).then(() => {
       close();
-      toast('Asked the AI host. The request waits in Room settings › Plugins until the host fetches it.');
+      toast('Asked the AI host. The request waits in AI in this room › Plugins until the host fetches it.');
     }).catch((err) => setSaid(sentence(/** @type {Error} */ (err).message))).finally(() => setBusy(false));
   };
   const run = () => {

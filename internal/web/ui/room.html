@@ -103,9 +103,9 @@
   <button type="button" id="invite-open" data-icon="invite">Invite people</button>
   <button type="button" id="manage-open" data-icon="settings" hidden>Room settings</button>
   <a id="links-open" href="#manage/links" data-icon="clip" hidden><span id="links-label"></span></a>
-  <button type="button" id="personas-open" data-icon="personas">Personas</button>
-  <a id="overview-open" href="#call-overview" data-icon="transcribe">Call and voice-to-text…</a>
   <a id="ai-open" href="#ai" data-icon="info">AI in this room</a>
+  <a id="personas-open" href="#ai/personas" data-icon="personas">Personas</a>
+  <a id="overview-open" href="#call-overview" data-icon="transcribe">Call and voice-to-text…</a>
   <a id="docs-window-menu" data-icon="external">Open documents in a new window</a>
   <a id="chat-window-menu" data-icon="external">Open chat in a new window</a>
   <button type="button" id="host-open" data-icon="host" hidden>Run the AI on my computer</button>
@@ -243,17 +243,22 @@
   </div>
   <div id="room-admin"></div>
 </dialog>
-<!-- What the personas need to answer, and who acts on it (039). -->
+<!-- What the personas need to answer, who acts on it (039), and the room's AI settings in tabs, #ai/<tab> (040). -->
 <dialog id="ai" class="sheet wide full" aria-labelledby="ai-title">
   <div class="sheet-head">
     <h2 id="ai-title">AI in this room</h2>
     <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
   </div>
-  <ul id="ai-rows" class="list-rows" aria-label="What the AI needs"></ul>
-  <section aria-labelledby="ai-choices-title">
-    <h3 id="ai-choices-title">The AI host's choices</h3>
-    <ul id="ai-choices" class="ai-choices"></ul>
-  </section>
+  <nav id="ai-tabs" class="tabs" aria-label="AI in this room"></nav>
+  <div id="panel-status" class="tab-panel">
+    <ul id="ai-rows" class="list-rows" aria-label="What the AI needs"></ul>
+    <section aria-labelledby="ai-choices-title">
+      <h3 id="ai-choices-title">The AI host's choices</h3>
+      <ul id="ai-choices" class="ai-choices"></ul>
+    </section>
+  </div>
+  <!-- admin/room-admin.js mounts the other tabs here. -->
+  <div id="ai-settings"></div>
 </dialog>
 <!-- Read-only (042-AC1): each row says who changes it and links there; no control of its own. -->
 <dialog id="call-overview" class="sheet wide full" aria-labelledby="call-overview-title">

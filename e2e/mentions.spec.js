@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon, menuItem, sandboxHas, openStrip, addSecretary, upload, commentOnDocument, sandboxPrompts, approveEverything, messageAction, addFromLibrary } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, sandboxHas, openStrip, addSecretary, upload, commentOnDocument, sandboxPrompts, approveEverything, messageAction, addFromLibrary, openPersonas } from './helpers.js';
 
 async function say(page, text) {
   await page.locator('#body').fill(text);
@@ -203,7 +203,7 @@ test('mentions: turn states, stop, pending and offline', async ({ browser, reque
 
     // With "approve everything", Bob's new persona waits for the host.
     await approveEverything(admin);
-    await menuItem(bob, 'Personas');
+    await openPersonas(bob);
     await addFromLibrary(bob, 'Grill');
     await expect(bob.locator('#personas-status')).toHaveText('Added 🔥 Grill-2. It waits for the AI host\'s approval.');
     await say(alice, '@Grill-2 are you there?');

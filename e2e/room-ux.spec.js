@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures.js';
 import { fileURLToPath } from 'node:url';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, playSTT, newRoomEditor, rowAction, unfoldTabs } from './helpers.js';
+import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, newRoomEditor, rowAction, unfoldTabs } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -75,19 +75,20 @@ for (const vp of widths) {
     await expect(bob.locator('#rename-profile-label')).toBeHidden();
   });
 
-  // 005-AC21 005-AC15: a room admin renames Bob from the Members and admins tab of Manage, a wide sheet with
+  // 005-AC21 005-AC15: a room admin renames Bob from the Members tab of Room settings, a wide sheet with
   // deep-linked tabs, full screen on a phone; Bob gets a notice. The super-admin renames him from
   // /admin. Both are audited.
-  test(`admin rename and Manage tabs, ${vp.name}`, async ({ browser, request }) => {
+  test(`admin rename and Room settings tabs, ${vp.name}`, async ({ browser, request }) => {
     const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
     await makeAdmin(request, alice, room);
     await alice.setViewportSize(vp);
-    await playSTT(alice, room.id, { engines: ['whisper'], glossary: true });
+    // Reloaded, the page reads Alice's new role.
+    await alice.reload();
     await alice.goto(`/r/${room.id}#manage/admins`);
     const sheet = alice.locator('#manage');
     await expect(sheet).toBeVisible();
     await expect(sheet.locator('#tab-admins')).toHaveAttribute('aria-current', 'page');
-    await expect(sheet.locator('#tab-general, #tab-invites, #tab-admins, #tab-personas, #tab-skills, #tab-plugins, #tab-documents, #tab-export, #tab-glossary')).toHaveCount(9);
+    await expect(sheet.locator('#tab-general, #tab-invites, #tab-admins, #tab-links, #tab-documents, #tab-export')).toHaveCount(6);
     const box = await sheet.boundingBox();
     if (vp.width < 400) expect(box.width).toBe(vp.width);
     else expect(box.width).toBeGreaterThan(900);
@@ -128,10 +129,8 @@ for (const vp of widths) {
   test(`modal dismissal, ${vp.name}`, async ({ browser, request }) => {
     const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
     await alice.setViewportSize(vp);
-    // A plain member gets Room settings while a worker reads the glossary (007-AC14).
-    await playSTT(alice, room.id, { engines: ['whisper'], glossary: true });
     // Each opens from a header menu: focus goes back to that menu's button.
-    for (const [item, which, id] of [['Personas', 'room', '#personas'], ['Room settings', 'room', '#manage'], ['Change my name', 'me', '#rename']]) {
+    for (const [item, which, id] of [['Personas', 'room', '#ai'], ['Room settings', 'room', '#manage'], ['Change my name', 'me', '#rename']]) {
       const opener = alice.locator(which === 'me' ? '#me' : '#room-open');
       const dialog = alice.locator(id);
       await menuItem(alice, item, which);
@@ -351,7 +350,7 @@ for (const vp of widths) {
   });
 }
 
-// wholeTab: the bar's current tab shows whole, folded on a phone as the name on its button.
+// wholeTab: the bar's current tab shows whole, or, the bar folded, as the name on its button.
 const wholeTab = (nav) => nav.evaluate((n) => {
   const cur = n.querySelector('[aria-current=page]');
   const b = 'menu' in n.dataset ? n.querySelector('.tabs-menu') : cur;
@@ -359,10 +358,10 @@ const wholeTab = (nav) => nav.evaluate((n) => {
   return { name: (b.textContent || '').trim(), whole: r.left >= box.left - 0.5 && r.right <= box.right + 0.5 && b.scrollWidth <= b.clientWidth + 0.5 };
 });
 
-// 038-AC9: Room settings names its tabs Members and admins and Deleted documents, their deep links
+// 038-AC9 040-AC1: Room settings names its tabs Members and Deleted documents (/admin: Members and admins), their deep links
 // unchanged; the blocked profiles show under the member list, no longer under Invites. The longer
-// names fold or scroll: no sideways overflow, the current tab whole, at 390, 820 and 1440 px.
-test('Room settings: Members and admins, Deleted documents', async ({ browser, request }) => {
+// names fold the bar when it overflows: no sideways overflow, the current tab whole, at 390, 820 and 1440 px.
+test('Room settings: Members, Deleted documents', async ({ browser, request }) => {
   const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   await makeAdmin(request, alice, room);
   const bobID = await bob.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()).then((d) => d.me.id), room.id);
@@ -375,13 +374,13 @@ test('Room settings: Members and admins, Deleted documents', async ({ browser, r
     await alice.goto('about:blank');
     await alice.goto(`/r/${room.id}#manage/admins`);
     await expect(sheet.locator('#tab-admins')).toHaveAttribute('aria-current', 'page');
-    await expect(sheet.locator('#tab-admins')).toHaveText('Members and admins');
+    await expect(sheet.locator('#tab-admins')).toHaveText('Members');
     const [members, blocked] = [sheet.locator('#room-admins'), sheet.locator('#blocked')];
     await expect(blocked).toContainText('Bob');
     await expect(sheet.getByRole('heading', { name: 'Blocked from rejoining' })).toBeVisible();
     const [m, b] = [await members.boundingBox(), await blocked.boundingBox()];
     expect(b.y, `${width}: blocked under the members`).toBeGreaterThanOrEqual(m.y + m.height);
-    await expect.poll(() => wholeTab(nav), `${width}: admins tab`).toEqual({ name: 'Members and admins', whole: true });
+    await expect.poll(() => wholeTab(nav), `${width}: admins tab`).toEqual({ name: 'Members', whole: true });
     expect(await noOverflow(alice), `${width} px`).toEqual([]);
     if (width !== 820) await alice.screenshot({ path: `${shots}room-settings-members-${width}.png` });
 

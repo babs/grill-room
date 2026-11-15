@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon, menuItem, openStrip, personaSheet, closePersonas, appointAdmin, agentState, patchPersona, addFromLibrary } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, openStrip, personaSheet, closePersonas, appointAdmin, agentState, patchPersona, addFromLibrary, openPersonas } from './helpers.js';
 
 const led = (page, name) => page.locator(`button.persona[data-name="${name}"] .led`);
 
@@ -15,7 +15,7 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
   await expect(alice.locator('button.persona[data-name="Grill"]')).toContainText('🔥');
 
   const panel = alice.locator('#personas');
-  await menuItem(alice, 'Personas');
+  await openPersonas(alice);
   await expect(panel.locator('.persona-row')).toHaveCount(1);
   await addFromLibrary(alice, 'Secretary');
   await expect(panel.locator('.persona-row')).toHaveCount(2);

@@ -388,9 +388,10 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); }
 .persona-skills li:not(.empty) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); padding: var(--sp-1) 0; overflow-wrap: anywhere; }
 .persona-skills .skill-add { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 .persona-skills .skill-add select { flex: 1; min-width: 10rem; width: auto; }
-#manage .said { color: var(--danger); }
+/* Room settings and the AI in this room tabs (admin/room-admin.js); Status has no status line. */
+:is(#manage, #ai) .said { color: var(--danger); }
 /* No room taken above the tabs until there is something to say. */
-#manage .said:empty { min-height: 0; margin: 0; }
+:is(#manage, #ai) .said:empty { min-height: 0; margin: 0; }
 /* Room plugins (admin/plugins.js): the list, the add sheet and the approval sheet. */
 .persona-plugins li { flex-direction: column; align-items: stretch; gap: 0; }
 .persona-plugins li > label { color: var(--text); }

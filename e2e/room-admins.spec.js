@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas, rowAction, personMenu, appointAdmin, unfoldTabs, uniq } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas, rowAction, personMenu, appointAdmin, unfoldTabs, uniq, openPersonas } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const phone = { width: 390, height: 844 };
@@ -141,13 +141,16 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     const carol = await join(browser, request, id, 'Carol', vp);
     const api = `/api/rooms/${id}`;
 
-    // Plain members: only the plugins (009-AC5) and the transcription glossary in Manage (005-AC23),
-    // while a worker reads it (007-AC14), and the API says no.
+    // Plain members: the plugins (009-AC5) and the transcription glossary in AI in this room (005-AC23),
+    // while a worker reads it (007-AC14), no room panel in Room settings, and the API says no.
     await playSTT(bob, id, { engines: ['whisper'], glossary: true });
+    await menuItem(bob, 'AI in this room');
+    await unfoldTabs(bob.locator('#ai nav.tabs'));
+    await bob.locator('#ai #tab-glossary').click();
+    await expect(bob.locator('#ai #stt-glossary')).toBeVisible();
+    await bob.locator('#ai .sheet-head .close').click();
     await menuItem(bob, 'Room settings');
-    await unfoldTabs(bob.locator('#manage nav.tabs'));
-    await bob.locator('#manage #tab-glossary').click();
-    await expect(bob.locator('#manage #stt-glossary')).toBeVisible();
+    await expect(bob.locator('#manage #tab-invites')).toHaveAttribute('aria-current', 'page');
     await expect(bob.locator('#manage #room-panel')).toHaveCount(0);
     await bob.locator('#manage-close').click();
     await stopSTT(bob);
@@ -174,7 +177,7 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     await expect(panel.locator('#invites-all .list-row', { hasText: 'Your shareable link' })).toHaveCount(1);
     await expect(panel.locator('#invites-all .list-row:not(.head)').first()).toContainText('Alice');
     await fits(alice);
-    await tab(panel, 'Members and admins');
+    await tab(panel, 'Members');
     await panel.getByRole('button', { name: 'Make Bob a room admin' }).click();
     await expect(panel.locator('#room-admins > li', { hasText: 'Bob' }).locator('.badge.role')).toHaveText('admin');
     await expect(carol.locator('#messages')).toContainText('Alice made Bob a room admin.');
@@ -182,7 +185,7 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     // Bob, now an admin, removes Alice; she loses her panel.
     await expect(bob.locator('#manage-open')).not.toHaveAttribute('hidden');
     const bobPanel = await openManage(bob);
-    await tab(bobPanel, 'Members and admins');
+    await tab(bobPanel, 'Members');
     await bobPanel.getByRole('button', { name: 'Remove Alice from the room admins' }).click();
     await expect(alice.locator('#manage #room-panel')).toHaveCount(0);
     await bobPanel.getByRole('button', { name: 'Step down as a room admin' }).click();
@@ -249,7 +252,7 @@ test('a room skill survives its author leaving', async ({ browser, request, base
   await expect(bobProfile.locator('#skill-status')).toHaveText('Added bobs v1.');
 
   await bob.setViewportSize(phone);
-  await menuItem(bob, 'Personas');
+  await openPersonas(bob);
   const copy = bob.locator('#room-skill-copy');
   await expect(copy.getByLabel('Copy one of your personal skills into the room').locator('option')).toHaveText(['bobs v1']);
   await copy.getByRole('button', { name: 'Copy' }).scrollIntoViewIfNeeded();
@@ -294,7 +297,7 @@ test('a room skill survives its author leaving', async ({ browser, request, base
 for (const vp of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'phone', ...phone }]) {
   // 016-AC6 016-AC8 016-AC11 016-AC12 016-AC13 016-AC14: a room admin removes Bob with a block from
   // People › ⋯; Bob's page ends, his line reads "(removed)", his rejoin is refused. Unblocked from
-  // Room settings › Members and admins (038-AC9), he rejoins and the mark goes. A room admin's row offers no removal,
+  // Room settings › Members (038-AC9, 040-AC1), he rejoins and the mark goes. A room admin's row offers no removal,
   // and a room admin cannot leave; Carol leaves, and the room leaves her profile.
   test(`remove, block, unblock and leave, ${vp.name}`, async ({ browser, request }) => {
     const { room, pages: [alice, bob, carol] } = await roomWith(browser, request, ['Alice', 'Bob', 'Carol']);

@@ -103,9 +103,9 @@ test('no emoji icon and no native title in the room chrome', async ({ browser, r
   await alice.setViewportSize(desktop);
   await eachPersonaTab(alice, async (_, tab) => expect(await chromeFaults(alice), `persona ${tab}`).toEqual([]));
   await closePersonas(alice);
-  for (const tab of ['general', 'invites', 'admins', 'personas', 'skills', 'plugins', 'documents', 'export']) {
-    await alice.goto(alice.url().split('#')[0] + '#manage/' + tab);
-    await expect(alice.locator(`#panel-${tab}`)).toBeVisible();
+  for (const tab of ['manage/general', 'manage/invites', 'manage/admins', 'manage/documents', 'manage/export', 'ai/status', 'ai/personas', 'ai/plugins']) {
+    await alice.goto(alice.url().split('#')[0] + '#' + tab);
+    await expect(alice.locator(`#panel-${tab.split('/')[1]}`)).toBeVisible();
     expect(await chromeFaults(alice), `settings ${tab}`).toEqual([]);
   }
 });
@@ -159,13 +159,16 @@ test('sheets keep their top across tabs', async ({ browser, request }) => {
   expect(new Set(tops).size, 'persona sheet ' + tops).toBe(1);
   await closePersonas(alice);
   const url = alice.url().split('#')[0];
-  const settings = [];
-  for (const tab of ['general', 'invites', 'admins', 'personas', 'skills', 'plugins', 'documents', 'export']) {
-    await alice.goto(url + '#manage/' + tab);
-    await expect(alice.locator(`#panel-${tab}`)).toBeVisible();
-    settings.push(Math.round(await alice.locator('#manage .sheet-head').evaluate((e) => e.getBoundingClientRect().top)));
+  for (const [sheet, tabs] of [['manage', ['general', 'admins', 'invites', 'links', 'documents', 'export']],
+    ['ai', ['status', 'personas', 'plugins', 'network', 'glossary', 'voices']]]) {
+    const settings = [];
+    for (const tab of tabs) {
+      await alice.goto(url + '#' + sheet + '/' + tab);
+      await expect(alice.locator(`#panel-${tab}`)).toBeVisible();
+      settings.push(Math.round(await alice.locator(`#${sheet} .sheet-head`).evaluate((e) => e.getBoundingClientRect().top)));
+    }
+    expect(new Set(settings).size, sheet + ' ' + settings).toBe(1);
   }
-  expect(new Set(settings).size, 'room settings ' + settings).toBe(1);
 });
 
 // emptyStyle is the look of an empty state: one class, one set of computed styles. Read once it
@@ -189,9 +192,9 @@ test('one empty-state style', async ({ browser, request }) => {
   styles.plugins = await emptyStyle(caps.getByText(/^No plugins in this room yet/).first());
   await closePersonas(alice);
   const url = alice.url().split('#')[0];
-  for (const [tab, text] of [['skills', 'None yet'], ['documents', 'No deleted document'], ['plugins', 'No plugins yet']]) {
-    await alice.goto(url + '#manage/' + tab);
-    styles['settings ' + tab] = await emptyStyle(alice.locator(`#panel-${tab}`).getByText(text, { exact: false }).first());
+  for (const [tab, text] of [['ai/personas', 'None yet'], ['manage/documents', 'No deleted document'], ['ai/plugins', 'No plugins yet']]) {
+    await alice.goto(url + '#' + tab);
+    styles['settings ' + tab] = await emptyStyle(alice.locator(`#panel-${tab.split('/')[1]}`).getByText(text, { exact: false }).first());
   }
   await alice.goto(url);
   await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
@@ -480,10 +483,10 @@ test("phone: a sheet's folded tab bar keeps its own button", async ({ browser, r
   await expect(nav.locator(':scope > a').first()).toBeVisible();
 });
 
-// 005-AC35 004b-AC3: whatever the font draws, the tab scrolled to leaves no sliver of the tab before
-// it: CI's fonts, wider than a workstation's, hit fractional tab edges. Each size changes the edges.
-// A phone folds such a bar: a narrowed bar on a wide screen still scrolls.
-test('a tab bar scrolls to whole pixels at any glyph width', async ({ browser }) => {
+// 005-AC35 004b-AC3 040-AC5: whatever the font draws, a bar too narrow for its tabs folds, on a wide
+// screen too, its menu named after the current tab: no scrolled bar with a sliver of a tab at its
+// edge. CI's fonts, wider than a workstation's, hit fractional tab edges; each size changes them.
+test('a narrowed tab bar folds at any glyph width', async ({ browser }) => {
   // The page's CSP refuses an injected style: only this test bypasses it.
   const page = await (await browser.newContext({ viewport: desktop, bypassCSP: true })).newPage();
   await signIn(page, undefined, 'audit');
@@ -494,11 +497,9 @@ test('a tab bar scrolls to whole pixels at any glyph width', async ({ browser })
     await page.addStyleTag({ content: `.tabs a { font-size: ${px}px !important }` });
     await page.goto('/admin#libraries');
     await page.goto('/admin#audit');
-    await expect.poll(() => nav.evaluate((n) => {
-      const lo = n.getBoundingClientRect().left + n.clientLeft;
-      const cut = [...n.querySelectorAll('a')].filter((a) => { const r = a.getBoundingClientRect(); return r.left < lo - 0.5 && r.right > lo + 0.5; }).length;
-      return n.scrollLeft > 0 ? cut : 'not scrolled';
-    }), `${px} px`).toBe(0);
+    await expect.poll(() => nav.evaluate((n) => 'menu' in n.dataset), `${px} px`).toBe(true);
+    await expect(page.locator('.app-header > .tabs-menu'), `${px} px`).toBeVisible();
+    await expect(page.locator('.app-header > .tabs-menu'), `${px} px`).toHaveText(await page.locator('#tab-audit').evaluate((a) => a.firstChild.textContent.trim()));
   }
 });
 

@@ -195,7 +195,10 @@ async function loadRoom() {
   // An appointment or a step-down changes who turns plugins on (Capabilities).
   renderPersonaSheet();
   renderParticipants();
-  renderAI();
+  // An open sheet follows the hash again, now that the room says who the viewer is: the role sets
+  // its tabs (040-AC3). A closed one, maybe still holding its hash until its close event, stays closed.
+  if ($('ai').open) followAI();
+  else renderAI();
   showEmpty();
   // The room admin panel (admin/room-admin.js) renders from the same answer.
   window.grillRoom = data;
@@ -1487,7 +1490,7 @@ $('strip-more').addEventListener('click', () => {
   updateStrip();
 });
 
-// Manage, its tabs and its deep links are admin/room-admin.js's (004-AC8, 005-AC15).
+// Room settings, its tabs and its deep links are admin/room-admin.js's (004-AC8, 005-AC15), and so are AI in this room's tabs but Status (040-AC6).
 
 // Menus are popovers (005-AC32): the browser closes them on a click outside and on Escape; picking
 // an item closes them too.
@@ -3938,7 +3941,7 @@ async function loadSkills(retry = true) {
   }
 }
 
-// loadPlugins reads the room's plugins (009-AC5); Room settings › Plugins and the approval sheet
+// loadPlugins reads the room's plugins (009-AC5); AI in this room › Plugins and the approval sheet
 // (admin/plugins.js) get them as window.grillPlugins.
 async function loadPlugins() {
   const res = await netFetch(api + '/plugins');
@@ -4011,7 +4014,7 @@ function pluginsBlock(p) {
   box.append(legend);
   if (!plugins.length) {
     const empty = Object.assign(document.createElement('p'), { className: 'empty' });
-    empty.append('No plugins in this room yet. A room admin adds them in ', Object.assign(document.createElement('a'), { href: '#manage/plugins', textContent: 'Room settings › Plugins' }), '.');
+    empty.append('No plugins in this room yet. A room admin adds them in ', Object.assign(document.createElement('a'), { href: '#ai/plugins', textContent: 'AI in this room › Plugins' }), '.');
     box.append(empty);
     return box;
   }
@@ -4233,7 +4236,7 @@ function showPersonaTab(tab) {
     if (a.id === 'persona-tab-' + tab) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   }
-  // A bar folded on a phone names its current tab; one that scrolls keeps it in sight (005-AC35).
+  // A bar that overflows folds into its menu, named after the current tab (005-AC35, kit/ui.js).
   window.grillShowTab($('persona-tabs'));
 }
 
@@ -4280,8 +4283,8 @@ function renderPersonaSheet() {
   showPersonaTab(r.tab);
 }
 
-// sheetReturn is the Room settings link the sheet was opened from, to go back to on close;
-// sheetReturnStamp, that entry's return to the overview or Help (042-AC7).
+// sheetReturn is the Room settings or AI in this room link the sheet was opened from, to go back to
+// on close; sheetReturnStamp, that entry's return to the overview or Help (042-AC7).
 let sheetReturn = '';
 let sheetReturnStamp = null;
 
@@ -4295,8 +4298,8 @@ function followPersona(e) {
   }
   if (!d.open) {
     const from = e instanceof HashChangeEvent ? new URL(e.oldURL).hash : '';
-    sheetReturn = /^#manage(\/|$)/.test(from) ? from : '';
-    // Before the stamp follows the new entry: it is still Room settings'.
+    sheetReturn = /^#(manage|ai)(\/|$)/.test(from) ? from : '';
+    // Before the stamp follows the new entry: it is still the origin sheet's.
     sheetReturnStamp = sheetReturn ? stamp : null;
     personasStatus('');
     $('persona-body').replaceChildren();
@@ -4312,11 +4315,11 @@ $('persona-sheet').addEventListener('close', () => {
   // The close event is queued: a Back then Forward may have reopened the sheet meanwhile.
   if ($('persona-sheet').open) return;
   if ($('persona-menu').matches(':popover-open')) $('persona-menu').hidePopover();
-  // Opened from the overview or Help, it goes back there (042-AC7); from Room settings › Personas, there.
+  // Opened from the overview or Help, it goes back there (042-AC7); from AI in this room › Personas, there.
   if (sheetRoute() && !sheetBack()) {
     if (sheetReturn) {
       location.replace(sheetReturn);
-      // The replaced entry sits one past Room settings' own: one more step back to the overview.
+      // The replaced entry sits one past the origin sheet's own: one more step back to the overview.
       if (sheetReturnStamp) history.replaceState({ ...sheetReturnStamp, steps: sheetReturnStamp.steps + 1 }, '');
     } else history.replaceState(null, '', location.pathname + location.search);
   }
@@ -4418,7 +4421,7 @@ function aiRows() {
     const waits = !pl.needs_setup && ['inspecting', 'pending'].includes(pl.versions.at(-1)?.state);
     const hosts = pl.needs_setup || waits;
     rows.push({ id: 'plugin-' + pl.id, state: waits ? 'waiting' : 'blocked', lines: [pl.name + ': ' + pl.why + '.'], who: hosts ? who : 'a room admin',
-      actions: !hosts ? (meAdmin ? [{ label: 'Open Plugins', href: '#manage/plugins' }] : [])
+      actions: !hosts ? (meAdmin ? [{ label: 'Open Plugins', href: '#ai/plugins' }] : [])
         : host && !me ? [tell('The plugin ' + pl.name + ' in ' + roomName + ' does not load: ' + pl.why + '. Can you look at it?')] : [] });
   }
   return rows;
@@ -4481,7 +4484,7 @@ function aiChoices() {
     // Only an app that can host vouches for an empty list.
     li(conns.length ? 'Connectors: ' + conns.join(', ') : agent.online ? 'No connectors'
       : 'Connectors: shown once ' + (me ? 'your' : name + '\'s') + ' AI host app ' + (hostAppConnected(host) ? 'can host' : 'connects')),
-    li('Websites: see ', Object.assign(document.createElement('a'), { href: '#manage/network', textContent: 'Room settings › Websites and connectors' })),
+    li('Websites: see ', Object.assign(document.createElement('a'), { href: '#ai/network', textContent: 'AI in this room › Websites and connectors' })),
     li(me ? 'Only you change these, in your AI host app.' : 'Only ' + name + ' changes these, in their AI host app.'),
   ];
 }
@@ -4532,19 +4535,76 @@ function showApprovals() {
   $('ai').close();
 }
 
-// followAI opens or closes the sheet as the hash says: #ai is its deep link (039-AC1).
+// The AI sheet's tabs (040-AC1): Status is this page's, admin/room-admin.js mounts the others.
+const aiTabs = [['status', 'Status'], ['personas', 'Personas'], ['plugins', 'Plugins'], ['network', 'Websites and connectors'],
+  ['glossary', 'Words to recognise'], ['voices', 'Call voices']];
+// aiTab is the tab the hash asks for: #ai is Status; '' for a hash of another sheet.
+const aiTab = (hash) => (hash === '#ai' ? 'status' : hash.startsWith('#ai/') ? hash.slice(4) : '');
+
+// aiShown is the hash the open sheet shows: its close drops that one, not a link followed since.
+let aiShown = '';
+
+// followAI opens, switches or closes the sheet as the hash says: #ai and #ai/<tab> are its deep links (039-AC1, 040-AC1).
 function followAI() {
-  const want = !ended && location.hash === '#ai';
+  const asked = aiTab(location.hash);
+  // An ended room opens no sheet, and the hash would only linger (040-AC2).
+  if (asked && ended) history.replaceState(null, '', location.pathname + location.search);
+  let want = ended ? '' : asked;
+  // Call voices is a room admin's (040-AC3). A tab the viewer lacks shows the first, once the room says
+  // who they are, the hash saying so.
+  const mine = aiTabs.filter(([id]) => id !== 'voices' || meAdmin);
+  // myID is set with meAdmin, in the same task: wasIn turns true one await earlier.
+  if (want && myID && !mine.some(([id]) => id === want)) {
+    want = mine[0][0];
+    history.replaceState(history.state, '', '#ai/' + want);
+  }
   if (want && !$('ai').open) $('ai').showModal();
   else if (!want && $('ai').open) $('ai').close();
+  if (want) {
+    aiShown = location.hash;
+    showAITab(mine, want);
+  }
+  tellAITab(want);
   renderAI();
+}
+
+// tellAITab hands admin/room-admin.js the tab the sheet shows, '' for none: it mounts the tabs but
+// Status, and this page alone reads the hash, redirects included (040-AC6).
+function tellAITab(t) {
+  window.grillAITab = t;
+  dispatchEvent(new CustomEvent('grill:ai-tab', { detail: t }));
+}
+
+// showAITab marks the current tab of the bar, kept as long as the viewer's tabs stay the same: a
+// redraw would drop the focus from the tab just followed.
+function showAITab(mine, t) {
+  const nav = $('ai-tabs');
+  const ids = mine.map(([id]) => id).join();
+  if (nav.dataset.tabs !== ids) {
+    nav.dataset.tabs = ids;
+    nav.replaceChildren(...mine.map(([id, name]) => Object.assign(document.createElement('a'), { id: 'tab-' + id, href: '#ai/' + id, textContent: name })));
+  }
+  for (const a of nav.querySelectorAll(':scope > a')) {
+    if (a.id === 'tab-' + t) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  }
+  // Status's own links switch the tab: the focus they held goes to the tab shown, not to the page.
+  const lost = t !== 'status' && $('panel-status').contains(document.activeElement);
+  $('panel-status').hidden = t !== 'status';
+  window.grillShowTab(nav);
+  if (lost) {
+    const to = nav.querySelector('#tab-' + t);
+    (to?.checkVisibility() ? to : nav.querySelector('.tabs-menu'))?.focus();
+  }
 }
 addEventListener('hashchange', followAI);
 followAI();
 // Closed by Escape, a click outside or ✕: the deep link goes too, without a history entry.
 $('ai').addEventListener('close', (e) => {
+  // The close event comes a task late: a link followed meanwhile may have opened the sheet again.
   if ($('ai').open) return;
-  if (location.hash === '#ai' && !sheetBack()) history.replaceState(null, '', location.pathname + location.search);
+  if (location.hash === aiShown && !sheetBack()) history.replaceState(null, '', location.pathname + location.search);
+  tellAITab('');
   // After the page's focus return: a chat line redraws with the room's state, while the sheet is
   // open or soon after it closed, and its new link takes the focus for a few seconds, unless the
   // user has put it somewhere else or acted. An opener gone otherwise hands it to the composer.
@@ -4635,10 +4695,10 @@ function roomRows(data) {
   const none = !data.voice ? absent : !st ? '' : !st.available ? 'Voice-to-text is off' : !st.glossary ? absent : '';
   const rows = [none ? { id: 'glossary', lines: ['Words to recognise', none] }
     : { id: 'glossary', lines: ['Words to recognise', glossaryWords === null ? 'Loading…' : glossaryWords === false ? 'Could not load the words.'
-      : glossaryWords + (glossaryWords === 1 ? ' word' : ' words')], who: 'any member', actions: [ovLink('glossary', 'Open Words to recognise', '#manage/glossary')] }];
+      : glossaryWords + (glossaryWords === 1 ? ' word' : ' words')], who: 'any member', actions: [ovLink('glossary', 'Open Words to recognise', '#ai/glossary')] }];
   // Plain members have no Call voices tab: no link for them.
   rows.push(ttsOn ? { id: 'voices', lines: ['Call voices', 'pause ' + sp.quiet_ms / 1000 + ' s, resume ' + sp.resume_s + ' s, queue ' + sp.queue_s + ' s, up to ' + sp.words + ' words'],
-    who: 'room admins', actions: meAdmin ? [ovLink('voices', 'Open Call voices', '#manage/voices')] : [] } : { id: 'voices', lines: ['Call voices', absent] });
+    who: 'room admins', actions: meAdmin ? [ovLink('voices', 'Open Call voices', '#ai/voices')] : [] } : { id: 'voices', lines: ['Call voices', absent] });
   for (const p of agent.personas) {
     const name = p.badge + ' ' + p.name;
     rows.push(ttsOn ? { id: 'persona-' + p.id, lines: [name, p.speaks ? 'speaks in the call with ' + voiceName(p.voice) + ', rate ' + (p.voice_rate || 1) : 'stays silent in the call'],
@@ -4786,7 +4846,7 @@ function helpRows() {
     ...(meAdmin ? [row('admin', 'You are a room admin: you rename the room, manage members and invites, and delete the room.', 'Room settings', '#manage')] : []),
     ...(approves() ? [row('runs', 'You run the AI for this room: you approve its personas, skills and websites.', 'AI in this room', '#ai')] : []),
     ...(noEmail() ? [row('email', 'Your profile has no email: add one to keep your rooms across devices.', 'Add an email', '/profile#email')] : []),
-    ...(lastAdmin() ? [row('last-admin', 'You are the last room admin: make someone else room admin before you leave.', 'Room settings › Members and admins', '#manage/admins')] : [])];
+    ...(lastAdmin() ? [row('last-admin', 'You are the last room admin: make someone else room admin before you leave.', 'Room settings › Members', '#manage/admins')] : [])];
 }
 
 function renderHelp() {
@@ -4820,7 +4880,13 @@ function openPersonas() {
   loadTemplates().catch(console.error);
   loadSkills().catch(console.error);
 }
-$('personas-open').addEventListener('click', () => openPersonas());
+// AI in this room › Personas (admin/room-admin.js) hands over to the Personas sheet, which opens alone.
+window.grillOpenPersonas = () => {
+  // The Personas sheet replaces the AI sheet: its close must not go back to the overview (042-AC7).
+  history.replaceState(null, '', location.pathname + location.search);
+  $('ai').close();
+  openPersonas();
+};
 $('personas-close').addEventListener('click', () => $('personas').close());
 
 // The persona library picker (035-AC14): Yours, Shared with everyone, Built-in, and what the chosen one does.
@@ -5537,7 +5603,7 @@ function showSTT(st) {
   sttEngines = st.engines || [];
   showCredit();
   sttGlossary = !!st.glossary;
-  // The Room settings sheet (admin/room-admin.js) fills its glossary tab from the same state, and
+  // AI in this room's Words to recognise tab (admin/room-admin.js) fills from the same state, and
   // stt/device.js offers device transcription from it, the credit included (010-AC8).
   window.grillSTT = { glossary: sttGlossary, available: !!st.available, listening: !!st.listening, device: st.device || null };
   window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
@@ -5555,7 +5621,7 @@ window.addEventListener('grill:device-stt', showCredit);
 // sttGlossary is true while a transcription worker reads room glossaries (007-AC14).
 let sttGlossary = false;
 
-// showManage offers Room settings to every member: each reads the room's plugins there (009-AC5).
+// showManage offers Room settings to every member: each manages their invites (011-AC27) and reads the links there (023-AC1).
 function showManage() {
   $('manage-open').hidden = false;
 }

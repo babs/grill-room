@@ -95,7 +95,7 @@ type sttState struct {
 	Transcribed []int64 `json:"transcribed"`
 	// Engines lists the live workers' engines, sorted: the audio menu credits the model (007-AC13).
 	Engines []string `json:"engines"`
-	// Glossary is true while a live worker reads room glossaries: Room settings edits it only then
+	// Glossary is true while a live worker reads room glossaries: AI in this room's Words to recognise edits it only then
 	// (007-AC14, 038-AC12).
 	Glossary bool `json:"glossary"`
 	// Device is the device transcription offer, absent when the server makes none (010-AC5).
