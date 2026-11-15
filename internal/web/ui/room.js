@@ -6385,13 +6385,22 @@ function leaveStage() {
 $('stage-close').addEventListener('click', leaveStage);
 // Escape in full screen only leaves full screen: the browser takes that one (030-AC11).
 // A browser may deliver the Escape that left full screen just after: that one is not for the stage.
-// fullscreenchange comes a frame after the exit itself: until then, the full screen counts as not left.
+// fullscreenchange comes at a later frame than the change itself: from the request until the exit's
+// event, the full screen counts as not left.
 let fullscreenLeft = 0;
 document.addEventListener('fullscreenchange', () => { fullscreenLeft = document.fullscreenElement ? Infinity : performance.now(); });
 $('stage').addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !document.fullscreenElement && performance.now() - fullscreenLeft > 150) leaveStage();
 });
-$('stage-full').addEventListener('click', () => { if (document.fullscreenEnabled) $('stage-main').requestFullscreen().catch(console.error); });
+$('stage-full').addEventListener('click', () => {
+  if (!document.fullscreenEnabled) return;
+  const left = fullscreenLeft;
+  fullscreenLeft = Infinity;
+  $('stage-main').requestFullscreen().catch((err) => {
+    fullscreenLeft = left;
+    console.error(err);
+  });
+});
 
 // The pop-out (031-AC12): the stage body moves into a Document PiP window, its videos playing on,
 // over copies of the call's controls that press the page's own, so the call stays this page's.
