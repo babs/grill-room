@@ -23,7 +23,7 @@
 - [x] **AC4** Under 40rem, the composer at rest is one row: a 44 px "+" button, the textarea one line high, Send. The textarea grows with its content up to 5 lines, then scrolls; it shrinks back after sending. The placeholder fits on one line at 390 px.
 - [x] **AC5** Under 40rem, "+" opens a menu (kit popover, keyboard reachable, Escape closes, focus returns to "+") with Attach files, Capture screen (only where it is offered today) and Raise my hand / Lower my hand, each keeping its current behaviour and disabled state. While the person's hand is raised, the hand button also shows in the composer row so it can be lowered in one tap. From 40rem the composer is unchanged.
 - [x] **AC6** Under 40rem, persona pills are always in compact mode (034-AC1) and keep their own row under the room name, as today; the header stays two rows. The row keeps a 44 px slot after the pills' scroll area for spec 035's "Add a persona" button (035-AC14), whether or not that button exists yet. 034's edge "+N" buttons and the header warning keep working there, and the room name keeps at least 6rem (030-AC14).
-- [x] **AC7** At 390 × 844 in a room with three personas, no voice and no open audio, the message list is at least 75% of the viewport height (633 px). With the audio joined it is at least 65%.
+- [x] **AC7** At 390 × 844 in a room with three personas, no voice and no open audio, the message list is at least 75% of the viewport height (633 px). With the audio joined it is at least 65%. In a room with no message yet, the list counts with the checklist that shares its area (039-AC10).
 - [x] **AC8** Every control touched here keeps a 44 px target under 40rem, a visible focus ring, and the existing `layout-guards`/`ui-guards` overlap checks stay empty.
 
 ## Phases

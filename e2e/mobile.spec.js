@@ -538,5 +538,7 @@ test('the phone gives the messages the screen', async ({ request, browser }) => 
   await expect(alice.locator('#messages')).toContainText('Bob joined');
   await expect(alice.locator('#voice-join')).toBeVisible();
   await expect(alice.locator('#chat-filter')).toBeHidden();
-  expect((await rect(alice, '#messages')).height).toBeGreaterThanOrEqual(633);
+  // 039-AC10's checklist shares the empty chat's area with the messages: the reading area is both.
+  const reading = await alice.evaluate(() => ['messages', 'chat-ready'].reduce((h, id) => h + document.getElementById(id).getBoundingClientRect().height, 0));
+  expect(reading).toBeGreaterThanOrEqual(633);
 });

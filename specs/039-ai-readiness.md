@@ -1,6 +1,6 @@
 # 039 — AI readiness: what the AI in this room needs, and from whom
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-14
 **Context**: UX audit part B, direction S2 (journey 9, settings far from their effect). Builds on 002 (cap, approvals), 003 (AI host, pairing, readiness), 004 (room skills), 009 (plugins, host setup), 014 (websites, connectors), 038-AC3 (the "Ask someone to run it" message, which ships first).
@@ -41,8 +41,8 @@ An "AI in this room" panel lists each condition as a row. A row shows its state 
 
 ### The panel
 
-- [ ] **AC1** The room menu has "AI in this room", with the deep link `#ai`. It opens a sheet, full screen on a phone, titled "AI in this room". It lists the rows of AC2 to AC6 in that order, each as a kit row: an icon for its state (ready, waiting, blocked), one line of state, one line "Who: <you | Alice (AI host) | a room admin | anyone in the room>", and at most one action per person (AC2's no-host and removed states offer two).
-- [ ] **AC2** **Who runs the AI.**
+- [x] **AC1** The room menu has "AI in this room", with the deep link `#ai`. It opens a sheet, full screen on a phone, titled "AI in this room". It lists the rows of AC2 to AC6 in that order, each as a kit row: an icon for its state (ready, waiting, blocked), one line of state, one line "Who: <you | Alice (AI host) | a room admin | anyone in the room>", and at most one action per person (AC2's no-host and removed states offer two).
+- [x] **AC2** **Who runs the AI.**
 
   | State | Line | Who | Action |
   |---|---|---|---|
@@ -50,21 +50,21 @@ An "AI in this room" panel lists each condition as a row. A row shows its state 
   | No host | "No one runs the AI for this room." | anyone in the room | "Run the AI on my computer" (computer); "Ask someone to run it" (038-AC3) |
   | Host's app not connected | "Alice's AI host app is not connected." | Alice | for Alice: "Open my AI host app"; for others: "Copy a message to Alice" |
   | Room removed from the host's app | "Alice removed this room from their AI host app." | Alice, or anyone to take over | as above, plus "Run the AI on my computer" |
-- [ ] **AC3** **The host's computer can host.** Shown only while a host's app is connected and cannot host. The daemon's reason reads in plain words: Docker not running → "Docker is not running on Alice's computer."; no usable Claude account → "Alice's AI host app has no Claude account it can use."; sandbox image failed or not ready → "The sandbox is still getting ready on Alice's computer." / "…could not be prepared on Alice's computer.". An unknown reason shows as the host app sent it. Who: Alice. Action for the host: "Open my AI host app".
-- [ ] **AC4** **You can ask.** "You can ask the personas." or "Alice decides who can ask the personas. You can still mention them in a message." Who: Alice. Action for others: "Copy a message to Alice" ("Can you tick "Can ask the AI" next to my name in <room>?").
-- [ ] **AC5** **Waiting for the AI host.** Counts by kind, each a line when non-zero: persona changes and new personas, room skills, plugin versions, personas asking above the cap, websites a turn was refused. Who: Alice. For the host, the action opens the approval strip; for others, "Copy a message to Alice" listing the counts. With nothing waiting, the row reads "Nothing waits for the AI host."
-- [ ] **AC6** **Plugins that do not load.** One line per room plugin with a `why` (009-AC18), naming it and its reason. Who: Alice when the reason is hers to act on: host setup (009-AC24), a version waiting for her approval or being checked by her app; a room admin otherwise, with "Open Plugins" (`#manage/plugins`) for room admins. Hidden when every plugin loads or the room has none.
+- [x] **AC3** **The host's computer can host.** Shown only while a host's app is connected and cannot host. The daemon's reason reads in plain words: Docker not running → "Docker is not running on Alice's computer."; no usable Claude account → "Alice's AI host app has no Claude account it can use."; sandbox image failed or not ready → "The sandbox is still getting ready on Alice's computer." / "…could not be prepared on Alice's computer.". An unknown reason shows as the host app sent it. Who: Alice. Action for the host: "Open my AI host app".
+- [x] **AC4** **You can ask.** "You can ask the personas." or "Alice decides who can ask the personas. You can still mention them in a message." Who: Alice. Action for others: "Copy a message to Alice" ("Can you tick "Can ask the AI" next to my name in <room>?").
+- [x] **AC5** **Waiting for the AI host.** Counts by kind, each a line when non-zero: persona changes and new personas, room skills, plugin versions, personas asking above the cap, websites a turn was refused. Who: Alice. For the host, the action opens the approval strip; for others, "Copy a message to Alice" listing the counts. With nothing waiting, the row reads "Nothing waits for the AI host."
+- [x] **AC6** **Plugins that do not load.** One line per room plugin with a `why` (009-AC18), naming it and its reason. Who: Alice when the reason is hers to act on: host setup (009-AC24), a version waiting for her approval or being checked by her app; a room admin otherwise, with "Open Plugins" (`#manage/plugins`) for room admins. Hidden when every plugin loads or the room has none.
 
 ### The AI host's choices
 
-- [ ] **AC7** Under the rows, "The AI host's choices" lists, read-only, while a host has a paired app: "Models up to <model>, effort up to <effort>" (or "No cap on models"); "New personas and changes: wait for Alice's approval" or "apply at once" (`approve_all`, same words as 038-AC1); "Connectors: <names>" or "No connectors"; and "Websites: see Room settings › Websites and connectors" linking to `#manage/network`. A line: "Only Alice changes these, in their AI host app."
-- [ ] **AC8** With no paired host app, the section reads "No AI host yet: these choices appear once someone runs the AI."
+- [x] **AC7** Under the rows, "The AI host's choices" lists, read-only, while a host has a paired app: "Models up to <model>, effort up to <effort>" (or "No cap on models"); "New personas and changes: wait for Alice's approval" or "apply at once" (`approve_all`, same words as 038-AC1); "Connectors: <names>" or "No connectors"; and "Websites: see Room settings › Websites and connectors" linking to `#manage/network`. A line: "Only Alice changes these, in their AI host app."
+- [x] **AC8** With no paired host app, the section reads "No AI host yet: these choices appear once someone runs the AI."
 
 ### Entry points
 
-- [ ] **AC9** Every tip or line that says a persona cannot answer (offline pill and ▶ tip, the "Only Alice can let you ask" tip, a plugin's "does not load" line, the blocked-website banner) ends with a "What's missing?" link that opens `#ai`.
-- [ ] **AC10** A room with personas and no message yet shows, in the chat's empty state, the panel's rows that are not ready (AC2 to AC4) with their actions, under "Before the personas can answer". It goes once every row is ready or the first message arrives.
-- [ ] **AC11** The rows follow the `agent` event live: a host connecting, an approval, a plugin set up changes the row without a reload.
+- [x] **AC9** Every place you can click that says a persona cannot answer ends with a "What's missing?" link that opens `#ai`: the reason an offline or locked pill's ▶ opens (no host, app not connected, "Only Alice can let you ask", waiting for approval), the persona card, a plugin's "does not load" line, the blocked-website lines.
+- [x] **AC10** A room with personas and no message yet shows, in the chat's empty state, the panel's rows that are not ready (AC2 to AC4) with their actions, under "Before the personas can answer". It goes once every row is ready or the first message arrives.
+- [x] **AC11** The rows follow the `agent` event live: a host connecting, an approval, a plugin set up changes the row without a reload.
 
 ## Phases
 
@@ -78,7 +78,7 @@ An "AI in this room" panel lists each condition as a row. A row shows its state 
 - Work: "What's missing?" links, empty-room checklist.
 - **Covers**: AC9, AC10
 - **Data model impact**: none
-- **DoD**: e2e: an offline pill's tip opens `#ai`; a new room with a persona shows the checklist, which goes when the host connects; `make lint` green.
+- **DoD**: e2e: an offline pill's ▶ reason opens `#ai`; a new room with a persona shows the checklist, which goes when the host connects; `make lint` green.
 
 ## Data model impact (summary)
 
@@ -100,3 +100,5 @@ None. One new field in the daemon's readiness report and the agent state: a reas
 - With no one running the AI, the ask and waiting rows name "anyone in the room" and offer no copy action. Because there is no host to send a message to.
 - While the host's app is offline its connectors read "shown once Alice's AI host app connects", and while it is connected but cannot host, "shown once Alice's AI host app can host". Because the room forgets them on disconnect and the app sends none without a working account proxy, so "No connectors" would be false.
 - "Open my AI host app" shows only where the room menu shows it (not on a phone or tablet). Because the link opens the app on this device, which a phone never runs.
+- "What's missing?" sits where a pill's press leads (its reason sheet, its card), not in the hover tip. Because a hover tip lets the pointer through and cannot hold a link. Room settings › Plugins has none: it is where the panel's "Open Plugins" leads.
+- The empty-room checklist sits beside the message list, as the invite card does, and 037-AC7's phone floor counts the two together. Because it only shows while the room has no message to read, and nesting it in the list would mix it with the chat's lines.

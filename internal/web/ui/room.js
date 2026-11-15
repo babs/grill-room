@@ -107,6 +107,7 @@ function end(text) {
   // No stream will send the history: no "Loading…" under the banner.
   if (!replayed) $('filter-empty').hidden = true;
   $('chat-empty').hidden = true;
+  $('chat-ready').hidden = true;
   $('upload-open').hidden = true;
   for (const el of document.querySelectorAll('.dropping')) el.classList.remove('dropping');
   document.body.classList.remove('drag-files');
@@ -599,6 +600,10 @@ if ('serviceWorker' in navigator) {
 
 function addMessage(m) {
   countUnread(m);
+  if (!spoken && m.kind !== 'system') {
+    spoken = true;
+    renderReady();
+  }
   if (m.kind === 'voice') markVoiced();
   // A live line of a hidden kind counts on its segment; history and your own lines do not (020-AC6).
   if (filterHides(m.kind) && isLive(m) && String(m.participant_id) !== myID) {
@@ -670,7 +675,7 @@ function blockedActions(m) {
     : meAdmin && agent.egress_admins_allow ? [['room', 'Allow for this room']] : [];
   if (!scopes.length) {
     // Whoever cannot allow it learns who can, the same person on another seat included.
-    box.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: whoAllows() }));
+    box.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: whoAllows() }), ' ', missingLink());
     return box;
   }
   const why = agent.egress_host || '';
@@ -691,6 +696,7 @@ function blockedActions(m) {
   }
   const note = why || (b.error ? 'Not allowed: ' + b.error : '');
   if (note) box.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: note }));
+  box.append(' ', missingLink());
   return box;
 }
 
@@ -1085,9 +1091,9 @@ function agentError(text) {
   if (!r.width || r.left < z.left - 0.5 || r.right > z.right + 0.5) showNotice(text);
 }
 
-function explain(title, text, ask = false) {
+function explain(title, text, ask = false, missing = false) {
   $('why-title').textContent = title;
-  $('why-text').textContent = text;
+  $('why-text').replaceChildren(text, ...(missing ? [' ', missingLink()] : []));
   $('why-ask').hidden = !ask;
   // The hand-off's fallback replaces the reason already shown: its hidden button held the focus.
   if ($('why').open) $('why').querySelector('[type=submit]').focus();
@@ -2768,6 +2774,41 @@ function personaState(p) {
 // noOneRuns is when the room has no AI host at all, not one whose app is away.
 const noOneRuns = () => !agent.online && !participants.some((x) => x.id === agent.host_participant_id);
 
+// cannotAnswer: the reason shown is one the AI sheet explains (039-AC9); only "already waits for its turn" is not,
+// so the queue check is taken out and whatever whyNot says before it decides.
+const cannotAnswer = (p, st = personaState(p)) => !!whyNot(p, st.cls === 'queued' ? { ...st, cls: '' } : st);
+
+// missingLine is the chat line's link that opened the AI sheet: the line's redraw replaces it.
+let missingLine = null;
+
+// missingLink opens the AI sheet from wherever a persona cannot answer (039-AC9).
+function missingLink() {
+  const a = Object.assign(document.createElement('a'), { href: '#ai', textContent: 'What\'s missing?' });
+  // Every open sheet and the card holding it go first: the AI sheet opens alone, not over a stack.
+  a.addEventListener('click', (e) => {
+    // A new tab or window opens the sheet there: this page keeps its own.
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return;
+    // An ended room opens no sheet (followAI): the hash would only linger.
+    if (ended) {
+      e.preventDefault();
+      return;
+    }
+    // Closing the AI sheet gives the focus back to focusBefore: the card and the strip item go or
+    // redraw, so a control that outlives them; a chat line's link itself (missingLine falls back).
+    // Inside a sheet, the sheet's opener stays.
+    if (!a.closest('dialog')) {
+      const line = !a.closest('#persona-card, #approvals') && a.closest('#messages > li[data-id]');
+      missingLine = line ? a : null;
+      focusBefore = a.closest('#persona-card') ? document.querySelector('.persona-pill[data-id="' + personaCardFor + '"] button.persona')
+        : a.closest('#approvals') ? $('approvals') : line ? a : $('body');
+    }
+    for (const d of document.querySelectorAll('dialog[open]')) d.close();
+    const pop = a.closest('[popover]');
+    if (pop?.matches(':popover-open')) pop.hidePopover();
+  });
+  return a;
+}
+
 // whyNot says why a pill does nothing on a press, or '' when it asks (005-AC35): a title tooltip
 // never shows on touch, so a press opens the reason instead.
 function whyNot(p, st) {
@@ -2854,7 +2895,7 @@ function askPersona(id) {
   const p = personaByID(id);
   if (!p) return;
   const why = whyNot(p, personaState(p));
-  if (why) return explain(p.badge + ' ' + p.name, why, noOneRuns());
+  if (why) return explain(p.badge + ' ' + p.name, why, noOneRuns(), cannotAnswer(p));
   pressPersona(id, false);
 }
 
@@ -2963,6 +3004,8 @@ function renderPersonaCard() {
     handOff.addEventListener('click', askToRun);
     foot.append(handOff);
   }
+  // An id: the card's redraw gives the focus back by id.
+  if (cannotAnswer(p, st)) foot.append(Object.assign(missingLink(), { id: 'persona-card-missing' }));
   parts.push(foot);
   card.replaceChildren(...parts);
   if (focused) $(focused)?.focus();
@@ -3248,6 +3291,7 @@ function blockedItems() {
     }
     const note = why || (b.error ? 'Not allowed: ' + b.error : '');
     if (note) li.append(' ', Object.assign(document.createElement('span'), { className: 'hint', textContent: note }));
+    li.append(' ', missingLink());
     return li;
   });
 }
@@ -3795,6 +3839,7 @@ function pluginsBlock(p) {
     meta.push(run && !pl.needs_setup ? (cost === null ? 'cost unknown' : tokens(cost) + ' per answer') : pl.why || 'does not load');
     if (on && run && run !== pl.versions[pl.versions.length - 1]) meta.push('a newer version waits');
     li.append(name, span('hint', meta.join(' · ')));
+    if (!run || pl.needs_setup) li.append(' ', missingLink());
     list.append(li);
   }
   box.append(legend);
@@ -4115,13 +4160,34 @@ const aiIcons = { ready: 'check', waiting: 'bubble', blocked: 'alert' };
 // hostAppConnected: the host's app is there, able to host or not; the agent state drops its row on disconnect.
 const hostAppConnected = (host) => agent.online || (!!host && agent.daemons.some((d) => d.participant_id === host.id));
 
+// focusLost catches a focus a closed sheet could not give back, its opener redrawn away: the focus
+// then stays in the closed sheet, or on the page. It goes to the sheet still open under it, else the
+// composer. Not in the page's shared close handler: the proposal sheet reads where the focus sits after a close.
+function focusLost(e) {
+  const a = document.activeElement;
+  const to = document.querySelector('dialog:modal .close') || $('body');
+  if ((a === document.body || e.target.contains(a)) && to.checkVisibility()) to.focus();
+}
+
+// sameAction finds a redrawn row's action by its row and label.
+const sameAction = (list, row, label) => [...list.querySelectorAll(`[data-row="${row}"] :is(a, button)`)].find((b) => b.textContent === label);
+
 function aiRows() {
   const host = participants.find((x) => x.id === agent.host_participant_id);
   const me = approves();
   const name = host ? host.name : 'the AI host';
   const who = me ? 'you' : host ? host.name + ' (AI host)' : 'anyone in the room';
   const their = me ? 'your' : name + '\'s';
-  const run = { label: 'Run the AI on my computer', run: () => $('host-agent').showModal() };
+  const run = { label: 'Run the AI on my computer', run: (ev) => {
+    // Its row redraws on every agent event while the sheet is open: back to the same action, else focusLost.
+    const b = ev.currentTarget, list = b.closest('ul'), row = b.closest('.ai-row').dataset.row;
+    $('host-agent').addEventListener('close', (e) => {
+      const same = b.isConnected ? b : sameAction(list, row, b.textContent);
+      if (same?.checkVisibility()) same.focus();
+      else focusLost(e);
+    }, { once: true });
+    $('host-agent').showModal();
+  } };
   // As the menu's #host-app-open (renderAgent): no loopback page in the docs window or on a phone.
   const appHere = !docsMode && !mobileOS;
   const openApp = { label: 'Open my AI host app', href: $('host-app-open').href };
@@ -4239,32 +4305,49 @@ function aiChoices() {
 
 // renderAI redraws the open sheet from the latest agent state, plugins and people (039-AC11).
 function renderAI() {
+  renderReady();
   if (!$('ai').open) return;
-  const rows = $('ai-rows');
-  // A redraw keeps the focus on the action that had it.
-  const a = document.activeElement;
-  const had = rows.contains(a) ? [a.closest('.ai-row').dataset.row, a.textContent] : null;
-  rows.replaceChildren(...(agentSeen ? aiRows().map(aiRow) : [Object.assign(document.createElement('li'), { className: 'empty', textContent: 'Loading…' })]));
-  if (had) [...rows.querySelectorAll(`[data-row="${had[0]}"] :is(a, button)`)].find((b) => b.textContent === had[1])?.focus();
+  drawRows($('ai-rows'), agentSeen ? aiRows().map(aiRow) : [Object.assign(document.createElement('li'), { className: 'empty', textContent: 'Loading…' })]);
   $('ai-choices').replaceChildren(...(agentSeen ? aiChoices() : []));
+}
+
+// drawRows replaces a list's rows; a redraw keeps the focus on the action that had it.
+function drawRows(list, rows) {
+  const a = document.activeElement;
+  const had = list.contains(a) ? [a.closest('.ai-row')?.dataset.row, a.textContent] : null;
+  list.replaceChildren(...rows);
+  if (!had) return;
+  const same = sameAction(list, had[0], had[1]);
+  // Its row gone, the focus lands somewhere useful, not on the page: the sheet's close, else the composer.
+  (same || list.closest('dialog')?.querySelector('.close') || $('body')).focus();
+}
+
+// spoken: the room has a message other than a system line; the checklist then goes for good.
+let spoken = false;
+
+// renderReady shows an empty room with personas what the AI still needs (039-AC10): the
+// who-runs-it, can-host and can-ask rows not ready, until they are or the first message comes.
+function renderReady() {
+  const rows = !spoken && !ended && !docsMode && replayed && agentSeen && agent.personas.length
+    ? aiRows().filter((r) => ['host', 'can-host', 'ask'].includes(r.id) && r.state !== 'ready') : [];
+  $('chat-ready').hidden = !rows.length;
+  drawRows($('chat-ready-rows'), rows.map(aiRow));
 }
 
 // showApprovals hands the host over to the approval strip (039-AC5).
 function showApprovals() {
-  // After the page's own close handler, which gives the focus back to what opened the sheet.
-  $('ai').addEventListener('close', () => {
-    if ($('approvals').classList.contains('extra')) {
-      stripOpen = true;
-      updateStrip();
-    }
-    $('approvals').focus();
-  }, { once: true });
+  if ($('approvals').classList.contains('extra')) {
+    stripOpen = true;
+    updateStrip();
+  }
+  // The page's close handler gives the focus back to focusBefore.
+  focusBefore = $('approvals');
   $('ai').close();
 }
 
 // followAI opens or closes the sheet as the hash says: #ai is its deep link (039-AC1).
 function followAI() {
-  const want = location.hash === '#ai';
+  const want = !ended && location.hash === '#ai';
   if (want && !$('ai').open) $('ai').showModal();
   else if (!want && $('ai').open) $('ai').close();
   renderAI();
@@ -4272,8 +4355,15 @@ function followAI() {
 addEventListener('hashchange', followAI);
 followAI();
 // Closed by Escape, a click outside or ✕: the deep link goes too, without a history entry.
-$('ai').addEventListener('close', () => {
+$('ai').addEventListener('close', (e) => {
   if (location.hash === '#ai') history.replaceState(null, '', location.pathname + location.search);
+  // After the page's focus return: a chat line redrawn meanwhile hands it to its new link, an
+  // opener gone otherwise to the composer.
+  const fresh = missingLine && !missingLine.isConnected
+    && document.querySelector(`#messages > li[data-id="${missingLine.closest('li').dataset.id}"] a[href="#ai"]`);
+  missingLine = null;
+  if (fresh) fresh.focus();
+  else focusLost(e);
 });
 
 async function loadTemplates() {

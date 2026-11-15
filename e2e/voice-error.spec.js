@@ -82,7 +82,8 @@ test('the audio on a phone leaves the messages two thirds of the screen', async 
   await expect(page.locator('#voice-more')).toBeVisible();
   const height = (sel) => page.locator(sel).evaluate((e) => e.getBoundingClientRect().height);
   expect(await height('.room-header')).toBeLessThanOrEqual(100);
-  expect(await height('#messages')).toBeGreaterThanOrEqual(549);
+  // 039-AC10's checklist shares the empty chat's area with the messages: the reading area is both.
+  expect(await height('#messages') + await height('#chat-ready')).toBeGreaterThanOrEqual(549);
 });
 
 // A denied unmute shows a banner; the next unmute that works clears it (the lab's banner stayed

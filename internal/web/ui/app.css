@@ -247,6 +247,8 @@ button.persona .pstate { color: var(--text-muted); font-weight: 400; font-size: 
 .persona-card dt { color: var(--text-muted); }
 .persona-card dd { margin: 0; }
 .persona-card .row { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
+/* Alone in the card's foot, the link is a target of its own (039-AC9). */
+.persona-card .row > a[href="#ai"] { display: inline-flex; align-items: center; min-height: 44px; }
 .persona-card label.check { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--control-h); }
 .persona-voice { margin: var(--sp-3) 0; }
 .voice-list { display: grid; gap: 0; max-height: 16rem; overflow-y: auto; margin: var(--sp-2) 0; border: 1px solid var(--border); border-radius: var(--r-md); }
@@ -323,7 +325,8 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); }
 .ai-state.ready { color: var(--success); }
 .ai-state.waiting { color: var(--warning); }
 .ai-state.blocked { color: var(--danger); }
-.ai-row > .actions { flex-wrap: wrap; gap: var(--sp-2); margin-left: auto; }
+/* The kit's actions do not shrink: two buttons side by side overflow a phone unless they may wrap. */
+.ai-row > .actions { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; gap: var(--sp-2); margin-left: auto; }
 .ai-choices { margin: 0; padding-left: var(--sp-5); }
 .ai-choices > li { margin: var(--sp-1) 0; }
 /* The Personas list: one line per persona, its name and settings cut by an ellipsis (009-AC1). */
@@ -613,6 +616,10 @@ body.docs-window #chat-fold, body.docs-window #chat-unfold { display: none; }
 #filter-empty { display: none; }
 #messages[data-filter=written]:not(:has(> .msg:not(.voice))) ~ #filter-empty, #messages[data-filter=voice]:not(:has(> .msg.voice)) ~ #filter-empty { display: block; }
 :is(#chat-empty, #filter-empty) { margin: 0 var(--sp-4) var(--sp-3); }
+/* Its spacing is padding, inside its box: the checklist and the messages share the reading area 037-AC7 measures.
+   Bounded: a long checklist scrolls in its box, the messages and the composer keep the rest. */
+#chat-ready { flex: 0 1 auto; min-height: 0; max-height: 40%; overflow-y: auto; margin: 0 var(--sp-4); padding-bottom: var(--sp-3); }
+#chat-ready h3 { margin: 0 0 var(--sp-1); font-size: var(--fs-sm); }
 /* Show all takes its 44 px inside the hint's own row, not over the filter's segments above it. */
 #filter-hidden { display: flex; align-items: center; gap: var(--sp-1); min-height: 44px; max-width: none; margin: 0; padding: 0 var(--sp-4); border-bottom: 1px solid var(--border); }
 #filter-show-all { display: inline-flex; align-items: center; min-height: 44px; }
@@ -630,12 +637,15 @@ body.docs-window #chat-fold, body.docs-window #chat-unfold { display: none; }
 body.transcript-room #transcript { display: flex; flex-direction: column; min-height: 0; }
 body.transcript-room:not(.fold-transcript) #chat-filter { display: none; }
 /* Beside the chat: areas, not auto-placement, as the chat's hidden children would shift the rows. */
-body.transcript-room:has(#viewer[hidden]) .chat { display: grid; grid-template: "filter pane" auto "fhidden pane" auto "msgs pane" minmax(0, 1fr) "fempty pane" auto "cempty pane" auto "send pane" auto / minmax(0, 1fr) auto; }
+body.transcript-room:has(#viewer[hidden]) .chat { display: grid; grid-template: "filter pane" auto "fhidden pane" auto "msgs pane" minmax(0, 1fr) "fempty pane" auto "cready pane" fit-content(40%) "cempty pane" auto "send pane" auto / minmax(0, 1fr) auto; }
 .chat > #chat-filter { grid-area: filter; }
 .chat > #filter-hidden { grid-area: fhidden; }
 .chat > #messages { grid-area: msgs; }
 .chat > #filter-empty { grid-area: fempty; }
 .chat > #chat-empty { grid-area: cempty; }
+.chat > #chat-ready { grid-area: cready; }
+/* The fit-content(40%) row is the cap there: a percentage on the item would resolve against the row itself. */
+body.transcript-room:has(#viewer[hidden]) #chat-ready { max-height: none; }
 .chat > #send { grid-area: send; }
 .chat > #transcript { grid-area: pane; }
 body.transcript-room:has(#viewer[hidden]) #transcript { position: relative; width: var(--transcript-w); border-left: 1px solid var(--border); }
