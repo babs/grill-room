@@ -454,6 +454,8 @@ test('empty capabilities and room skills link to their place', async ({ browser,
   // A fresh page: the Personas sheet stays open under Room settings.
   await alice.goto(alice.url().split('#')[0] + '#manage/skills');
   await alice.reload();
+  // The room first: the sheet is hidden before the page has read anything.
+  await expect(alice.locator('#me')).not.toBeEmpty();
   await expect(alice.locator('#personas')).toBeHidden();
   const toSheet = alice.locator('#panel-skills').getByRole('button', { name: 'the Personas sheet' });
   // It reads as a link inside the sentence, not on a row of its own: inline computes inline-block for a button.

@@ -656,6 +656,7 @@ test('the pane at its fit comes back as a document closes', async ({ browser, re
   await alice.evaluate(() => localStorage.setItem('grill-room-list-w', '400'));
   await alice.setViewportSize({ width: 1024, height: 720 });
   await alice.reload();
+  await expect(alice.locator('#me')).not.toBeEmpty();
   // At 20 px a rem, 1030 less the side panel's 400 less the chat's 440 leaves the pane 190.
   await alice.evaluate(() => { document.documentElement.style.fontSize = '20px'; });
   await alice.setViewportSize({ width: 1030, height: 720 });

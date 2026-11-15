@@ -79,6 +79,8 @@ test('profile across rooms and devices', async ({ browser, request }) => {
 
   // Without SMTP, no email option anywhere.
   await other.goto('/profile');
+  // The profile first: the email row starts hidden, before the page has read it.
+  await expect(other.locator('#rooms li .room-line')).toHaveText(['Room B', 'Room A as Alice']);
   await expect(other.locator('#email')).toBeHidden();
   const stranger = await (await browser.newContext()).newPage();
   await stranger.goto('/profile');

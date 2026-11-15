@@ -57,6 +57,8 @@ test('recover a profile by email from the join page', async ({ browser, request 
   const join = await ctx.newPage();
   const second = await room2Path(request);
   await join.goto(second);
+  // Who the browser is first: the profile line starts hidden, before the page has read it.
+  await expect(join.getByRole('button', { name: 'Recover my profile by email' })).toBeVisible();
   await expect(join.locator('#your-profile')).toBeHidden();
   await join.getByRole('button', { name: 'Recover my profile by email' }).click();
   await expect(join.locator('#recover-email')).toBeFocused();

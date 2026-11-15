@@ -130,6 +130,8 @@ test('purge of an empty profile and the Instance switch', async ({ browser, requ
   expect(audit.entries.find((e) => e.details.uuids.includes(uuid))?.actor).toBe('system');
 
   await ghost.goto('/');
+  // Who the browser is first: both start hidden, before the page has read it.
+  await expect(ghost.locator('#status')).toHaveText('You need an invite link to join a room. Ask the room host for one.');
   await expect(ghost.locator('#your-profile')).toBeHidden();
   // No SMTP on this server: no email recovery to offer either (011-AC4).
   await expect(ghost.locator('#recover')).toBeHidden();
