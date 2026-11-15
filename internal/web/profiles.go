@@ -201,8 +201,82 @@ func (s *Server) getProfile(w http.ResponseWriter, r *http.Request) {
 			ttl, age := int64((pb.ExpiresAt.Sub(now)+time.Second-1)/time.Second), int64(max(now.Sub(pb.SentAt), 0)/time.Second)
 			p.PendingEmail, p.PendingTTLS, p.PendingAgeS = pb.Email, &ttl, &age
 		}
+		// The counts are a hint: the profile answers without them rather than fail.
+		if err := s.fillUnread(r.Context(), p); err != nil {
+			s.log.Warn("unread_failed", zap.Int64("profile", p.ID), zap.Error(err))
+		}
 	}
 	writeJSON(w, http.StatusOK, s.profileResp(p))
+}
+
+// fillUnread sets each room's unread count and whether an unread line names a seat of p there,
+// by the @name rule of the chat (041-AC11); a persona's name does not count. On an error it sets
+// none.
+func (s *Server) fillUnread(ctx context.Context, p *store.Profile) error {
+	unread, err := s.bus.Store.UnreadLines(ctx, p.ID)
+	if err != nil {
+		return err
+	}
+	mentions := make([]bool, len(p.Rooms))
+	for i, room := range p.Rooms {
+		if u := unread[room.RoomID]; len(u.Bodies) > 0 {
+			if mentions[i], err = s.namesProfile(ctx, room.RoomID, p.ID, u.Bodies); err != nil {
+				return err
+			}
+		}
+	}
+	for i := range p.Rooms {
+		n := unread[p.Rooms[i].RoomID].Count
+		p.Rooms[i].Unread, p.Rooms[i].UnreadMention = &n, &mentions[i]
+	}
+	return nil
+}
+
+// namesProfile reports whether one of bodies, lines of room, names a seat of profile.
+func (s *Server) namesProfile(ctx context.Context, room string, profile int64, bodies []string) (bool, error) {
+	personas, err := s.bus.Store.RoomPersonas(ctx, room)
+	if err != nil {
+		return false, err
+	}
+	people, err := s.bus.Store.Participants(ctx, room)
+	if err != nil {
+		return false, err
+	}
+	for _, b := range bodies {
+		for _, n := range named(b, personas, people) {
+			if slices.ContainsFunc(people, func(p store.Participant) bool { return p.ID == n.ParticipantID && p.ProfileID == profile }) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// putRead moves the read marker of the seat's profile in the room; a seat with no profile keeps
+// none. No room event: it would reload every open page (041-AC9).
+func (s *Server) putRead(w http.ResponseWriter, r *http.Request, sess session) {
+	var req struct {
+		Through int64 `json:"through"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Through <= 0 {
+		httpError(w, http.StatusBadRequest, "through must be a line id")
+		return
+	}
+	if sess.p.ProfileID != 0 {
+		err := s.bus.Store.MarkRead(r.Context(), sess.p.ProfileID, sess.p.RoomID, req.Through)
+		if errors.Is(err, store.ErrForeignLine) {
+			httpError(w, http.StatusBadRequest, "through must be a line of this room")
+			return
+		}
+		if err != nil {
+			s.serverError(w, "mark_read_failed", err)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // snoozeNudge hides the add-an-email banner for emailNudgeSnooze on every device of the profile.

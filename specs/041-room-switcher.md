@@ -84,3 +84,11 @@ A PM in two or three rooms a day goes avatar › "My rooms and profile" › Room
 - A row is one menu line, the name ending in an ellipsis and its activity after it. Because the menus keep one row height (009-AC38) (implementation).
 - One profile read at a time, a call meanwhile reading once more after it, each read bounded at 10 s. Because a dropped read left a return to the tab on stale state and a hung one held the text size save (implementation, review).
 - `/profile#rooms/new` becomes `#rooms` as the sheet opens. Because Back from the room made there would open the sheet again (implementation, review).
+- The partial index `messages_room_written` ships with the migration. Because AC14's bound fails on the existing index: over 100 rows per room with the voice lines newest (about 55,000 measured, the planner walking the primary key) (implementation).
+- The marker write skips the global write lock, as hands and presence do. Because no id cursor reads markers and one upsert keeps the maximum on its own (implementation).
+- `unread` and `unread_mention` are set by `GET /api/profile` only; the MCP `list_rooms`, which passes its rooms through, carries them too. A failed count leaves them out rather than failing the answer (implementation, review).
+- The mention flag reads each room's personas and participants once per room holding an unread "@" line: at most two reads per such room, not batched. Because a profile sits in a few rooms and the cost stays linear in them (implementation, review).
+- A line id of another room gets 400; a seat with no profile gets 204 and nothing is kept; a marker write that meets a profile merged away or a room deleted keeps nothing and answers 204 (implementation, review).
+- Lines of any seat of the profile, removed ones included, never count as unread (implementation).
+- The mention flag runs `named()` on every unread "@" body, at most 100 per room, with no cheaper prefilter. Because a raw-text prefilter drops mentions that emphasis or a link touches, which `named()` reads (review).
+- The count's bound of 100 rows per room covers voice lines, not the viewer's own or deleted lines past the marker, which the scan still walks. Because the room page moves the marker as its own lines arrive; only a docs window or an API client posting at length grows the walk (review, trade-off kept).

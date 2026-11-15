@@ -354,6 +354,10 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64, orgIssuer 
 			{nil, `UPDATE room_links SET created_by_profile_id = ?1 WHERE created_by_profile_id = ?2`, both},
 			{nil, `INSERT INTO room_admins(room_id, profile_id, created_at) SELECT room_id, ?1::bigint, created_at FROM room_admins WHERE profile_id = ?2 ON CONFLICT DO NOTHING`, both},
 			{&moved.RoomAdmins, `DELETE FROM room_admins WHERE profile_id = ?`, only},
+			// 041-AC7: one marker per room, the further read kept.
+			{nil, `INSERT INTO room_reads(profile_id, room_id, read_through) SELECT ?1::bigint, room_id, read_through FROM room_reads WHERE profile_id = ?2
+				ON CONFLICT (profile_id, room_id) DO UPDATE SET read_through = GREATEST(room_reads.read_through, EXCLUDED.read_through)`, both},
+			{nil, `DELETE FROM room_reads WHERE profile_id = ?`, only},
 			// 016-AC15: B's blocks become A's, one per room.
 			{nil, `INSERT INTO room_blocks(room_id, profile_id, name, created_at, by_participant_id) SELECT room_id, ?1::bigint, name, created_at, by_participant_id
 				FROM room_blocks WHERE profile_id = ?2 ON CONFLICT DO NOTHING`, both},

@@ -227,7 +227,7 @@ const roomArg = `"room":{"type":"string","description":"The room id, as list_roo
 
 // mcpTools is the catalogue, in the order tools/list gives it (012-AC15).
 var mcpTools = []*mcpTool{
-	{name: "list_rooms", desc: "List the rooms your profile is in, with their ids, names and whether you are a room admin there.",
+	{name: "list_rooms", desc: "List the rooms your profile is in, with their ids, names, whether you are a room admin there, and each room's unread line count (up to 100) and whether an unread line mentions you.",
 		ro: true, idem: true, schema: `{}`, routes: []string{pProfile},
 		run: func(c *mcpCall, _ mcpArgs) (any, error) {
 			b, err := c.get("/api/profile")

@@ -92,6 +92,9 @@ type ProfileRoom struct {
 	People       int       `json:"people"`
 	LastActivity time.Time `json:"last_activity"`
 	Admin        bool      `json:"admin"`
+	// Unread and UnreadMention are set by GET /api/profile only (041-AC11), absent elsewhere.
+	Unread        *int  `json:"unread,omitempty"`
+	UnreadMention *bool `json:"unread_mention,omitempty"`
 }
 
 // MagicLink is an emailed one-time sign-in link. Only the hash of its token is stored.
