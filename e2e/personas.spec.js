@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon, menuItem, openStrip, personaSheet, closePersonas, appointAdmin, agentState, patchPersona } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, openStrip, personaSheet, closePersonas, appointAdmin, agentState, patchPersona, addFromLibrary } from './helpers.js';
 
 const led = (page, name) => page.locator(`button.persona[data-name="${name}"] .led`);
 
@@ -17,9 +17,7 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
   const panel = alice.locator('#personas');
   await menuItem(alice, 'Personas');
   await expect(panel.locator('.persona-row')).toHaveCount(1);
-  await expect(panel.locator('#persona-template option')).toHaveCount(4);
-  await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
-  await panel.getByRole('button', { name: 'Add', exact: true }).click();
+  await addFromLibrary(alice, 'Secretary');
   await expect(panel.locator('.persona-row')).toHaveCount(2);
   for (const p of [alice, bob]) {
     await expect(p.locator('#messages')).toContainText('Alice added the persona 📝 Secretary, from the library persona "Secretary" v1.');
@@ -84,15 +82,13 @@ test('personas: the Timekeeper from the library', async ({ browser, request }) =
   await appointAdmin(alice, request, room.id);
   const grill = (await agentState(alice, room.id)).personas[0];
   expect(await patchPersona(alice, room.id, grill.id, { time_keeper: true })).toBe(200);
-  const panel = alice.locator('#personas');
-  await menuItem(alice, 'Personas');
-  await panel.locator('#persona-template').selectOption({ label: '⏱️ Timekeeper v1' });
-  await panel.getByRole('button', { name: 'Add', exact: true }).click();
+  await addFromLibrary(alice, 'Timekeeper');
+  // 035-AC11: the status line says why it arrives without the role.
+  await expect(alice.locator('#personas-status')).toHaveText('Added ⏱️ Timekeeper. Not the time keeper: Grill keeps time.');
   await expect(alice.locator('#messages')).toContainText('Alice added the persona ⏱️ Timekeeper, from the library persona "Timekeeper" v1, every N minutes off → 5, '
     + 'speak over after off → 20 s, not the time keeper (🔥 Grill keeps time).');
   await expect(alice.locator('button.persona')).toHaveText([/^🔥Grill/, /^⏱️Timekeeper/]);
-  await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
-  await panel.getByRole('button', { name: 'Add', exact: true }).click();
+  await addFromLibrary(alice, 'Secretary');
   await expect(alice.locator('#messages')).toContainText('Alice added the persona 📝 Secretary, from the library persona "Secretary" v1.');
   const ps = (await agentState(alice, room.id)).personas;
   expect(ps.map((p) => [p.name, !!p.time_keeper, p.cut_in_s || 0, p.every_minutes || 0, p.speaks]))

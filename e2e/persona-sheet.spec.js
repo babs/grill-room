@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, menuItem, personaRow, personaSheet, agentState, unfoldTabs, appointAdmin, patchPersona } from './helpers.js';
+import { roomWith, menuItem, personaRow, personaSheet, agentState, unfoldTabs, appointAdmin, patchPersona, addFromLibrary } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const sizes = { phone: { width: 390, height: 844 }, desktop: { width: 1440, height: 900 } };
@@ -7,9 +7,7 @@ const tabs = ['identity', 'model', 'triggers', 'capabilities'];
 
 // addSecretary adds the Secretary from the library; the Personas list stays open.
 async function addSecretary(page) {
-  await menuItem(page, 'Personas');
-  await page.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
-  await page.locator('#personas').getByRole('button', { name: 'Add', exact: true }).click();
+  await addFromLibrary(page, 'Secretary');
   await expect(personaRow(page, 'Secretary')).toHaveCount(1);
 }
 
@@ -179,7 +177,7 @@ test('persona sheet: one Save for every tab', async ({ browser, request }) => {
 // name. The agent state is played to the page so the host's and the update-only controls show.
 test('persona sheet: every 005 control is reachable', async ({ browser, request }) => {
   const old005 = {
-    ids: ['personas-close', 'personas-status', 'persona-list', 'chain-form', 'chain-budget', 'parallel-turns', 'persona-template',
+    ids: ['personas-close', 'personas-status', 'persona-list', 'chain-form', 'chain-budget', 'parallel-turns',
       'persona-add', 'room-skills', 'room-skill-list', 'room-skill-copy', 'room-skill-source'],
     fields: ['name', 'badge', 'colour', 'model', 'effort', 'text', 'trigger', 'every', 'autocompact', 'self_call'],
     sheetButtons: ['Save', 'Turn on the chosen skill for Grill', 'Turn off skill stamp for Grill', 'Update skill stamp of Grill to version 2'],
@@ -261,9 +259,7 @@ test('persona sheet: history and the way back to Room settings', async ({ browse
 test('persona sheet: the time keeper', async ({ browser, request }) => {
   const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   await appointAdmin(alice, request, room.id);
-  await menuItem(alice, 'Personas');
-  await alice.locator('#persona-template').selectOption({ label: '⏱️ Timekeeper v1' });
-  await alice.locator('#personas').getByRole('button', { name: 'Add', exact: true }).click();
+  await addFromLibrary(alice, 'Timekeeper');
   await expect(personaRow(alice, 'Timekeeper').locator('.pr-meta')).toHaveText('sonnet · effort low · every 5 minutes');
   let sheet = await personaSheet(alice, 'Timekeeper', 'Triggers');
   await expect(sheet.getByLabel('Speaks up')).toHaveValue('every_minutes');

@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon, reloadDaemonPage, menuItem, personaSheet, closePersonas, approveEverything } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, reloadDaemonPage, menuItem, personaSheet, closePersonas, approveEverything, addFromLibrary } from './helpers.js';
 
 const led = (page, name) => page.locator(`button.persona[data-name="${name}"] .led`);
 const lastAgent = (page) => page.locator('#messages li.msg.agent').last();
@@ -81,8 +81,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
 
     // Refused: the Secretary keeps running at the cap, and Bob reads why.
     await openPanel(bob);
-    await bob.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
-    await bob.locator('#personas').getByRole('button', { name: 'Add', exact: true }).click();
+    await addFromLibrary(bob, 'Secretary');
     await expect(bob.locator('#personas .persona-row')).toHaveCount(2);
     await close(bob);
     ({ status } = await edit(bob, 'Secretary', { Model: 'opus' }));
@@ -98,9 +97,8 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     // Approve everything: Bob's new persona and his change wait for Alice.
     await approveEverything(admin);
     await openPanel(bob);
-    await bob.locator('#persona-template').selectOption({ label: '🔥 Grill v1' });
-    await bob.locator('#personas').getByRole('button', { name: 'Add', exact: true }).click();
-    await expect(bob.locator('#personas-status')).toHaveText('Grill-2 added. It waits for the AI host\'s approval.');
+    await addFromLibrary(bob, 'Grill');
+    await expect(bob.locator('#personas-status')).toHaveText('Added 🔥 Grill-2. It waits for the AI host\'s approval.');
     await close(bob);
     ({ status } = await edit(bob, 'Secretary', { Effort: 'low' }));
     await expect(status).toHaveText('Secretary: the change waits for the AI host\'s approval.');

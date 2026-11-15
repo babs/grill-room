@@ -116,7 +116,7 @@ func setUp(ctx context.Context, tx *txn, r *Room, by *Participant, setup *RoomSe
 	}
 	plugins, kept, left, err := setUpPlugins(ctx, tx, r.ID, by, setup)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("set up room: %w", err)
 	}
 	for _, p := range setup.Personas {
 		var id int64
@@ -220,7 +220,14 @@ func insertKitSkill(ctx context.Context, tx *txn, roomID string, k StarterSkill,
 // is left out, and the personas go without it: a starter's plugin never fails the room's creation
 // (006-AC13). left holds a chat line for each.
 func setUpPlugins(ctx context.Context, tx *txn, roomID string, by *Participant, setup *RoomSetup) (ids map[string]int64, kept int64, left []string, err error) {
-	ids, kept, err = insertKitPlugins(ctx, tx, roomID, by, setup.Plugins, setup.Files, 0, setup.UploadQuota, func(name, why string) {
+	load := func(name string, limit int64) ([]byte, bool, error) {
+		data, ok := setup.Files[name]
+		if !ok {
+			return nil, false, fmt.Errorf("no file %q", name)
+		}
+		return data, int64(len(data)) <= limit, nil
+	}
+	ids, kept, err = insertKitPlugins(ctx, tx, roomID, by, setup.Plugins, load, 0, setup.UploadQuota, func(name, why string) {
 		left = append(left, fmt.Sprintf("The room starts without the starter's plugin %s: %s.", name, why))
 	})
 	return ids, kept, left, err
@@ -230,8 +237,10 @@ func setUpPlugins(ctx context.Context, tx *txn, roomID string, by *Participant, 
 // waiting for the AI host's inspection, and returns their ids by name with the bytes they take. Each
 // snapshot is read again, as an import reads it: the manifest and file list come from its files. A
 // plugin past the instance's current cap, the room's plugin limit (have plugins already) or the
-// bytes its quota has left, free, is left out and told to leave.
-func insertKitPlugins(ctx context.Context, tx *txn, roomID string, by *Participant, plugins []StarterPlugin, files map[string][]byte, have int, free int64,
+// bytes its quota has left, free, is left out and told to leave. load reads a snapshot's file, and
+// fits tells it holds at most limit bytes; one that does not fit may come back without its data.
+func insertKitPlugins(ctx context.Context, tx *txn, roomID string, by *Participant, plugins []StarterPlugin,
+	load func(name string, limit int64) (data []byte, fits bool, err error), have int, free int64,
 	leave func(name, why string)) (ids map[string]int64, kept int64, err error) {
 	ids = map[string]int64{}
 	if len(plugins) == 0 {
@@ -242,15 +251,15 @@ func insertKitPlugins(ctx context.Context, tx *txn, roomID string, by *Participa
 		return nil, 0, err
 	}
 	for _, p := range plugins {
-		data, ok := files[p.File]
-		if !ok {
-			return nil, 0, fmt.Errorf("plugin %s: no file %q", p.Name, p.File)
-		}
 		if have+len(ids) >= MaxRoomPlugins {
 			leave(p.Name, fmt.Sprintf("a room holds at most %d plugins", MaxRoomPlugins))
 			continue
 		}
-		if kept+int64(len(data)) > free {
+		data, fits, err := load(p.File, free-kept)
+		if err != nil {
+			return nil, 0, fmt.Errorf("plugin %s: %w", p.Name, err)
+		}
+		if !fits {
 			leave(p.Name, "it would take the room past its quota")
 			continue
 		}

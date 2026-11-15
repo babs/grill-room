@@ -299,12 +299,30 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); }
 .msg-menu { min-width: 10rem; }
 #chain-form label { flex-direction: row; align-items: center; font-weight: 400; }
 #chain-form input { width: 7rem; }
-#persona-add label { flex: 1; min-width: 12rem; }
+/* 035-AC14: after the bar, never in its scroll area. */
+#persona-new { flex: none; }
+.persona-add { align-items: center; }
+/* The picker (035-AC14): one radio row per library persona, the chosen one marked by more than colour. */
+.persona-pick-row { display: flex; align-items: center; gap: var(--sp-2); width: 100%; min-height: 44px; padding: var(--sp-1) var(--sp-2); border-bottom: 1px solid var(--border); font-weight: 400; }
+.persona-pick-row:has(:checked) { background: var(--primary-bg); box-shadow: inset 3px 0 0 var(--primary); }
+.persona-pick-row .badge { flex: none; padding: 0; background: none; font-size: var(--fs-md); }
+.persona-pick-text { display: flex; flex-direction: column; min-width: 0; }
+.persona-pick-text .pr-name { font-weight: 600; overflow-wrap: anywhere; }
+.persona-pick-text .hint { margin: 0; }
+.persona-preview { margin: var(--sp-3) 0; }
+.persona-preview h3 { margin: 0 0 var(--sp-2); font-size: var(--fs-md); }
 /* The Personas list: one line per persona, its name and settings cut by an ellipsis (009-AC1). */
 .persona-rows { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); margin: 0 0 var(--sp-4); padding: 0; list-style: none; }
-.persona-row { display: flex; align-items: center; gap: var(--sp-2); min-height: 44px; padding: 0 var(--sp-3); white-space: nowrap; font-size: var(--fs-sm); color: var(--text); text-decoration: none;
+/* The card holds the row's link, then its ⋯ (035-AC17). */
+.persona-rows > li { display: flex; align-items: center; gap: var(--sp-1); min-width: 0;
   background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--persona, var(--brand)); border-radius: var(--r-md); }
-.persona-row:hover { border-color: var(--border-strong); border-left-color: var(--persona, var(--brand)); }
+.persona-rows > li:hover { border-color: var(--border-strong); border-left-color: var(--persona, var(--brand)); }
+/* No right padding: the card's gap and the ⋯'s own box space it, and a phone needs every pixel for the settings. */
+.persona-row { display: flex; flex: 1; align-items: center; gap: var(--sp-2); min-width: 0; min-height: 44px; padding: 0 0 0 var(--sp-3); white-space: nowrap; font-size: var(--fs-sm); color: var(--text); text-decoration: none; }
+.persona-row:focus-visible { outline-offset: -2px; }
+.persona-row-more { flex: none; }
+/* The ring stays in the ⋯'s box: outside it, it covered the state dot beside it. */
+.persona-row-more:focus-visible { outline-offset: -2px; box-shadow: inset 0 0 0 4px var(--dot-ring); }
 .persona-row .badge { flex: none; padding: 0; background: none; font-size: var(--fs-md); }
 .persona-row :is(.pr-name, .pr-meta) { overflow: hidden; text-overflow: ellipsis; }
 /* The name gives way first, down to 3 characters; only then the settings. */
@@ -313,7 +331,9 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); }
 .persona-row .led { margin-left: auto; }
 .persona-row .pr-state { flex: none; color: var(--text-muted); font-size: var(--fs-xs); }
 @media (max-width: 40rem) {
-  .persona-row { gap: var(--sp-1); padding: 0 var(--sp-2); }
+  /* Half into the sheet's padding: the ⋯ takes 44 px and the settings must stay whole (009-AC1, 035-AC17). */
+  .persona-rows { margin-inline: calc(-1 * var(--sp-2)); }
+  .persona-row { gap: var(--sp-1); padding-left: var(--sp-2); }
   .persona-row :is(.pr-long, .pr-state) { display: none; }
 }
 /* A persona's sheet (009-AC2): ⋯ and ✕ in its head, its tabs, one form under them. */

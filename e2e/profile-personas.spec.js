@@ -153,3 +153,59 @@ test('persona library: the profile Personas tab', async ({ browser, request }, t
   expect((await agentState(alice, room.id)).personas).toHaveLength(2);
   await expect(await sourceLine(alice.context(), room.id, 'Grill')).toHaveText('Its library persona was deleted.');
 });
+
+// 035-AC3 035-AC4 035-AC5: an edit made on a version another tab replaced is refused and keeps its
+// draft, while the page reads the latest, which Reopen starts from; after sharing from the persona's page the focus
+// is on its heading; "Add to a room…" for a persona deleted meanwhile says so and reads the list again.
+test('persona library: stale edits, focus and gone personas', async ({ browser, request }) => {
+  const me = 'Alice' + uniq();
+  const { room, pages: [alice] } = await roomWith(browser, request, [me]);
+  await personaSheet(alice, 'Grill', 'Identity');
+  await personaAction(alice, 'Save Grill to my personas');
+  await alice.goto('/profile#personas');
+  const mine = alice.locator('#personas-personal li', { hasText: 'Grill' });
+  const id = await mine.getAttribute('data-persona');
+  await mine.getByRole('button', { name: 'Grill', exact: true }).click();
+  const page = alice.locator('#persona-lib-sheet');
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  // Another tab saves v2 meanwhile.
+  const v1 = await alice.evaluate((i) => fetch('/api/profile/personas/' + i).then((r) => r.json()), id);
+  expect(await alice.evaluate(([i, v]) => fetch(`/api/profile/personas/${i}/versions`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...v, version: 1, text: 'From the other tab.' }) }).then((r) => r.status), [id, v1])).toBe(201);
+  await page.getByLabel('Persona text').fill('Mine.');
+  await page.getByRole('button', { name: 'Save version 2', exact: true }).click();
+  // The draft stays, with why, and a deliberate way to the latest version.
+  await expect(page.locator('#persona-lib-edit-status')).toHaveText('version 2 exists: reopen the persona to edit it');
+  await expect(page.getByLabel('Persona text')).toHaveValue('Mine.');
+  const reopen = page.getByRole('button', { name: 'Reopen version 2', exact: true });
+  await reopen.click();
+  await expect(page.getByLabel('Persona text')).toHaveValue('From the other tab.');
+  await expect(page.getByLabel('Name')).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Save version 3', exact: true })).toBeVisible();
+  await expect(reopen).toHaveCount(0);
+  // Cancel shows the latest version read only.
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.locator('.persona-lib-read pre')).toHaveText('From the other tab.');
+
+  // Shared from its page: the focus lands on the page's heading.
+  await page.getByRole('button', { name: 'More actions for Grill' }).click();
+  await alice.getByRole('menuitem', { name: 'Share with everyone' }).click();
+  await confirmSheet(alice, 'Share');
+  await expect(page.locator('#persona-lib-status')).toHaveText('Shared Grill with everyone.');
+  await expect(page.locator('#persona-lib-title')).toBeFocused();
+  await page.getByRole('button', { name: 'More actions for Grill' }).click();
+  await alice.getByRole('menuitem', { name: 'Stop sharing' }).click();
+  await expect(page.locator('#persona-lib-status')).toHaveText('Stopped sharing Grill.');
+  await expect(page.locator('#persona-lib-title')).toBeFocused();
+  await alice.keyboard.press('Escape');
+
+  // Deleted while the room picker is open: the add says so and the list drops it.
+  await mine.getByRole('button', { name: 'More actions for Grill' }).click();
+  await alice.getByRole('menuitem', { name: 'Add to a room…', exact: true }).click();
+  const pick = alice.locator('#persona-room-sheet');
+  await expect(pick.getByLabel('Room')).toHaveValue(room.id);
+  expect(await alice.evaluate((i) => fetch('/api/profile/personas/' + i, { method: 'DELETE' }).then((r) => r.status), id)).toBe(204);
+  await pick.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(pick.getByRole('alert')).toHaveText('no such persona');
+  await expect(mine).toHaveCount(0);
+});

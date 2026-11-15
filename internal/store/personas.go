@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -1056,18 +1057,20 @@ func bringKit(ctx context.Context, tx *txn, p *RoomPersona, t *Template, by *Par
 	leave := func(what, name, why string) {
 		left = append(left, fmt.Sprintf("%s comes without its %s %s: %s.", p.label(), what, name, why))
 	}
-	// Only the blobs that will be inserted are read: a version may freeze megabytes of plugins.
-	file := func(name string) ([]byte, error) {
+	// Only the blobs that will be inserted are read: a version may freeze megabytes of plugins. One
+	// past limit, the quota a plugin has left, stays in the database: only its length is read.
+	load := func(name string, limit int64) ([]byte, bool, error) {
 		var data []byte
-		err := tx.QueryRowContext(ctx, `SELECT f.data FROM persona_template_files f JOIN persona_template_versions v ON v.id = f.version_id
-			WHERE v.template_id = ? AND v.n = ? AND f.name = ?`, t.ID, t.Version, name).Scan(&data)
+		var n int64
+		err := tx.QueryRowContext(ctx, `SELECT CASE WHEN octet_length(f.data) <= ?::bigint THEN f.data END, octet_length(f.data) FROM persona_template_files f
+			JOIN persona_template_versions v ON v.id = f.version_id WHERE v.template_id = ? AND v.n = ? AND f.name = ?`, limit, t.ID, t.Version, name).Scan(&data, &n)
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("persona kit: no file %q", name)
+			return nil, false, fmt.Errorf("no file %q", name)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("persona kit: file %s: %w", name, err)
+			return nil, false, fmt.Errorf("file %s: %w", name, err)
 		}
-		return data, nil
+		return data, n <= limit, nil
 	}
 	skills := map[string][2]int64{}
 	for _, k := range t.FrozenSkills {
@@ -1093,9 +1096,9 @@ func bringKit(ctx context.Context, tx *txn, p *RoomPersona, t *Template, by *Par
 			leave("skill", k.Name, fmt.Sprintf("a room holds at most %d skills", MaxRoomSkills))
 			continue
 		}
-		data, err := file(k.File)
+		data, _, err := load(k.File, math.MaxInt64)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("persona kit: %w", err)
 		}
 		if id, err = insertKitSkill(ctx, tx, p.RoomID, k, data, true); err != nil {
 			return nil, fmt.Errorf("persona kit: %w", err)
@@ -1110,7 +1113,6 @@ func bringKit(ctx context.Context, tx *txn, p *RoomPersona, t *Template, by *Par
 	}
 	plugins := map[string]int64{}
 	var fresh []StarterPlugin
-	files := map[string][]byte{}
 	for _, pl := range t.FrozenPlugins {
 		if !admin {
 			leave("plugin", pl.Name, "a room admin adds plugins")
@@ -1127,9 +1129,6 @@ func bringKit(ctx context.Context, tx *txn, p *RoomPersona, t *Template, by *Par
 		case err == nil:
 			plugins[pl.Name] = id
 		case errors.Is(err, sql.ErrNoRows):
-			if files[pl.File], err = file(pl.File); err != nil {
-				return nil, err
-			}
 			fresh = append(fresh, pl)
 		default:
 			return nil, fmt.Errorf("persona kit: plugin %s: %w", pl.Name, err)
@@ -1144,7 +1143,7 @@ func bringKit(ctx context.Context, tx *txn, p *RoomPersona, t *Template, by *Par
 		if err != nil {
 			return nil, err
 		}
-		added, _, err := insertKitPlugins(ctx, tx, p.RoomID, by, fresh, files, have, quota-used, func(name, why string) { leave("plugin", name, why) })
+		added, _, err := insertKitPlugins(ctx, tx, p.RoomID, by, fresh, load, have, quota-used, func(name, why string) { leave("plugin", name, why) })
 		if err != nil {
 			return nil, fmt.Errorf("persona kit: %w", err)
 		}

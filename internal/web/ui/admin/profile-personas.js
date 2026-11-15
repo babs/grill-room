@@ -51,7 +51,7 @@ function actionsFor(t, say, reload, gone = reload) {
   const fail = (err) => { say(/** @type {Error} */ (err).message); reload(); };
   const dup = () => fetchJSON('POST', base + '/duplicate').then((/** @type {LibPersona} */ c) => { say('Duplicated as ' + c.title + '.'); reload(); }).catch(fail);
   /** @type {[string, () => void][]} */
-  const out = [['Add to a room…', () => addToRoom(t, say)]];
+  const out = [['Add to a room…', () => addToRoom(t, say, reload)]];
   if (!t.mine) return [...out, ['Duplicate to yours', dup]];
   out.push(['Duplicate', dup]);
   // 035-AC5: sharing asks first; stopping does not, rooms keep their copies either way.
@@ -68,9 +68,9 @@ function actionsFor(t, say, reload, gone = reload) {
 /**
  * RoomPick adds a library persona to one of the profile's rooms (035-AC4): any room it has a seat
  * in, where every member may add personas.
- * @param {{t: LibPersona, say: Say}} props
+ * @param {{t: LibPersona, say: Say, reload: () => void}} props
  */
-function RoomPick({ t, say }) {
+function RoomPick({ t, say, reload }) {
   const [rooms, setRooms] = useState(/** @type {{room_id: string, room_name: string}[] | null} */ (null));
   const [room, setRoom] = useState('');
   const [said, setSaid] = useState('');
@@ -91,7 +91,12 @@ function RoomPick({ t, say }) {
       // A room that has a persona of that name already gives the new one another name.
       const as = p.name && p.name !== t.name ? ' as ' + p.name : '';
       say('Added ' + t.title + as + ' to ' + r.room_name + (p.pending ? ': it waits for the AI host\'s approval.' : '.'));
-    }).catch((err) => { setSaid(err.message); setBusy(false); });
+    }).catch((err) => {
+      setSaid(err.message);
+      setBusy(false);
+      // The persona may be gone, deleted or unshared since the list was read.
+      if (err.status === 404) reload();
+    });
   };
   const none = rooms !== null && !rooms.length;
   return html`<div class="sheet-head"><h2 id="persona-room-title">Add ${t.title} to a room</h2>
@@ -109,9 +114,9 @@ function RoomPick({ t, say }) {
     </form>`;
 }
 
-/** @param {LibPersona} t @param {Say} say */
-function addToRoom(t, say) {
-  render(html`<${RoomPick} t=${t} say=${say}/>`, roomSheet);
+/** @param {LibPersona} t @param {Say} say @param {() => void} reload */
+function addToRoom(t, say, reload) {
+  render(html`<${RoomPick} t=${t} say=${say} reload=${reload}/>`, roomSheet);
   roomSheet.showModal();
 }
 
@@ -170,10 +175,12 @@ const editTabs = [['identity', 'Identity'], ['model', 'Model'], ['triggers', 'Tr
 
 /**
  * Edit is the author's editor (035-AC3): the room persona sheet's fields on its four tabs, plus the
- * description. Saving makes the next version of the one opened; rooms keep theirs.
- * @param {{v: LibView, done: (saved: LibPersona) => void, cancel: () => void}} props
+ * description. Saving makes the next version of the one opened; rooms keep theirs. A refusal keeps
+ * the draft; once the page knows of a newer version, latest, Reopen starts over from it.
+ * @param {{v: LibView, latest: number, done: (saved: LibPersona) => void, cancel: () => void, conflict: () => void,
+ *   reopen: () => void, reopened: boolean}} props
  */
-function Edit({ v, done, cancel }) {
+function Edit({ v, latest, done, cancel, conflict, reopen, reopened }) {
   const t0 = triggerOf(v);
   const [f, setF] = useState({
     name: v.name, badge: v.badge, colour: v.colour, text: v.text, description: v.description, model: v.model, effort: v.effort,
@@ -185,6 +192,8 @@ function Edit({ v, done, cancel }) {
   const [said, setSaid] = useState('');
   const [busy, setBusy] = useState(false);
   const form = useRef(/** @type {HTMLFormElement | null} */ (null));
+  // Reopen replaced the button that was pressed: the focus starts the new draft.
+  useEffect(() => { if (reopened) /** @type {HTMLElement | null | undefined} */ (form.current?.querySelector('input[name=name]'))?.focus(); }, []);
   /** @param {Partial<typeof f>} patch */
   const set = (patch) => setF({ ...f, ...patch });
   /** @param {keyof typeof f} k */
@@ -207,7 +216,12 @@ function Edit({ v, done, cancel }) {
       every_n: f.kind === 'every_n' ? n : 0, every_voice: f.kind === 'every_voice' ? n : 0, every_minutes: f.kind === 'every_minutes' ? n : 0,
       self_call: f.self_call, watches_notes: f.watches_notes, time_keeper: f.time_keeper, cut_in_s: Number(f.cut_in_s),
       speaks: f.speaks, voice: f.voice, voice_rate: Number(f.voice_rate),
-    }).then(done).catch((err) => { setSaid(err.message); setBusy(false); });
+    }).then(done).catch((err) => {
+      setSaid(err.message);
+      setBusy(false);
+      // A newer version from another tab, or a limit: the page reads the persona again behind the draft.
+      if (err.status === 409) conflict();
+    });
   };
   const skills = v.frozen_skills || [];
   const plugins = v.frozen_plugins || [];
@@ -269,6 +283,7 @@ function Edit({ v, done, cancel }) {
     <p class="said error" id="persona-lib-edit-status" role="alert">${said}</p>
     <div class="actions">
       <button type="button" class="btn-secondary" onClick=${cancel}>Cancel</button>
+      ${latest > v.version && html`<button type="button" class="btn-secondary" id="persona-lib-reopen" onClick=${reopen}>Reopen version ${latest}</button>`}
       <button type="submit" class="btn-primary" id="persona-lib-save" disabled=${busy}>Save version ${v.version + 1}</button>
     </div>
   </form>`;
@@ -281,6 +296,9 @@ function Edit({ v, done, cancel }) {
  */
 function Page({ first, say, reload }) {
   const [v, setV] = useState(first);
+  // base is the version the editor opened from: a reread behind it leaves the draft alone.
+  const [base, setBase] = useState(first);
+  const [reopened, setReopened] = useState(false);
   const [editing, setEditing] = useState(false);
   const [said, setSaid] = useState('');
   // Leaving the editor gives the focus back to Edit, which it replaced (035-AC3).
@@ -293,18 +311,20 @@ function Page({ first, say, reload }) {
   // Only a persona gone (deleted, unshared) closes its page; any other failure says why.
   const reread = () => fetchJSON('GET', '/api/profile/personas/' + v.id).then(setV)
     .catch((err) => (err.status === 404 ? sheet.close() : tell(err.message)));
-  const changed = () => { reload(); reread(); };
-  const items = actionsFor(v, tell, changed, () => { reload(); sheet.close(); });
-  return html`<div class="sheet-head"><h2 id="persona-lib-title"><span class="badge persona-badge">${v.badge}</span> ${editing ? 'Edit ' + v.title : v.title}</h2>
+  const changed = () => { reload(); return reread(); };
+  // The menu item that ran it is gone: the focus goes to the page's heading, not the body.
+  const title = useRef(/** @type {HTMLHeadingElement | null} */ (null));
+  const items = actionsFor(v, tell, () => changed().then(() => title.current?.focus()), () => { reload(); sheet.close(); });
+  return html`<div class="sheet-head"><h2 ref=${title} tabIndex="-1" id="persona-lib-title"><span class="badge persona-badge">${v.badge}</span> ${editing ? 'Edit ' + v.title : v.title}</h2>
       <span class="sheet-tools">
-        ${v.mine && !editing && html`<button ref=${edit} type="button" class="btn-secondary" id="persona-lib-edit" onClick=${() => { setSaid(''); setEditing(true); }}>Edit</button>`}
+        ${v.mine && !editing && html`<button ref=${edit} type="button" class="btn-secondary" id="persona-lib-edit" onClick=${() => { setSaid(''); setBase(v); setReopened(false); setEditing(true); }}>Edit</button>`}
         ${!editing && html`<${RowMenu} id="persona-lib-menu" label=${'More actions for ' + v.title} items=${items}/>`}
         <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${() => sheet.close()} dangerouslySetInnerHTML=${icon('close')}></button>
       </span></div>
     <p class="hint">v${v.version} · by ${v.author} · ${sections.find(([s]) => s === v.section)?.[1]}</p>
     <p class="said" id="persona-lib-status" role="status">${said}</p>
     ${editing
-      ? html`<${Edit} key=${v.version} v=${v} cancel=${leave}
+      ? html`<${Edit} key=${base.version} v=${base} latest=${v.version} cancel=${leave} conflict=${reread} reopen=${() => { setBase(v); setReopened(true); }} reopened=${reopened}
         done=${(/** @type {LibPersona} */ saved) => { leave(); tell('Saved ' + saved.title + ' v' + saved.version + '.'); changed(); }}/>`
       : html`<${Read} v=${v}/>`}`;
 }
