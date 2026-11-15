@@ -111,7 +111,7 @@ function end(text) {
   $('upload-open').hidden = true;
   for (const el of document.querySelectorAll('.dropping')) el.classList.remove('dropping');
   document.body.classList.remove('drag-files');
-  for (const id of ['manage-open', 'invite-open', 'personas-open', 'ai-open', 'overview-open', 'help-open', 'links-open', 'leave-open', 'leave-why', 'room-proposed-in']) $(id).hidden = true;
+  for (const id of ['manage-open', 'invite-open', 'personas-open', 'ai-open', 'overview-open', 'help-open', 'links-open', 'leave-open', 'leave-why', 'room-proposed-in', 'switch-open']) $(id).hidden = true;
   $('room-open').disabled = true;
   delete $('room-open').dataset.tip;
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
@@ -1561,14 +1561,48 @@ const anonText = 'Profile without email: add one to find it on another device';
 const noEmail = () => own.email_enabled && !!own.profile && !own.profile.email;
 // ownLoaded is the latest loadOwn, settled.
 let ownLoaded = Promise.resolve();
-const reloadOwn = () => { ownLoaded = loadOwn().catch(console.error); };
+// ownState is how the last read ended, for the switcher: 'loading' until one answers, 'ok' or
+// 'failed' (041-AC3); ownAt is when the last one succeeded.
+let ownState = 'loading';
+let ownAt = 0;
+let ownBusy = false;
+let ownAgain = false;
+// One request at a time (041-AC3); a call meanwhile runs one more read after it, so a return to
+// the tab during a slow read still lands its state (011-AC9).
+const reloadOwn = () => {
+  if (ownBusy) {
+    ownAgain = true;
+    return;
+  }
+  ownBusy = true;
+  ownLoaded = (async () => {
+    try {
+      do {
+        ownAgain = false;
+        await loadOwn().catch((err) => {
+          ownState = 'failed';
+          console.error(err);
+        });
+        showSwitch();
+      } while (ownAgain);
+    } finally {
+      ownBusy = false;
+    }
+  })();
+};
 // ownSeen: the first profile read answered, or failed: Help's email line waits for it (042-AC9).
 let ownSeen = false;
 async function loadOwn() {
   try {
-    const res = await netFetch('/api/profile');
-    if (!res.ok) return;
+    // Bounded: a read that hangs would hold every later one, and what awaits ownLoaded.
+    const res = await netFetch('/api/profile', { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) {
+      ownState = 'failed';
+      return;
+    }
     own = await res.json();
+    ownState = 'ok';
+    ownAt = Date.now();
   } finally {
     ownSeen = true;
     renderHelp();
@@ -1584,6 +1618,62 @@ async function loadOwn() {
   if (participants.length) renderParticipants();
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) reloadOwn(); });
+
+// The room switcher (041): the browser's profile's rooms, from own. Until a read succeeds the
+// seat's profile stands in, so "Loading your rooms…" can show (041-AC3); then own.profile decides
+// (041-AC1). No switcher in an ended room nor in the docs and chat windows (041-AC6).
+const switchMenu = $('room-switch');
+function showSwitch() {
+  $('switch-open').hidden = ended || docsMode || chatMode || !(own.profile || (hasProfile && !ownAt));
+  if (!switchMenu.matches(':popover-open')) return;
+  if (!$('switch-open').hidden) return renderSwitch();
+  // The focus would drop to the page: what held it at opening sits in a closed menu.
+  const had = switchMenu.contains(document.activeElement);
+  switchMenu.hidePopover();
+  if (had) $('room-open').focus();
+}
+// renderSwitch replaces the rows before the two links, never merges them (041-AC3); a focus on a
+// row stays on its room, one on the status line moves to the first row (041-AC6).
+function renderSwitch() {
+  const was = document.activeElement;
+  const keep = switchMenu.contains(was) && was.matches('.switch-item') ? was.dataset.room || '' : null;
+  const note = (text) => Object.assign(document.createElement('p'), { className: 'switch-item switch-note', tabIndex: -1, textContent: text });
+  const rooms = (own.profile?.rooms || []).filter((r) => r.room_id !== roomID)
+    .sort((a, b) => Date.parse(b.last_activity) - Date.parse(a.last_activity)).slice(0, 5);
+  const items = ownState === 'loading' ? [note('Loading your rooms…')]
+    : ownState === 'failed' ? [note('Your rooms could not load.')]
+    : rooms.length ? rooms.map((r) => {
+      const a = Object.assign(document.createElement('a'), { className: 'switch-item switch-room', href: '/r/' + encodeURIComponent(r.room_id) });
+      a.dataset.room = r.room_id;
+      // Two names sharing a start end in the same ellipsis: the tip tells them apart.
+      a.dataset.tip = r.room_name;
+      const name = Object.assign(document.createElement('span'), { className: 'switch-name', textContent: r.room_name });
+      const meta = Object.assign(document.createElement('span'), { className: 'switch-meta', textContent: 'active ' + grillAgo(r.last_activity) + (r.admin ? ' · room admin' : '') });
+      a.append(name, ' ', meta);
+      return a;
+    }) : [note('No other rooms yet.')];
+  for (const el of switchMenu.querySelectorAll(':scope > .switch-item')) el.remove();
+  switchMenu.querySelector(':scope > hr').before(...items);
+  if (keep === null) return;
+  const first = switchMenu.querySelector(':scope > .switch-item');
+  const same = keep && [...switchMenu.querySelectorAll(':scope > .switch-room')].find((a) => a.dataset.room === keep);
+  (same || first)?.focus();
+}
+$('switch-open').addEventListener('click', () => {
+  $('room-menu').hidePopover();
+  switchMenu.showPopover();
+  renderSwitch();
+  switchMenu.querySelector(':scope > .switch-item')?.focus();
+  // A read under way redraws the list when it lands.
+  if (!ownBusy && Date.now() - ownAt > 60000) reloadOwn();
+});
+// Escape gives the focus to the room's name, not to what held it at opening: a click in Safari focuses no button (041-AC6).
+switchMenu.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  e.preventDefault();
+  switchMenu.hidePopover();
+  $('room-open').focus();
+});
 
 // Text size per area (028): a multiplier on the area's base size, which app.css reads. The
 // profile's pick wins; this browser keeps a copy for the first paint, and the only one for a seat
@@ -6953,6 +7043,7 @@ async function firstLoad() {
 firstLoad().then((ok) => {
   if (!ok) return;
   connect();
+  showSwitch();
   reloadOwn();
   if (docsMode) {
     const doc = decodeURIComponent(location.pathname.split('/')[4] || '');

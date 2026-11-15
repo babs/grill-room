@@ -207,6 +207,12 @@ body.room { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: 1
 #room-open:hover:enabled .name { text-decoration: underline; }
 #room-open:disabled .chev { display: none; }
 #room-menu { right: auto; left: var(--sp-2); }
+/* The room switcher opens in the room menu's place (041-AC1); a capped width lets a long name end in an ellipsis (041-AC2). */
+#room-switch { right: auto; left: var(--sp-2); width: 20rem; }
+#room-switch .switch-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#room-switch .switch-meta { flex: none; }
+#room-switch :is(.switch-meta, .switch-note) { color: var(--text-muted); font-size: var(--fs-sm); }
+#room-switch > .switch-note { margin: 0; padding: var(--sp-2) var(--sp-3); }
 /* A persona pill: its colour as a stripe, its state as a shape with a ring and, wide, as a word (005-AC32). */
 button.persona { flex: none; min-height: var(--control-h); padding: 0 var(--sp-3) 0 var(--sp-2); border: 0; border-radius: var(--r-pill); background: var(--surface); color: var(--text); font-weight: 600; }
 button.persona { box-shadow: inset 0 0 0 1px var(--border-strong); }
