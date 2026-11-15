@@ -84,7 +84,8 @@ test('removing the AI host hands the role to the standby app', async ({ browser,
     const blocked = admin.locator('#room-panel #blocked');
     await expect(blocked).toContainText('Carol');
     await blocked.getByRole('button', { name: 'Unblock Carol' }).click();
-    await expect(admin.locator('#room-panel #blocked')).toHaveCount(0);
+    // 040-AC13: the section stays, empty.
+    await expect(admin.locator('#room-panel #blocked-empty')).toHaveText('Nobody is blocked.');
     await expect(alice.locator('#messages')).toContainText('The admin unblocked Carol');
   } finally {
     for (const stop of stops) stop();

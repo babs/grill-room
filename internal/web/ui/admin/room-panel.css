@@ -13,9 +13,13 @@
 :is(#room-panel, #panel-invites) ul:not(.list-rows) { padding-left: 0; list-style: none; }
 :is(#room-panel, #panel-invites) ul:not(.list-rows) > li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-height: var(--control-h); }
 #room-panel .tab-panel { padding-top: var(--sp-2); }
-/* Admins in columns, one template on both pages: name, role, the admin button, ⋯. */
-.admin-cols { --cols: minmax(10rem, 1fr) 7rem 11rem var(--control-h); }
+/* Members in columns: name, invite, /admin's admin button, ⋯; the room page has no button (shared). */
+.admin-cols { --cols: minmax(10rem, 1fr) minmax(5rem, 12rem) 11rem var(--control-h); }
+.admin-cols.shared { --cols: minmax(10rem, 1fr) minmax(5rem, 12rem) var(--control-h); }
 .admin-cols .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A 60-character invite name ends in an ellipsis, whole in its tip. */
+.admin-cols .cell.invite { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#invites-all .name { overflow-wrap: anywhere; }
 #invites-all { --cols: minmax(10rem, 2fr) minmax(7rem, 1fr) minmax(6rem, 1fr) var(--control-h); }
 #blocked { --cols: minmax(10rem, 2fr) minmax(7rem, 1fr) minmax(6rem, 1fr) 7rem; }
 form.rename { display: inline-flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }

@@ -240,7 +240,9 @@ test('a person menu, not in-place settings', async ({ browser, request }) => {
   await robert.click();
   await expect(robert).toHaveAttribute('aria-expanded', 'true');
   await self.click();
-  await expect(menu.locator('button')).toHaveText(['Leave room…']);
+  // 040-AC11: a room admin's own row steps down too, the last one not (040-AC12).
+  await expect(menu.locator('button')).toHaveText(['Step down', 'Leave room…']);
+  await expect(menu.getByRole('button', { name: 'Step down' })).toHaveAttribute('data-tip', 'Make someone else room admin first.');
   await expect(menu.getByRole('button', { name: 'Leave room…' })).toHaveAttribute('aria-disabled', 'true');
   await alice.keyboard.press('Escape');
   await alice.setViewportSize({ width: 390, height: 844 });

@@ -402,3 +402,43 @@ test('a document on a phone and a desktop folds nothing', async ({ browser, requ
   await expect(alice.locator('#viewer')).toBeVisible();
   expect(await folds(alice)).toEqual([[false, null], [false, null]]);
 });
+
+// memberRows measures each Members row in scope: inside the sheet, the invite cell cut by an
+// ellipsis within its row and clear of the ⋯ (beside it, or on a phone's second line), with the
+// whole name in its tip, and the ⋯ at the row's end.
+const memberRows = (page, scope) => page.locator(scope).evaluate((root) => [...root.querySelectorAll('#room-admins > li')].map((li) => {
+  const [r, s] = [li.getBoundingClientRect(), root.getBoundingClientRect()];
+  const cell = li.querySelector('.cell.invite');
+  const c = cell.getBoundingClientRect();
+  const more = li.querySelector('.actions .more').getBoundingClientRect();
+  return { inSheet: r.left >= s.left - 0.5 && r.right <= s.right + 0.5, cellInRow: c.left >= r.left - 0.5 && c.right <= r.right + 0.5
+    && (c.right <= more.left + 0.5 || c.top >= more.bottom - 0.5 || c.bottom <= more.top + 0.5),
+    cut: cell.scrollWidth > cell.clientWidth, tip: cell.dataset.tip, moreAtEnd: r.right - more.right < 24, oneLine: c.height < 40 };
+}));
+
+for (const [size, viewport] of Object.entries({ phone: sizes.phone, desktop: sizes.desktop })) {
+  // 040-AC10 040-AC17: a 60-character invite name in Members stays in its cell, cut with an ellipsis
+  // and whole in its tip, and the row's ⋯ stays at its end, in Room settings and in /admin.
+  test(`Members with a long invite name, ${size}`, async ({ browser, request }) => {
+    const long = 'W'.repeat(60);
+    const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Long invite ' + uniq() } })).json();
+    const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin, data: { name: long } })).json();
+    const alice = await (await browser.newContext({ viewport })).newPage();
+    await alice.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
+    await alice.getByLabel('Your name').fill('Alice');
+    await alice.getByRole('button', { name: 'Join the room' }).click();
+    await expect(alice.locator('#me')).toHaveText('Alice');
+    await appointAdmin(alice, request, room.id);
+    await alice.goto(`/r/${room.id}#manage/admins`);
+    await expect(alice.locator('#manage #room-admins .cell.invite')).toHaveText(long);
+    const want = [{ inSheet: true, cellInRow: true, cut: true, tip: long, moreAtEnd: true, oneLine: true }];
+    expect(await memberRows(alice, '#manage')).toEqual(want);
+    expect(await probe(alice, '#manage')).toMatchObject({ clipped: [], pageOverflow: 0 });
+
+    const page = await (await browser.newContext({ viewport })).newPage();
+    expect(await signIn(page, adminToken, `rooms/${room.id}/admins`)).toBe(201);
+    await expect(page.locator('#room-panel #room-admins .cell.invite')).toHaveText(long);
+    expect(await memberRows(page, '#room-panel')).toEqual(want);
+    expect(await probe(page, '#room-panel')).toMatchObject({ clipped: [], pageOverflow: 0 });
+  });
+}

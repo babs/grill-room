@@ -454,9 +454,9 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 .person-more.blank { visibility: hidden; }
 #person-menu input[type=range] { width: 8rem; }
 /* A toggle draws both states, a box ticked or empty in the icon column, kept out of the accessible name. */
-#person-menu .ico.toggle { display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 1; }
-#person-menu [aria-pressed=true] > .ico.toggle { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }
-#person-menu [aria-pressed=true] > .ico.toggle::before { content: "✓" / ""; }
+#person-menu .ico.toggle, .row-menu .ico.toggle { display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 1; }
+#person-menu [aria-pressed=true] > .ico.toggle, .row-menu [aria-pressed=true] > .ico.toggle { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }
+#person-menu [aria-pressed=true] > .ico.toggle::before, .row-menu [aria-pressed=true] > .ico.toggle::before { content: "✓" / ""; }
 /* The details card and the badge tip (009-AC36): styled popovers, no native title tooltip. */
 .person-card { position: fixed; inset: auto; margin: 0; max-width: 20rem; padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); color: var(--text); box-shadow: var(--sh-2); font-size: var(--fs-sm); line-height: 1.45; }

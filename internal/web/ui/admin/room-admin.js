@@ -17,12 +17,13 @@ import { PluginsTab, mountReview } from './plugins.js';
  * @typedef {{room: {id: string, name: string, speech?: Speech}, me: Participant, participants: Participant[], tts?: boolean, voice?: boolean}} RoomData
  * @typedef {{id: number, name: string, badge: string, model: string, effort: string, pending?: boolean}} Persona
  * @typedef {{personas?: Persona[], host_participant_id?: number, you_host?: boolean, egress_admins_allow?: boolean,
- *   connectors?: {name: string, actions?: boolean}[]}} AgentState
+ *   connectors?: {name: string, actions?: boolean}[], can_trigger?: number[]}} AgentState
  * @typedef {{glossary: string, prompt: string, used: number, total: number, capacity: number}} Glossary
  * @typedef {{glossary: boolean, available?: boolean, listening?: boolean}} STTState
  */
 
-const w = /** @type {Window & {grillRoom?: RoomData, grillAgent?: AgentState, grillSTT?: STTState, grillLinks?: RoomLink[], grillShowLinks?: () => void, grillSheetBack?: () => boolean}} */ (window);
+const w = /** @type {Window & {grillRoom?: RoomData, grillAgent?: AgentState, grillSTT?: STTState, grillLinks?: RoomLink[], grillShowLinks?: () => void, grillSheetBack?: () => boolean,
+  grillMembershipActions?: (p: import('./room-panel.js').Member) => import('./room-panel.js').MembershipAction[]}} */ (window);
 const roomData = signal(w.grillRoom);
 const agentState = signal(w.grillAgent);
 // The glossary tab works only while a transcription worker reads it (007-AC14); its data stays.
@@ -95,7 +96,7 @@ dialog.addEventListener('close', () => {
 /** @param {{data: RoomData, tab: string, tabs: string[][]}} props */
 function Manage({ data, tab, tabs }) {
   const base = '/api/rooms/' + encodeURIComponent(data.room.id);
-  const [room, setRoom] = useState(/** @type {import('./room-panel.js').Room | null} */ (null));
+  const [room, setRoom] = useState(/** @type {(import('./room-panel.js').Room & {seats?: {participant_id: number, invite_id: number, invite_name?: string}[]}) | null} */ (null));
   const [said, setSaid] = useState('');
   /** @param {unknown} err */
   const show = (err) => setSaid(/** @type {Error} */ (err).message);
@@ -104,6 +105,12 @@ function Manage({ data, tab, tabs }) {
   useEffect(() => { load(); }, [data]);
   /** @param {number} id */
   const byName = (id) => data.participants.find((p) => p.id === id)?.name || 'a former participant';
+  // 040-AC10: one row per seat, its invite from the admin-only overview, never the room payload.
+  const ag = agentState.value;
+  const members = data.participants.map((p) => {
+    const seat = room?.seats?.find((s) => s.participant_id === p.id);
+    return { ...p, host: ag?.host_participant_id === p.id, can_ask: !!ag?.can_trigger?.includes(p.id), invite_id: seat?.invite_id, invite_name: seat?.invite_name };
+  });
   return html`
     <p class="said" role="alert">${said}</p>
     ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${base} api=${fetchJSON} show=${show} reload=${load} byName=${byName} me=${data.me.id}
@@ -113,8 +120,9 @@ function Manage({ data, tab, tabs }) {
         <div class="row"><button type="button" class="btn-secondary" id="save-starter" onClick=${() => saveAsStarter(base, setSaid)}>Save as starter</button></div>
         <p class="hint">The server's audit log records what room admins do here.</p>`}>
       ${tab === 'admins' && html`
-        <p class="hint">Room admins rename the room and its participants, manage every invite, appoint other admins and delete the room. The room keeps at least one.</p>
-        <${AdminRows} people=${data.participants} base=${base} api=${fetchJSON} show=${show} done=${() => setSaid('')} me=${data.me.id}/>
+        <p class="hint">Every seat in the room and the invite it joined through. Room admins rename the room and its participants, manage every invite, appoint other admins and delete the room. The room keeps at least one.</p>
+        <${AdminRows} people=${members} base=${base} api=${fetchJSON} show=${show} done=${() => setSaid('')} me=${data.me.id}
+          actions=${(/** @type {import('./room-panel.js').Member} */ p) => w.grillMembershipActions?.(p) || []}/>
         <${Blocked} base=${base} api=${fetchJSON} show=${show} people=${data.participants}/>`}
       ${tab === 'links' && html`<${LinksTab} data=${data} base=${base} show=${show}/>`}
       ${tab === 'documents' && html`<${DeletedDocuments} base=${base} show=${show}/>`}

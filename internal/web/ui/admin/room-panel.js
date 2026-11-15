@@ -9,7 +9,7 @@ import { html } from 'htm/preact';
  * @typedef {{id: string, name: string, created_at: string, last_activity: string, participants: number, personas: number,
  *   host_participant_id?: number, quota_bytes: number, quota: number, used: number, host_online: boolean, volume: Volume,
  *   created_from?: {title: string, version: number}, proposed_in?: {room?: string, name: string, member?: boolean}, private_plugins?: string[]}} Room
- * @typedef {{id: number, created_at: string, created_by?: number, revoked_at?: string, shareable?: boolean}} Invite
+ * @typedef {{id: number, created_at: string, created_by?: number, revoked_at?: string, shareable?: boolean, name?: string, in_room: number}} Invite
  * @typedef {{participant_id: number, name: string, admin: boolean, you: boolean}} Person
  * @typedef {{id: number, invites: number[], lose: Person[], keep: Person[]}} Preview
  * @typedef {{profile_id: number, name: string, created_at: string, by?: string}} Block
@@ -68,15 +68,82 @@ export const onInput = (set) => (/** @type {Event} */ e) => set(/** @type {HTMLI
 export const formAction = (work) => (/** @type {Event} */ e) => { e.preventDefault(); work(); };
 
 /**
+ * @typedef {{checked?: boolean, disabled?: boolean, reason?: string}} ItemState
+ * @typedef {[string, () => void, string?, string?, ItemState?]} MenuItem
+ */
+
+/**
  * RowMenu is a row's ⋯ and its menu of actions (docs/design.md §5); each item closes the menu. An
- * item is [text, run, class, aria-label].
- * @param {{id: string, label: string, items: [string, () => void, string?, string?][]}} props
+ * item is [text, run, class, aria-label, state]: a toggle shows its box, and a disabled item stays
+ * focusable with its reason as its tip, as People's ⋯ (040-AC11).
+ * @param {{id: string, label: string, items: MenuItem[]}} props
  */
 export function RowMenu({ id, label, items }) {
   return html`<button type="button" class="btn-icon btn-ghost more" popovertarget=${id} aria-label=${label} dangerouslySetInnerHTML=${icon('more')}></button>
-    <div id=${id} class="menu row-menu" popover>${items.map(([text, run, cls, aria]) => html`<button type="button" class=${cls}
-      popovertarget=${id} popovertargetaction="hide" aria-label=${aria} onClick=${run}>${text}</button>`)}</div>`;
+    <div id=${id} class="menu row-menu" popover>${items.map(([text, run, cls, aria, st = {}]) => html`<button type="button" class=${cls}
+      popovertarget=${st.disabled ? undefined : id} popovertargetaction=${st.disabled ? undefined : 'hide'} aria-label=${aria}
+      aria-pressed=${st.checked === undefined ? undefined : String(st.checked)} aria-disabled=${st.disabled ? 'true' : undefined}
+      data-tip=${st.disabled ? st.reason : undefined} onClick=${st.disabled ? undefined : run}>${st.checked !== undefined && html`<span class="ico toggle"></span>`}${text}</button>`)}</div>`;
 }
+
+/**
+ * followFocus puts the focus on sel, or on fallback once sel is gone, once work has settled, and
+ * keeps it there while the rows redraw, for 5 s. From the call on, the user's click or key outside a
+ * dialog work opened ends it, and so does a focus moved off where the action left it.
+ * @param {string} sel
+ * @param {string} [fallback]
+ * @param {() => unknown} [work]
+ */
+export function followFocus(sel, fallback, work) {
+  const at = document.querySelector(sel);
+  // Where the action leaves the focus: its menu item, its ⋯, or the page once a dialog took it.
+  const left = new Set([document.activeElement, at]);
+  const home = at?.closest('dialog');
+  /** @type {Element | null} */
+  let ours = null;
+  let done = false;
+  const follow = () => {
+    const l = /** @type {HTMLElement | null} */ (document.querySelector(sel) || (fallback ? document.querySelector(fallback) : null));
+    const now = document.activeElement;
+    if (done || !l || l === now) return;
+    if (now && now !== document.body && now !== ours && !left.has(now) && now.isConnected) {
+      stop();
+      return;
+    }
+    l.focus();
+    ours = l;
+  };
+  const watch = new MutationObserver(follow);
+  /** @param {Event} e */
+  const user = (e) => {
+    const d = e.target instanceof Element ? e.target.closest('dialog') : null;
+    if (!d || d === home) stop();
+  };
+  const stop = () => {
+    done = true;
+    watch.disconnect();
+    removeEventListener('pointerdown', user, true);
+    removeEventListener('keydown', user, true);
+  };
+  addEventListener('pointerdown', user, true);
+  addEventListener('keydown', user, true);
+  Promise.resolve(work?.()).finally(() => {
+    if (done) return;
+    watch.observe(document.body, { childList: true, subtree: true });
+    setTimeout(stop, 5000);
+    follow();
+  });
+}
+
+/** The ⋯ of the RowMenu whose menu is id. @param {string} id */
+const moreOf = (id) => `[popovertarget="${id}"]`;
+
+/**
+ * inviteLabel is an invite as its rows name it: its name, or "Link <id>" (040-AC15).
+ * @param {number} id
+ * @param {string} [name]
+ */
+export const inviteLabel = (id, name) => name || 'Link ' + id;
 
 /**
  * Meter is a share used, as a bar and the words for it (the native meter draws per browser).
@@ -103,25 +170,34 @@ export function uaName(ua) {
 
 /**
  * @typedef {{join_ip: string, join_ua: string, last_ip: string, last_ua: string, last_seen_at: string | null}} Client
- * @typedef {{id: number, name: string, admin: boolean, has_profile?: boolean, no_profile?: boolean, host?: boolean, can_host?: boolean, client?: Client}} Member
+ * @typedef {{id: number, name: string, admin: boolean, has_profile?: boolean, no_profile?: boolean, host?: boolean, can_host?: boolean,
+ *   can_ask?: boolean, invite_id?: number, invite_name?: string, client?: Client}} Member
+ * @typedef {{id: string, label: string, checked?: boolean, disabled?: boolean, reason?: string, run: () => unknown}} MembershipAction
  */
 
 /**
- * AdminRows lists a room's participants in columns, for /admin and the room's Room settings alike
- * (005-AC21, 004b-AC4): the name with where they were last seen, the role, the admin button, and a
- * ⋯ with Rename and, where offered, Make AI host. Only a participant with a profile can be made an
+ * AdminRows lists a room's seats, one row each (003), in columns, for /admin and the room's Room
+ * settings alike (005-AC21, 004b-AC4, 040-AC10): the name with its badges and where they were last
+ * seen, and the invite the seat joined through. The room page passes actions, the membership
+ * actions People's ⋯ shows (040-AC11), for the row's ⋯; /admin keeps its admin button and a ⋯
+ * with Rename and, where offered, Make AI host. Only a participant with a profile can be made an
  * admin (has_profile, when the page knows it).
  * @param {{people: Member[], base: string, api: Api, show: (err: unknown) => void, done: () => void, me?: number,
- *   makeHost?: (p: Member) => void}} props
+ *   makeHost?: (p: Member) => void, actions?: (p: Member) => MembershipAction[]}} props
  */
-export function AdminRows({ people, base, api, show, done, me, makeHost }) {
-  return html`<div class="cols admin-cols"><ul id="room-admins" class="list-rows">${people.map((p) => html`<${AdminRow} key=${p.id} p=${p}
-    base=${base} api=${api} show=${show} done=${done} me=${me} makeHost=${makeHost}/>`)}</ul></div>`;
+export function AdminRows({ people, base, api, show, done, me, makeHost, actions }) {
+  return html`<div class=${'cols admin-cols' + (actions ? ' shared' : '')}><ul id="room-admins" class="list-rows">${people.map((p) => html`<${AdminRow} key=${p.id} p=${p}
+    base=${base} api=${api} show=${show} done=${done} me=${me} makeHost=${makeHost} actions=${actions}/>`)}</ul></div>`;
 }
 
-/** @param {{p: Member, base: string, api: Api, show: (err: unknown) => void, done: () => void, me?: number, makeHost?: (p: Member) => void}} props */
-function AdminRow({ p, base, api, show, done, me, makeHost }) {
+/** @param {{p: Member, base: string, api: Api, show: (err: unknown) => void, done: () => void, me?: number, makeHost?: (p: Member) => void,
+ *   actions?: (p: Member) => MembershipAction[]}} props */
+function AdminRow({ p, base, api, show, done, me, makeHost, actions }) {
   const [renaming, setRenaming] = useState(false);
+  const menu = 'admin-menu-' + p.id;
+  // A row gone, its person removed, hands the focus to the list's first ⋯.
+  /** @param {() => unknown} [work] */
+  const back = (work) => followFocus(moreOf(menu), '#room-admins .more', work);
   /** @param {Member} p */
   const remove = async (p) => {
     const box = document.createElement('label');
@@ -138,24 +214,26 @@ function AdminRow({ p, base, api, show, done, me, makeHost }) {
   const c = p.client;
   const seen = c && c.last_ip ? [c.last_seen_at ? 'last active ' + window.grillAgo(c.last_seen_at) : '', uaName(c.last_ua)].filter(Boolean).join(' · ') : '';
   const tip = c && c.last_ip ? `Joined from ${c.join_ip || 'unknown'}, ${c.join_ua || 'no user agent'}. Last from ${c.last_ip}, ${c.last_ua || 'no user agent'}.` : '';
-  /** @type {[string, () => void, string?, string?][]} */
-  const items = [['Rename…', () => setRenaming(true), '', 'Rename ' + p.name]];
-  if (makeHost && !p.host && p.can_host) items.push(['Make AI host', () => makeHost(p), '', 'Make ' + p.name + ' the AI host']);
+  /** @type {MenuItem[]} */
+  const items = actions ? actions(p).map((a) => /** @type {MenuItem} */ ([a.label, () => back(a.run), '', undefined, a]))
+    : [['Rename…', () => setRenaming(true), '', 'Rename ' + p.name]];
+  if (!actions && makeHost && !p.host && p.can_host) items.push(['Make AI host', () => makeHost(p), '', 'Make ' + p.name + ' the AI host']);
   // 016-AC6, Q2: a room admin steps down before anyone removes them.
-  if (p.id !== me && !p.admin) items.push(['Remove from room…', () => remove(p), 'danger', 'Remove ' + p.name + ' from the room']);
+  if (!actions && p.id !== me && !p.admin) items.push(['Remove from room…', () => remove(p), 'danger', 'Remove ' + p.name + ' from the room']);
+  const close = () => { setRenaming(false); back(); };
   return html`<li class="list-row">
     <div class="main">${renaming ? html`<${Rename} name=${p.name} path=${`${base}/participants/${p.id}/name`} api=${api} show=${show}
-        done=${() => { setRenaming(false); done(); }} cancel=${() => setRenaming(false)}/>`
-      : html`<span class="name who">${p.name}</span>${p.host && html` <span class="badge">AI host</span>`}
+        done=${done} cancel=${close}/>`
+      : html`<span class="name who">${p.name}</span>${p.admin && html` <span class="badge role">room admin</span>`}${p.host && html` <span class="badge">AI host</span>`}${p.can_ask && html` <span class="badge">can ask the AI</span>`}
         ${seen && html`<div class="meta" data-tip=${tip}>${seen}</div>`}`}</div>
     <div class="cells">
-      <span class="cell" data-label="Role">${p.admin ? html`<span class="badge role">admin</span>` : 'member'}</span>
-      <span class="cell">${p.has_profile === false ? html`<span class="hint" data-tip="Only a participant with a profile can be an admin.">no profile</span>`
+      <span class="cell invite" data-label="Invite" data-tip=${p.invite_id ? inviteLabel(p.invite_id, p.invite_name) : undefined}>${p.invite_id ? inviteLabel(p.invite_id, p.invite_name) : ''}</span>
+      ${!actions && html`<span class="cell">${p.has_profile === false ? html`<span class="hint" data-tip="Only a participant with a profile can be an admin.">no profile</span>`
         : p.admin ? html`<button type="button" class="btn-secondary admin-toggle" onClick=${() => set(false)}
           aria-label=${p.id === me ? 'Step down as a room admin' : 'Remove ' + p.name + ' from the room admins'}>${p.id === me ? 'Step down' : 'Remove admin'}</button>`
-        : html`<button type="button" class="btn-secondary admin-toggle" onClick=${() => set(true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}</span>
+        : html`<button type="button" class="btn-secondary admin-toggle" onClick=${() => set(true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}</span>`}
     </div>
-    <div class="actions"><${RowMenu} id=${'admin-menu-' + p.id} label=${'More actions on ' + p.name} items=${items}/></div>
+    <div class="actions">${items.length > 0 && html`<${RowMenu} id=${menu} label=${'More actions on ' + p.name} items=${items}/>`}</div>
   </li>`;
 }
 
@@ -254,13 +332,16 @@ const toast = (text) => dispatchEvent(new CustomEvent('grill:toast', { detail: t
 
 /**
  * Invites lists the room's invites, every one for an admin and a member's own for a member
- * (011-AC27); me marks the viewer's shareable link. A revoke asks first in RevokeSheet (011-AC19);
- * cut, for a room admin or the super-admin, lets it remove the people who joined (016-AC4).
+ * (011-AC27); me marks the viewer's shareable link. A new one takes an optional name, and each
+ * row's ⋯ renames it (040-AC14): whoever sees a row made it or administers the room. Stop new joins
+ * asks first in RevokeSheet (011-AC19, 040-AC16); cut, for a room admin or the super-admin, lets it
+ * remove the people who joined (016-AC4).
  * @param {{base: string, api: Api, show: (err: unknown) => void, byName?: (id: number) => string, me?: number, cut?: boolean}} props
  */
 export function Invites({ base, api, show, byName, me, cut = false }) {
   const [invites, setInvites] = useState(/** @type {Invite[] | null} */ (null));
   const [link, setLink] = useState('');
+  const [name, setName] = useState('');
   const [making, setMaking] = useState(false);
   const [asking, setAsking] = useState(0);
   const [preview, setPreview] = useState(/** @type {Preview | null} */ (null));
@@ -274,7 +355,7 @@ export function Invites({ base, api, show, byName, me, cut = false }) {
   useEffect(() => { load(); }, [base]);
   const invite = () => {
     setMaking(true);
-    api('POST', base + '/invites').then((/** @type {{url: string}} */ i) => { setLink(i.url); load(); }).catch(show).finally(() => setMaking(false));
+    api('POST', base + '/invites', { name }).then((/** @type {{url: string}} */ i) => { setLink(i.url); setName(''); load(); }).catch(show).finally(() => setMaking(false));
   };
   const copy = () => navigator.clipboard.writeText(link).then(() => toast('Copied'),
     () => /** @type {HTMLInputElement | null} */ (document.getElementById('invite-link-new'))?.select());
@@ -291,19 +372,41 @@ export function Invites({ base, api, show, byName, me, cut = false }) {
   /** @param {Invite} i */
   const mark = (i) => (!i.shareable ? '' : i.created_by === me ? 'Your shareable link' : 'shareable');
   return html`
-    <div class="row"><button type="button" class="btn-primary" disabled=${making} onClick=${invite}>New invite link</button></div>
+    <form class="row" onSubmit=${formAction(invite)}>
+      <label>Name<input id="invite-name" maxlength="60" placeholder="Optional" value=${name} onInput=${onInput(setName)}/></label>
+      <button type="submit" class="btn-primary" disabled=${making}>New invite link</button></form>
     ${link && html`<div class="row"><label class="link">Invite link, shown once<input id="invite-link-new" readonly value=${link}/></label>
       <button type="button" class="btn-secondary" id="invite-link-copy" onClick=${copy}>Copy</button></div>`}
     ${invites && (invites.length ? html`<div class="cols" id="invites-all">
-      <div class="list-row head"><span>Made by</span><span>Created</span><span>State</span><span></span></div>
-      <ul class="list-rows">${invites.map((i) => html`<li class="list-row" id=${'invite-' + i.id} key=${i.id}>
-        <div class="main"><span class="name">${by(i)}</span>${mark(i) && html` <span class="badge">${mark(i)}</span>`}<div class="meta">link ${i.id}</div></div>
-        <div class="cells"><span class="cell" data-label="Created">${ago(i.created_at)}</span>
-          <span class="cell">${i.revoked_at ? html`<span class="status off">revoked</span>` : html`<span class="status ok">valid</span>`}</span></div>
-        <div class="actions">${!i.revoked_at && html`<${RowMenu} id=${'invite-menu-' + i.id} label=${'More actions on link ' + i.id}
-          items=${[['Revoke…', () => ask(i), 'danger', 'Revoke link ' + i.id]]}/>`}</div></li>`)}</ul></div>`
+      <div class="list-row head"><span>Link</span><span>Created</span><span>State</span><span></span></div>
+      <ul class="list-rows">${invites.map((i) => html`<${InviteRow} key=${i.id} i=${i} by=${by(i)} mark=${mark(i)} base=${base} api=${api} show=${show}
+        ask=${ask} done=${load}/>`)}</ul></div>`
       : html`<p class="empty" id="invites-empty">No invite links yet. New invite link makes one to share.</p>`)}
-    ${preview && html`<${RevokeSheet} key=${preview.id} preview=${preview} base=${base} api=${api} cut=${cut} done=${() => { setPreview(null); load(); }}/>`}`;
+    ${preview && html`<${RevokeSheet} key=${preview.id} preview=${preview} base=${base} api=${api} cut=${cut}
+      done=${() => { followFocus(moreOf('invite-menu-' + preview.id)); setPreview(null); load(); }}/>`}`;
+}
+
+/**
+ * InviteRow reads "<name or Link <id>> · created by <member> · N in the room" and its state, N the
+ * seats that joined through it and are still here (040-AC15). Its ⋯ renames it, a stopped one too.
+ * @param {{i: Invite, by: string, mark: string, base: string, api: Api, show: (err: unknown) => void, ask: (i: Invite) => void, done: () => void}} props
+ */
+function InviteRow({ i, by, mark, base, api, show, ask, done }) {
+  const [renaming, setRenaming] = useState(false);
+  const menu = 'invite-menu-' + i.id;
+  const label = inviteLabel(i.id, i.name);
+  const close = () => { setRenaming(false); followFocus(moreOf(menu)); };
+  /** @type {MenuItem[]} */
+  const items = [['Rename…', () => setRenaming(true), '', 'Rename ' + label]];
+  if (!i.revoked_at) items.push(['Stop new joins…', () => ask(i), 'danger', 'Stop new joins through ' + label]);
+  return html`<li class="list-row" id=${'invite-' + i.id}>
+    <div class="main">${renaming ? html`<${Rename} name=${i.name || ''} label=${label} path=${`${base}/invites/${i.id}`} method="PATCH" max=${60} optional
+        api=${api} show=${show} done=${done} cancel=${close}/>`
+      : html`<span class="name">${label}</span>${mark && html` <span class="badge">${mark}</span>`}
+        <div class="meta">created by <span class="by">${by}</span> · ${i.in_room} in the room</div>`}</div>
+    <div class="cells"><span class="cell" data-label="Created">${ago(i.created_at)}</span>
+      <span class="cell">${i.revoked_at ? html`<span class="status off">Stopped</span>` : html`<span class="status ok">Active</span>`}</span></div>
+    <div class="actions"><${RowMenu} id=${menu} label=${'More actions on ' + label} items=${items}/></div></li>`;
 }
 
 /**
@@ -317,18 +420,19 @@ export function Blocked({ base, api, show, people }) {
   useEffect(() => { load(); }, [base, people]);
   /** @param {Block} b */
   const unblock = (b) => api('DELETE', `${base}/blocks/${b.profile_id}`).then(() => { toast(b.name + ' unblocked'); load(); }).catch(show);
-  if (!blocks || !blocks.length) return null;
+  if (!blocks) return null;
+  // 040-AC13: shown when empty too, so a room admin knows where a block would be.
   return html`<h3>Blocked from rejoining</h3>
-    <div class="cols" id="blocked">
+    ${!blocks.length ? html`<p class="empty" id="blocked-empty">Nobody is blocked.</p>` : html`<div class="cols" id="blocked">
       <div class="list-row head"><span>Name</span><span>Blocked</span><span>By</span><span></span></div>
       <ul class="list-rows">${blocks.map((b) => html`<li class="list-row" id=${'blocked-' + b.profile_id} key=${b.profile_id}>
         <div class="main"><span class="name">${b.name}</span></div>
         <div class="cells"><span class="cell" data-label="Blocked">${ago(b.created_at)}</span><span class="cell" data-label="By">${b.by || 'admin'}</span></div>
-        <div class="actions"><button type="button" class="btn-secondary" onClick=${() => unblock(b)} aria-label=${'Unblock ' + b.name}>Unblock</button></div></li>`)}</ul></div>`;
+        <div class="actions"><button type="button" class="btn-secondary" onClick=${() => unblock(b)} aria-label=${'Unblock ' + b.name}>Unblock</button></div></li>`)}</ul></div>`}`;
 }
 
 /**
- * RevokeSheet confirms a revoke, which stops new joins only (016-AC3). With cut, someone joined
+ * RevokeSheet confirms Stop new joins, which keeps who joined (016-AC3, 040-AC16). With cut, someone joined
  * through the invite, it offers to remove them too, unticked, with who would lose access and who
  * keeps it (011-AC19, 016-AC4), then says who the revoke cut, from its answer: the state may have
  * moved since the preview (011-AC20).
@@ -356,7 +460,7 @@ function RevokeSheet({ preview, base, api, cut, done }) {
     api('DELETE', `${base}/invites/${preview.id}${ticked ? '?cut=1' : ''}`).then((/** @type {{lost: {name: string}[]}} */ r) => {
       inflight.current = false;
       const lost = (r.lost || []).map((p) => p.name);
-      toast(lost.length ? `Revoked. ${new Intl.ListFormat('en').format(lost)} lost access.` : 'Revoked. Nobody lost access.');
+      toast(lost.length ? `Stopped. ${new Intl.ListFormat('en').format(lost)} lost access.` : 'Stopped. Nobody lost access.');
       // The room page reloads its people and its empty-chat card (011-AC20).
       dispatchEvent(new CustomEvent('grill:revoked'));
       ref.current?.close();
@@ -380,7 +484,7 @@ function RevokeSheet({ preview, base, api, cut, done }) {
   const box = cut && n > 0;
   return html`<dialog ref=${ref} id="revoke-sheet" class="sheet full" aria-labelledby="revoke-title" onClose=${closed} onClick=${outside}
     onCancel=${(/** @type {Event} */ e) => { if (busy) e.preventDefault(); }}>
-    <div class="sheet-head"><h2 id="revoke-title">Revoke this invite?</h2>
+    <div class="sheet-head"><h2 id="revoke-title">Stop new joins through this link?</h2>
       <button type="button" class="btn-icon btn-ghost" aria-label="Close" disabled=${busy} onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
     <p id="revoke-stays">No one can join through it any more. Who joined through it keeps their seat.</p>
     ${!preview.lose.length && !preview.keep.length && html`<p id="revoke-nobody">Nobody joined through this invite.</p>`}
@@ -389,11 +493,11 @@ function RevokeSheet({ preview, base, api, cut, done }) {
         Also remove the ${n} ${n > 1 ? 'people' : 'person'} who joined through it</label>
       <p>Ticked, these people lose access:</p>${list(preview.lose, 'revoke-lose')}
       ${preview.keep.length > 0 && html`<p>Keep access through another invite:</p>${list(preview.keep, 'revoke-keep')}`}
-      ${chained > 0 && html`<p id="revoke-chain">Ticked, it also revokes ${chained} ${chained > 1 ? 'invites' : 'invite'} made by people who joined through it.</p>`}`}
+      ${chained > 0 && html`<p id="revoke-chain">Ticked, it also stops ${chained} ${chained > 1 ? 'invites' : 'invite'} made by people who joined through it.</p>`}`}
     <p class="said error" role="alert">${said}</p>
     <div class="actions">
       <button type="button" class="btn-secondary" disabled=${busy} onClick=${close}>Cancel</button>
-      <button type="button" class="btn-danger" disabled=${busy} onClick=${revoke}>Revoke</button>
+      <button type="button" class="btn-danger" disabled=${busy} onClick=${revoke}>${box && ticked ? `Stop and remove ${n} ${n > 1 ? 'people' : 'person'}` : 'Stop new joins'}</button>
     </div>
   </dialog>`;
 }
@@ -411,20 +515,25 @@ function Export({ base, room }) {
 }
 
 /**
- * Rename lets a room admin or the super-admin rename a participant (005-AC21): a one-field form in
- * place, opened at once when the caller has a cancel, else behind a Rename button.
- * @param {{name: string, path: string, api: Api, show: (err: unknown) => void, done: () => void, cancel?: () => void}} props
+ * Rename lets a room admin or the super-admin rename a participant (005-AC21), or an invite's maker
+ * name it (040-AC14, optional, as PATCH): a one-field form in place, opened at once when the caller
+ * has a cancel, else behind a Rename button. label names what is renamed, name by default.
+ * @param {{name: string, label?: string, path: string, method?: string, max?: number, optional?: boolean, api: Api, show: (err: unknown) => void,
+ *   done: () => void, cancel?: () => void}} props
  */
-export function Rename({ name, path, api, show, done, cancel }) {
+export function Rename({ name, label = name, path, method = 'PUT', max = 40, optional = false, api, show, done, cancel }) {
   const [editing, setEditing_] = useState(!!cancel);
   const setEditing = (/** @type {boolean} */ on) => { if (!on && cancel) cancel(); setEditing_(on); };
   const [value, setValue] = useState(name);
+  const input = useRef(/** @type {HTMLInputElement | null} */ (null));
+  // Opened from a ⋯ whose menu closed, the focus would be nowhere.
+  useEffect(() => { if (editing) input.current?.select(); }, [editing]);
   if (!editing) {
     return html`<button type="button" class="btn-secondary" onClick=${() => { setValue(name); setEditing(true); }}
-      aria-label=${'Rename ' + name}>Rename</button>`;
+      aria-label=${'Rename ' + label}>Rename</button>`;
   }
-  return html`<form class="rename" onSubmit=${formAction(() => api('PUT', path, { name: value }).then(() => { setEditing(false); done(); }).catch(show))}>
-    <input required maxlength="40" value=${value} onInput=${onInput(setValue)} aria-label=${'New name for ' + name}/>
+  return html`<form class="rename" onSubmit=${formAction(() => api(method, path, { name: value }).then(() => { setEditing(false); done(); }).catch(show))}>
+    <input ref=${input} required=${!optional} maxlength=${max} value=${value} onInput=${onInput(setValue)} aria-label=${'New name for ' + label}/>
     <button type="submit">Save</button>
     <button type="button" class="btn-secondary" onClick=${() => setEditing(false)}>Cancel</button>
   </form>`;

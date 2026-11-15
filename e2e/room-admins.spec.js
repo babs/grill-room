@@ -178,18 +178,23 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     await expect(panel.locator('#invites-all .list-row:not(.head)').first()).toContainText('Alice');
     await fits(alice);
     await tab(panel, 'Members');
-    await panel.getByRole('button', { name: 'Make Bob a room admin' }).click();
-    await expect(panel.locator('#room-admins > li', { hasText: 'Bob' }).locator('.badge.role')).toHaveText('admin');
+    await rowAction(panel.locator('#room-admins > li', { hasText: 'Bob' }), 'Make room admin');
+    await expect(panel.locator('#room-admins > li', { hasText: 'Bob' }).locator('.badge.role')).toHaveText('room admin');
     await expect(carol.locator('#messages')).toContainText('Alice made Bob a room admin.');
 
-    // Bob, now an admin, removes Alice; she loses her panel.
+    // Bob, now an admin, removes Alice; she loses her panel. His page knows his role first.
     await expect(bob.locator('#manage-open')).not.toHaveAttribute('hidden');
+    await expect(bob.locator('#participants li, #participants-away li').filter({ has: bob.locator('.name', { hasText: 'Bob' }) }).locator('.sigil')).toHaveText('@');
     const bobPanel = await openManage(bob);
     await tab(bobPanel, 'Members');
-    await bobPanel.getByRole('button', { name: 'Remove Alice from the room admins' }).click();
+    await rowAction(bobPanel.locator('#room-admins > li', { hasText: 'Alice' }), 'Remove room admin');
     await expect(alice.locator('#manage #room-panel')).toHaveCount(0);
-    await bobPanel.getByRole('button', { name: 'Step down as a room admin' }).click();
-    await expect(bob.locator('#manage [role="alert"]')).toHaveText("you are the room's last admin: appoint another one first");
+    // 040-AC12: the last room admin's Step down says why it is off.
+    await bobPanel.locator('#room-admins > li', { hasText: 'Bob' }).locator('.actions .more').click();
+    const stepDown = bobPanel.locator('#room-admins > li', { hasText: 'Bob' }).locator('.menu').getByRole('button', { name: 'Step down' });
+    await expect(stepDown).toHaveAttribute('aria-disabled', 'true');
+    await expect(stepDown).toHaveAttribute('data-tip', 'Make someone else room admin first.');
+    await bob.keyboard.press('Escape');
     await tab(bobPanel, 'General');
 
     await bobPanel.locator('#room-name-input').fill(`Delegated ${vp.name}`);
@@ -337,7 +342,7 @@ for (const vp of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'phone'
     await expect(blocked).toContainText('Bob');
     if (vp.width < 400) await fits(alice);
     await blocked.getByRole('button', { name: 'Unblock Bob' }).click();
-    await expect(alice.locator('#manage #blocked')).toHaveCount(0);
+    await expect(alice.locator('#manage #blocked-empty')).toHaveText('Nobody is blocked.');
     await alice.keyboard.press('Escape');
     await expect(alice.locator('#messages')).toContainText('Alice unblocked Bob');
 

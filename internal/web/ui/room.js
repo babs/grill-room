@@ -1738,7 +1738,7 @@ for (const id of ['email-nudge-later', 'email-nudge-close']) {
 }
 
 // Invites (011-AC26): the popup and the empty chat's card show your one shareable link, which the
-// server makes on the first ask; extra links and revoking live in Room settings › Invites.
+// server makes on the first ask; names, extra links and Stop new joins live in Room settings › Invites.
 const shareLink = () => sendJSON('POST', api + '/invites/share').then((inv) => inv && inv.url);
 function openInvites() {
   $('invite-link').value = '';
@@ -5193,38 +5193,58 @@ function personTags(p, id, isHere) {
   return t;
 }
 
-// personActions are what the viewer may do about p, for its ⋯ menu (008-AC13): none, no menu.
-function personActions(p, id) {
+// membershipActions are what the viewer may do about p's membership: one definition for People's ⋯
+// and Room settings › Members (040-AC11). Each is {id, label, checked?, disabled?, reason?, run};
+// run resolves once its dialog closed and its request answered, for the caller's focus return.
+function membershipActions(p) {
+  const id = String(p.id);
   const acts = [];
   const other = id !== myID;
-  if (other && meAdmin) acts.push({ label: 'Rename', run: () => openRename(p) });
   const host = agent.host_participant_id === p.id;
-  if (other && isHost() && !host) {
-    acts.push({ label: 'Can ask the AI', checked: agent.can_trigger.includes(p.id),
-      run: () => sendJSON('PATCH', api + '/participants/' + id, { can_trigger: !agent.can_trigger.includes(p.id) }).catch((err) => agentError(err.message)) });
-  }
+  const failed = (err) => toast(err.message);
+  if (other && meAdmin) acts.push({ id: 'rename', label: 'Rename', run: () => { openRename(p); return dialogClosed($('rename')); } });
   if (other && meAdmin) {
-    acts.push({ label: p.admin ? 'Remove room admin' : 'Make room admin', run: () => {
+    acts.push({ id: 'admin', label: p.admin ? 'Remove room admin' : 'Make room admin', run: () => {
       // The list as it is now: another room admin may have changed it since the menu opened.
       const now = participants.find((x) => String(x.id) === id) || p;
-      sendJSON(now.admin ? 'DELETE' : 'PUT', api + '/admins/' + id).then(() => loadRoom()).catch((err) => toast(err.message));
+      return sendJSON(now.admin ? 'DELETE' : 'PUT', api + '/admins/' + id).then(() => loadRoom()).catch(failed);
     } });
+  }
+  // 040-AC12: the room keeps a room admin; the server refuses the last one too.
+  if (!other && meAdmin) {
+    acts.push({ id: 'step-down', label: 'Step down', disabled: lastAdmin(), reason: lastAdmin() ? 'Make someone else room admin first.' : '',
+      run: () => sendJSON('DELETE', api + '/admins/' + id).then(() => loadRoom()).catch(failed) });
+  }
+  if (other && isHost() && !host) {
+    acts.push({ id: 'can-ask', label: 'Can ask the AI', checked: agent.can_trigger.includes(p.id),
+      run: () => sendJSON('PATCH', api + '/participants/' + id, { can_trigger: !agent.can_trigger.includes(p.id) }).catch((err) => agentError(err.message)) });
   }
   // The host hands over; a room admin moves the role from someone else, asked first (009-AC33).
   if (!host && (isHost() || meAdmin) && agent.daemons.some((d) => d.participant_id === p.id && d.can_host)) {
-    acts.push({ label: 'Make AI host', run: () => makeHost(p) });
+    acts.push({ id: 'host', label: 'Make AI host', run: () => makeHost(p) });
   }
+  // 016-AC6 016-AC12: a room admin removes others; anyone leaves. A room admin steps down first.
+  if (other && meAdmin) {
+    acts.push({ id: 'remove', label: 'Remove from room…', disabled: !!p.admin, reason: p.admin ? 'Remove their room admin role first' : '', run: () => removePerson(p) });
+  }
+  if (!other) acts.push({ id: 'leave', label: 'Leave room…', disabled: !!leaveBlocked(), reason: leaveBlocked(), run: leaveRoom });
+  return acts;
+}
+window.grillMembershipActions = membershipActions;
+
+const dialogClosed = (d) => new Promise((resolve) => d.addEventListener('close', resolve, { once: true }));
+
+// personActions are what the viewer may do about p, for its ⋯ menu (008-AC13): none, no menu.
+// The call's own come first, then the membership ones Room settings › Members shares.
+function personActions(p, id) {
+  const acts = [];
+  const other = id !== myID;
   // 031-AC5: your own hand, or anyone's for a room admin.
   if (presence.get(id)?.hand && (!other || meAdmin)) {
     acts.push({ label: 'Lower hand', run: () => (other ? sendJSON('DELETE', api + '/hands/' + id).catch((err) => toast(err.message)) : askHand(false)) });
   }
   if (other && voiceParticipant(id)) acts.push({ volume: true });
-  // 016-AC6 016-AC12: a room admin removes others; anyone leaves. A room admin steps down first.
-  if (other && meAdmin) {
-    acts.push({ label: 'Remove from room…', disabled: p.admin ? 'Remove their room admin role first' : '', run: () => removePerson(p) });
-  }
-  if (!other) acts.push({ label: 'Leave room…', disabled: leaveBlocked(), run: leaveRoom });
-  return acts;
+  return acts.concat(membershipActions(p));
 }
 
 async function removePerson(p) {
@@ -5235,12 +5255,12 @@ async function removePerson(p) {
   block.disabled = !!p.no_profile;
   box.append(block, p.no_profile ? ' Block from rejoining: no profile, so no block' : ' Block from rejoining');
   if (!(await grillConfirm('Remove ' + p.name + ' from the room?', 'Their messages stay.' + (await readersNote(p)), 'Remove', false, box))) return;
-  sendJSON('DELETE', api + '/participants/' + p.id, { block: block.checked }).catch((err) => toast(err.message));
+  return sendJSON('DELETE', api + '/participants/' + p.id, { block: block.checked }).catch((err) => toast(err.message));
 }
 
 async function leaveRoom() {
   if (!(await grillConfirm('Leave this room?', 'Your messages stay. A valid invite brings you back.', 'Leave'))) return;
-  sendJSON('DELETE', api + '/participants/' + myID).catch((err) => toast(err.message));
+  return sendJSON('DELETE', api + '/participants/' + myID).catch((err) => toast(err.message));
 }
 
 async function makeHost(p) {
@@ -5248,7 +5268,7 @@ async function makeHost(p) {
   const standby = from && agent.daemons.some((d) => d.participant_id === from.id);
   if (!isHost() && !(await grillConfirm('Make ' + p.name + ' the AI host?', 'The personas run on ' + p.name + "'s computer from the next turn"
     + (standby ? '; ' + from.name + "'s app stays connected as a standby." : '.'), 'Make AI host'))) return;
-  sendJSON('PUT', api + '/host', { participant_id: p.id }).catch((err) => agentError(err.message));
+  return sendJSON('PUT', api + '/host', { participant_id: p.id }).catch((err) => agentError(err.message));
 }
 
 // The person menu, built for the row it opens from; arrows move through it like the document's.
@@ -5292,7 +5312,7 @@ function openPersonMenu(b, p, id, fromPointer) {
     // Not disabled: a disabled button shows no tip, and the tip says why.
     if (a.disabled) {
       it.setAttribute('aria-disabled', 'true');
-      it.dataset.tip = a.disabled;
+      it.dataset.tip = a.reason;
       return it;
     }
     it.addEventListener('click', () => { menu.hidePopover(); a.run(); });

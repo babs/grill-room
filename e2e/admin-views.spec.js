@@ -101,7 +101,7 @@ for (const vp of widths) {
     await expect(row.locator('.name')).toHaveText(name + ' renamed');
     await expect(row).toContainText('/ 200 MB');
 
-    // Invites, from a deep link: a new link shown once, then revoked.
+    // Invites, from a deep link: a new link shown once, then stopped (040-AC17).
     await page.goto(`/admin#rooms/${room.id}/invites`);
     // By id: on a phone the bar may be folded, its links hidden in the closed menu (038-AC9).
     await expect(panel.locator('nav.tabs #tab-invites')).toHaveAttribute('aria-current', 'page');
@@ -110,11 +110,11 @@ for (const vp of widths) {
     await panel.getByRole('button', { name: 'New invite link' }).click();
     await expect(panel.locator('#invite-link-new')).toHaveValue(/\/join#\S+$/);
     await expect(invites).toHaveCount(2);
-    await rowAction(invites.nth(1), /^Revoke/);
+    await rowAction(invites.nth(1), /^Stop new joins/);
     await expect(page.locator('#revoke-nobody')).toHaveText('Nobody joined through this invite.');
-    await page.locator('#revoke-sheet').getByRole('button', { name: 'Revoke', exact: true }).click();
-    await expect(page.locator('.toast')).toHaveText('Revoked. Nobody lost access.');
-    await expect(invites.nth(1)).toContainText('revoked');
+    await page.locator('#revoke-sheet').getByRole('button', { name: 'Stop new joins', exact: true }).click();
+    await expect(page.locator('.toast')).toHaveText('Stopped. Nobody lost access.');
+    await expect(invites.nth(1)).toContainText('Stopped');
     await audited(request, 'invite.create', room.id);
     await audited(request, 'invite.revoke', room.id);
     await fits(page, vp.width);
@@ -150,7 +150,7 @@ for (const vp of widths) {
     const admins = page.locator('#room-panel #room-admins');
     await expect(admins.locator('> li')).toHaveCount(1);
     await admins.getByRole('button', { name: 'Make Alice a room admin' }).click();
-    await expect(admins.locator('> li', { hasText: 'Alice' }).locator('.badge.role')).toHaveText('admin');
+    await expect(admins.locator('> li', { hasText: 'Alice' }).locator('.badge.role')).toHaveText('room admin');
     await audited(request, 'room_admin.add', room.id);
     await fits(page, vp.width);
     expect((await alice.ctx.patch(`/api/rooms/${room.id}`, { data: { name: name + ' by Alice' } })).status()).toBe(200);
@@ -323,7 +323,7 @@ test('admin lists fit 641 to 1280 px; invites name their maker', async ({ browse
     await expect(used, `${width}`).toHaveText(/ \/ 200 MB$/);
   }
   await page.goto(`/admin#rooms/${room.id}/invites`);
-  const makers = page.locator('#invites-all .list-row:not(.head) .name');
+  const makers = page.locator('#invites-all .list-row:not(.head) .meta .by');
   await expect(makers.filter({ hasText: /^Alice Martin$/ })).toHaveCount(1);
   await expect(makers.filter({ hasText: /participant #/ })).toHaveCount(0);
   // Someone who joins while the tab is open is named once the list reloads, not "a former participant".

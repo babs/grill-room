@@ -56,7 +56,7 @@ async function people(sheet, id) {
   return (await sheet.locator(`#${id} li`).allTextContents()).map((t) => t.replace(/\s+/g, ' ').trim()).sort();
 }
 
-// 011-AC26, 011-AC27: the popup opens on the shareable link with Copy, the same link on every open
+// 011-AC26, 011-AC27, 040-AC17: the popup opens on the shareable link with Copy, the same link on every open
 // and from the empty chat's card; no list and no "Your invites" heading (D11). The card shows
 // while nobody else joined, messages or not, and goes once someone does (D3).
 test('the popup and the empty chat card copy one shareable link', async ({ browser, request }) => {
@@ -105,7 +105,7 @@ test('the popup and the empty chat card copy one shareable link', async ({ brows
   await menuItem(alice, 'Invite people');
   await expect(alice.locator('#invite-link')).toHaveValue(link);
 
-  await popup.getByRole('link', { name: 'More links and revoking in Room settings › Invites' }).click();
+  await popup.getByRole('link', { name: 'Name, add or stop links in Room settings › Invites' }).click();
   await expect(popup).toBeHidden();
   await expect(alice).toHaveURL(/#manage\/invites$/);
   await expect(alice.locator('#manage #panel-invites')).toBeVisible();
@@ -159,7 +159,7 @@ test('a plain member manages their own invites in Room settings', async ({ brows
   await expect(panel.locator('#invite-link-new')).toHaveCount(0);
 });
 
-// 011-AC20: a revoke from Room settings updates the room page at once: the people it cut leave
+// 011-AC20: Stop new joins from Room settings updates the room page at once: the people it cut leave
 // People, and the empty-chat card comes back once nobody else is left.
 test('a revoke from Room settings updates People and the empty chat card', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
@@ -174,19 +174,19 @@ test('a revoke from Room settings updates People and the empty chat card', async
   await expect(alice.locator('#chat-empty')).toBeHidden();
 
   await alice.goto(`/r/${room.id}#manage/invites`);
-  await rowAction(alice.locator('#manage #invites-all .list-row:not(.head)').filter({ hasText: 'Your shareable link' }), /^Revoke/);
+  await rowAction(alice.locator('#manage #invites-all .list-row:not(.head)').filter({ hasText: 'Your shareable link' }), /^Stop new joins/);
   await alice.locator('#revoke-sheet').getByLabel('Also remove the 1 person who joined through it').check();
-  await alice.locator('#revoke-sheet').getByRole('button', { name: 'Revoke', exact: true }).click();
-  await expect(alice.locator('#toasts .toast')).toHaveText('Revoked. Bob lost access.');
+  await alice.locator('#revoke-sheet').getByRole('button', { name: 'Stop and remove 1 person', exact: true }).click();
+  await expect(alice.locator('#toasts .toast')).toHaveText('Stopped. Bob lost access.');
   await alice.locator('#manage-close').click();
   await expect(people).toHaveText(['Alice']);
   await expect(alice.locator('#chat-empty')).toBeVisible();
 });
 
 for (const vp of widths) {
-  // 011-AC19, 011-AC20, 011-AC26, 016-AC4: Room settings › Invites asks before a revoke; the box,
-  // unticked, offers to remove who joined, with who loses access, admin and you marked, who keeps
-  // it, the chained count; ticked, the toast names who the revoke cut.
+  // 011-AC19, 011-AC20, 011-AC26, 016-AC4, 040-AC16: Room settings › Invites asks before Stop new joins;
+  // the box, unticked, offers to remove who joined, with who loses access, admin and you marked, who
+  // keeps it, the chained count; ticked, the button says so and the toast names who it cut.
   test(`the revoke sheet in Room settings, ${vp.name}`, async ({ browser, request, baseURL }) => {
     const { room, alice, i0, sA, sB, contexts } = await chain(browser, request, baseURL);
     await alice.setViewportSize(vp);
@@ -197,30 +197,32 @@ for (const vp of widths) {
     await expect(panel.locator(`#invite-${sB}`)).not.toContainText('Your');
 
     const sheet = alice.locator('#revoke-sheet');
-    await rowAction(panel.locator(`#invite-${i0}`), /^Revoke/);
-    await expect(sheet.locator('#revoke-title')).toHaveText('Revoke this invite?');
+    await rowAction(panel.locator(`#invite-${i0}`), /^Stop new joins/);
+    await expect(sheet.locator('#revoke-title')).toHaveText('Stop new joins through this link?');
     await expect(sheet.getByLabel('Also remove the 3 people who joined through it')).not.toBeChecked();
     await expect(sheet).toContainText('Ticked, these people lose access:');
     expect(await people(sheet, 'revoke-lose')).toEqual(['Alice admin you', 'Bob', 'Carol']);
     await expect(sheet).toContainText('Keep access through another invite:');
     expect(await people(sheet, 'revoke-keep')).toEqual(['Dan']);
-    await expect(sheet.locator('#revoke-chain')).toHaveText('Ticked, it also revokes 2 invites made by people who joined through it.');
+    await expect(sheet.locator('#revoke-chain')).toHaveText('Ticked, it also stops 2 invites made by people who joined through it.');
     if (vp.width < 400) {
       expect((await sheet.boundingBox()).width).toBe(vp.width);
       expect(await noOverflow(alice)).toEqual([]);
     }
     await sheet.getByRole('button', { name: 'Cancel' }).click();
     await expect(sheet).toHaveCount(0);
-    await expect(panel.locator(`#invite-${i0}`)).toContainText('valid');
+    await expect(panel.locator(`#invite-${i0}`)).toContainText('Active');
 
-    await rowAction(panel.locator(`#invite-${sA}`), /^Revoke/);
+    await rowAction(panel.locator(`#invite-${sA}`), /^Stop new joins/);
     expect(await people(sheet, 'revoke-lose')).toEqual(['Bob', 'Carol']);
     expect(await people(sheet, 'revoke-keep')).toEqual(['Dan']);
-    await expect(sheet.locator('#revoke-chain')).toHaveText('Ticked, it also revokes 1 invite made by people who joined through it.');
+    await expect(sheet.locator('#revoke-chain')).toHaveText('Ticked, it also stops 1 invite made by people who joined through it.');
+    // 040-AC16: the button says what a ticked box adds.
+    await expect(sheet.getByRole('button', { name: 'Stop new joins', exact: true })).toBeVisible();
     await sheet.getByLabel('Also remove the 2 people who joined through it').check();
     const release = await gate(alice, new RegExp(`/api/rooms/${room.id}/invites/${sA}\\?cut=1$`), 'DELETE');
-    await sheet.getByRole('button', { name: 'Revoke', exact: true }).click();
-    await expect(sheet.getByRole('button', { name: 'Revoke', exact: true })).toBeDisabled();
+    await sheet.getByRole('button', { name: 'Stop and remove 2 people', exact: true }).click();
+    await expect(sheet.getByRole('button', { name: 'Stop and remove 2 people', exact: true })).toBeDisabled();
     await expect(sheet.getByRole('button', { name: 'Cancel' })).toBeDisabled();
     await expect(sheet.getByRole('button', { name: 'Close' })).toBeDisabled();
     // In flight, Escape leaves the sheet open, pressed twice too: an error would have nowhere else to show.
@@ -228,14 +230,14 @@ for (const vp of widths) {
     await alice.keyboard.press('Escape');
     await expect(sheet).toBeVisible();
     await release();
-    await expect(alice.locator('#toasts .toast')).toHaveText(/^Revoked\. (Bob and Carol|Carol and Bob) lost access\.$/);
+    await expect(alice.locator('#toasts .toast')).toHaveText(/^Stopped\. (Bob and Carol|Carol and Bob) lost access\.$/);
     await expect(sheet).toHaveCount(0);
-    await expect(panel.locator(`#invite-${sA}`)).toContainText('revoked');
-    await expect(panel.locator(`#invite-${sB}`)).toContainText('revoked');
+    await expect(panel.locator(`#invite-${sA}`)).toContainText('Stopped');
+    await expect(panel.locator(`#invite-${sB}`)).toContainText('Stopped');
     for (const c of contexts) await c.dispose();
   });
 
-  // 011-AC19, 011-AC20: /admin › room › Invites asks in the same sheet; the super-admin is nobody's "you".
+  // 011-AC19, 011-AC20, 040-AC16, 040-AC17: /admin › room › Invites asks in the same sheet; the super-admin is nobody's "you".
   test(`the revoke sheet in /admin, ${vp.name}`, async ({ browser, request, baseURL }) => {
     const { room, i0, sA, sB, contexts } = await chain(browser, request, baseURL);
     const page = await (await browser.newContext({ viewport: vp })).newPage();
@@ -246,31 +248,31 @@ for (const vp of widths) {
     await expect(panel.locator(`#invite-${sA}`)).not.toContainText('Your');
 
     const sheet = page.locator('#revoke-sheet');
-    await rowAction(panel.locator(`#invite-${i0}`), /^Revoke/);
+    await rowAction(panel.locator(`#invite-${i0}`), /^Stop new joins/);
     expect(await people(sheet, 'revoke-lose')).toEqual(['Alice admin', 'Bob', 'Carol']);
     expect(await people(sheet, 'revoke-keep')).toEqual(['Dan']);
-    await expect(sheet.locator('#revoke-chain')).toHaveText('Ticked, it also revokes 2 invites made by people who joined through it.');
+    await expect(sheet.locator('#revoke-chain')).toHaveText('Ticked, it also stops 2 invites made by people who joined through it.');
     if (vp.width < 400) {
       expect((await sheet.boundingBox()).width).toBe(vp.width);
       expect(await noOverflow(page)).toEqual([]);
     }
     await sheet.getByLabel('Also remove the 3 people who joined through it').check();
     const release = await gate(page, new RegExp(`/api/admin/rooms/${room.id}/invites/${i0}\\?cut=1$`), 'DELETE');
-    await sheet.getByRole('button', { name: 'Revoke', exact: true }).click();
-    await expect(sheet.getByRole('button', { name: 'Revoke', exact: true })).toBeDisabled();
+    await sheet.getByRole('button', { name: 'Stop and remove 3 people', exact: true }).click();
+    await expect(sheet.getByRole('button', { name: 'Stop and remove 3 people', exact: true })).toBeDisabled();
     await release();
     const toast = page.locator('.toast');
-    await expect(toast).toHaveText(/^Revoked\. .+ lost access\.$/);
+    await expect(toast).toHaveText(/^Stopped\. .+ lost access\.$/);
     for (const name of ['Alice', 'Bob', 'Carol']) await expect(toast).toContainText(name);
     await expect(toast).not.toContainText('Dan');
     await expect(sheet).toHaveCount(0);
-    for (const id of [i0, sA, sB]) await expect(panel.locator(`#invite-${id}`)).toContainText('revoked');
+    for (const id of [i0, sA, sB]) await expect(panel.locator(`#invite-${id}`)).toContainText('Stopped');
     for (const c of contexts) await c.dispose();
   });
 }
 
 for (const vp of widths) {
-  // 016-AC3 016-AC4: a revoke stops new joins only. A plain member's sheet has no box; their joiner's
+  // 016-AC3 016-AC4 040-AC16: Stop new joins stops new joins only. A plain member's sheet has no box; their joiner's
   // page stays live and a new join through the link fails. A room admin's box, ticked, ends the
   // joiner's page.
   test(`a revoke keeps who joined unless the box is ticked, ${vp.name}`, async ({ browser, request }) => {
@@ -289,14 +291,14 @@ for (const vp of widths) {
 
     await bob.setViewportSize(vp);
     await bob.goto(`/r/${room.id}#manage/invites`);
-    await rowAction(bob.locator('#manage #invites-all .list-row:not(.head)'), /^Revoke/);
+    await rowAction(bob.locator('#manage #invites-all .list-row:not(.head)'), /^Stop new joins/);
     const sheet = bob.locator('#revoke-sheet');
     await expect(sheet.locator('#revoke-stays')).toHaveText('No one can join through it any more. Who joined through it keeps their seat.');
     await expect(sheet.locator('#revoke-cut')).toHaveCount(0);
     await expect(sheet.locator('#revoke-lose')).toHaveCount(0);
     if (vp.width < 400) expect(await noOverflow(bob)).toEqual([]);
-    await sheet.getByRole('button', { name: 'Revoke', exact: true }).click();
-    await expect(bob.locator('#toasts .toast')).toHaveText('Revoked. Nobody lost access.');
+    await sheet.getByRole('button', { name: 'Stop new joins', exact: true }).click();
+    await expect(bob.locator('#toasts .toast')).toHaveText('Stopped. Nobody lost access.');
     await carol.locator('#body').fill('still here');
     await carol.locator('#body').press('Enter');
     await expect(alice.locator('#messages')).toContainText('still here');
@@ -306,13 +308,102 @@ for (const vp of widths) {
     await alice.setViewportSize(vp);
     await alice.goto(`/r/${room.id}#manage/invites`);
     const mine = alice.locator('#manage #invites-all .list-row:not(.head)').filter({ hasText: 'Your shareable link' });
-    await rowAction(mine, /^Revoke/);
+    await rowAction(mine, /^Stop new joins/);
     const box = alice.locator('#revoke-sheet').getByLabel('Also remove the 1 person who joined through it');
     await expect(box).not.toBeChecked();
     await box.check();
-    await alice.locator('#revoke-sheet').getByRole('button', { name: 'Revoke', exact: true }).click();
-    await expect(alice.locator('#toasts .toast')).toHaveText('Revoked. Dan lost access.');
+    await alice.locator('#revoke-sheet').getByRole('button', { name: 'Stop and remove 1 person', exact: true }).click();
+    await expect(alice.locator('#toasts .toast')).toHaveText('Stopped. Dan lost access.');
     await expect(dan.locator('#banner')).toHaveText('Your access to this room has ended.');
     await expect(carol.locator('#messages')).toContainText('Alice revoked an invite; Dan was removed');
   });
 }
+
+// 040-AC14 040-AC15 040-AC16 040-AC17: an invite takes a name in the new-invite form; its creator and a
+// room admin rename it from the row's ⋯, a stopped one too, and an empty name brings back "Link <id>".
+// A name over 60 characters is refused with the server's words. Rows count who is still in the room
+// through them; /admin shows the names and the new wording.
+test('invite names, rename and the seats still in', async ({ browser, request }) => {
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  await appointAdmin(alice, request, room.id);
+  await bob.goto(`/r/${room.id}#manage/invites`);
+  const panel = bob.locator('#manage #panel-invites');
+  await panel.getByLabel('Name').fill('  For Carol  ');
+  await panel.getByRole('button', { name: 'New invite link' }).click();
+  const url = await panel.locator('#invite-link-new').inputValue();
+  const row = panel.locator('#invites-all .list-row:not(.head)');
+  await expect(row).toHaveCount(1);
+  const id = (await row.getAttribute('id')).replace('invite-', '');
+  await expect(row.locator('.name')).toHaveText('For Carol');
+  await expect(row.locator('.meta')).toHaveText('created by Bob · 0 in the room');
+  await expect(row).toContainText('Active');
+
+  const carol = await (await browser.newContext()).newPage();
+  await carol.goto(new URL(url).pathname + new URL(url).hash);
+  await expect(carol.locator('body')).not.toContainText('For Carol');
+  await carol.getByLabel('Your name').fill('Carol');
+  await carol.getByRole('button', { name: 'Join the room' }).click();
+  await expect(carol.locator('#me')).toHaveText('Carol');
+  await bob.reload();
+  await expect(row.locator('.meta')).toHaveText('created by Bob · 1 in the room');
+
+  // Its creator renames it; the focus comes back to the row's ⋯.
+  await rowAction(row, 'Rename For Carol');
+  await row.getByLabel('New name for For Carol').fill('Carol link');
+  await row.getByRole('button', { name: 'Save' }).click();
+  await expect(row.locator('.name')).toHaveText('Carol link');
+  await expect(row.locator('.actions .more')).toBeFocused();
+  // 61 characters: the server's reason shows.
+  await rowAction(row, 'Rename Carol link');
+  const field = row.getByLabel('New name for Carol link');
+  await field.evaluate((i) => i.removeAttribute('maxlength'));
+  await field.fill('x'.repeat(61));
+  await row.getByRole('button', { name: 'Save' }).click();
+  await expect(bob.locator('#manage [role="alert"]')).toHaveText('name must be one line of at most 60 characters');
+  await row.getByRole('button', { name: 'Cancel' }).click();
+  await expect(row.locator('.name')).toHaveText('Carol link');
+
+  // A room admin renames it, then stops it, then renames the stopped row; clearing it shows its id.
+  await alice.goto(`/r/${room.id}#manage/invites`);
+  const aRow = alice.locator(`#manage #invite-${id}`);
+  await rowAction(aRow, 'Rename Carol link');
+  await aRow.getByLabel('New name for Carol link').fill('Renamed by Alice');
+  await aRow.getByRole('button', { name: 'Save' }).click();
+  await expect(aRow.locator('.name')).toHaveText('Renamed by Alice');
+  await rowAction(aRow, 'Stop new joins through Renamed by Alice');
+  const sheet = alice.locator('#revoke-sheet');
+  await expect(sheet.locator('#revoke-title')).toHaveText('Stop new joins through this link?');
+  await expect(sheet.getByLabel('Also remove the 1 person who joined through it')).not.toBeChecked();
+  await sheet.getByRole('button', { name: 'Stop new joins', exact: true }).click();
+  await expect(alice.locator('#toasts .toast')).toHaveText('Stopped. Nobody lost access.');
+  await expect(aRow).toContainText('Stopped');
+  await expect(aRow.locator('.actions .more')).toBeFocused();
+  await expect(aRow.locator('.meta')).toHaveText('created by Bob · 1 in the room');
+  await aRow.locator('.actions .more').click();
+  await expect(aRow.locator('.menu button')).toHaveText(['Rename…']);
+  await aRow.locator('.menu').getByRole('button', { name: 'Rename Renamed by Alice' }).click();
+  await aRow.getByLabel('New name for Renamed by Alice').fill('');
+  await aRow.getByRole('button', { name: 'Save' }).click();
+  await expect(aRow.locator('.name')).toHaveText('Link ' + id);
+  const log = await (await request.get(`/api/admin/audit?action=invite.rename&target=${room.id}`, { headers: admin })).json();
+  expect(log.entries.map((e) => [e.details.from, e.details.to])).toEqual([['Renamed by Alice', ''], ['Carol link', 'Renamed by Alice']]);
+
+  // /admin: the names and the wording, its tab named as before.
+  expect((await request.patch(`/api/rooms/${room.id}/invites/${id}`, { headers: admin, data: { name: 'Back again' } })).status()).toBe(200);
+  const page = await (await browser.newContext()).newPage();
+  expect(await signIn(page, undefined, `rooms/${room.id}/invites`)).toBe(201);
+  const adminRow = page.locator(`#room-panel #invite-${id}`);
+  await expect(adminRow.locator('.name')).toHaveText('Back again');
+  // The instance admin renames from the row's ⋯, audited as the super-admin.
+  await rowAction(adminRow, 'Rename Back again');
+  await adminRow.getByLabel('New name for Back again').fill('Named in admin');
+  await adminRow.getByRole('button', { name: 'Save' }).click();
+  await expect(adminRow.locator('.name')).toHaveText('Named in admin');
+  await expect(adminRow.locator('.actions .more')).toBeFocused();
+  const last = (await (await request.get(`/api/admin/audit?action=invite.rename&target=${room.id}`, { headers: admin })).json()).entries[0];
+  expect(last).toMatchObject({ actor: 'super-admin', details: { invite: Number(id), from: 'Back again', to: 'Named in admin' } });
+  await expect(adminRow).toContainText('Stopped');
+  const valid = page.locator('#room-panel #invites-all .list-row:not(.head)', { hasText: 'Active' }).first();
+  await valid.locator('.actions .more').click();
+  await expect(valid.locator('.menu button')).toHaveText(['Rename…', 'Stop new joins…']);
+});

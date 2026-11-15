@@ -36,6 +36,9 @@ var vocabRules = []struct {
 	// 040-AC9: the room's AI settings moved to their own sheet, and the room's member list is "Members".
 	{phrase(`Room settings › (?:Plugins|Skills|Websites)`), `"AI in this room › …"`},
 	{phrase(`Members and admins`), `"Room settings › Members" (/admin's tab keeps the name)`},
+	// 040-AC16: an invite stops new joins; API tokens and sessions are still revoked, and the API keeps the word.
+	{phrase(`Revoke…|Revoke this invite|it also revokes|(?-i:Revoked)\. |\brevoking in Room settings|\bRevoke link\b|\brevokes? (?:any|the ones|invites)\b|` +
+		`\bRevoking an invite\b|\brevoked shareable\b|>\s*(?:Revoke|revoked)\s*<|\bInvite revoked\b|\binvalid or was revoked\b`), `"Stop new joins…" / "Stopped."`},
 }
 
 // Text that must keep an old word: in file, on a line holding line, only the words listed.
@@ -55,8 +58,11 @@ var vocabAllow = []struct {
 	{"../../docs/design.md", "| Everyone on this server, Shared with everyone |", []string{"Everyone on this server", "Shared with everyone"}, "the wording table names what it replaces"},
 	{"../../docs/design.md", "| daemon, agent daemon, grill-room-daemon", []string{"daemon", "its page"}, "the wording table names what it replaces"},
 	{"ui/admin/room-panel.js", "admins: 'Members and admins'", []string{"Members and admins"}, "/admin's room panel tab (040-AC17); the room renames it"},
-	{"../../README.md", "Members and admins appoints and removes room admins", []string{"Members and admins"}, "/admin's room panel tab"},
+	{"../../README.md", "Members and admins lists every seat", []string{"Members and admins"}, "/admin's room panel tab"},
 	{"../../README.md", "from the room's Members and admins tab in `/admin`", []string{"Members and admins"}, "/admin's room panel tab"},
+	{"ui/join.js", "'This invite link is invalid or was revoked.'", []string{"invalid or was revoked"}, "the join page's seat message keeps the word (040 Out of scope)"},
+	{"ui/admin/admin.js", "'invite.revoke': 'Invite revoked'", []string{"Invite revoked"}, "names the invite.revoke audit action, which keeps the word (040 Out of scope)"},
+	{"../../README.md", "and revokes any of them", []string{"revokes any"}, "admin sessions, not invites"},
 }
 
 // Vendored bundles, not our strings.
@@ -662,6 +668,24 @@ func TestVocabularyScanner(t *testing.T) {
 		{"md link target", "a.md", "See [the protocol](docs/daemon-protocol.md).\n", false},
 		{"manifest name", "a.webmanifest", `{"name": "grill-room daemon"}`, true},
 		{"manifest other key", "a.webmanifest", `{"theme_color": "the daemon"}`, false},
+		{"invite menu label", "a.js", "items = [['Revoke…', run]]", true},
+		{"invite toast", "a.js", "toast(`Revoked. ${who} lost access.`)", true},
+		{"invite sheet title", "a.html", "<h2>Revoke this invite?</h2>", true},
+		{"invite chain line", "a.js", "html`<p>Ticked, it also revokes ${n} invites</p>`", true},
+		{"api token toast", "a.js", "toast(r.ok ? 'Revoked' : r.error)", false},
+		{"invite aria-label", "a.js", "items=${[['Stop', run, 'danger', 'Revoke link ' + i.id]]}", true},
+		{"revokes any", "a.md", "The admin revokes any.\n", true},
+		{"revoke the ones", "a.md", "Any member can revoke the ones they created.\n", true},
+		{"revokes invites", "a.js", "hint('it revokes invites down the chain')", true},
+		{"revoking an invite", "a.md", "Revoking an invite stops new joins.\n", true},
+		{"revoked shareable", "a.md", "A revoked shareable link is replaced.\n", true},
+		{"sheet button", "a.js", "html`<button class=\"btn-danger\" onClick=${go}>Revoke</button>`", true},
+		{"row pill", "a.js", "html`<span class=\"status off\">revoked</span>`", true},
+		{"audit label", "a.js", "const labels = { 'invite.revoke': 'Invite revoked' }", true},
+		{"join message", "a.js", "line.textContent = 'This invite link is invalid or was revoked.'", true},
+		{"session menu", "a.js", "items=${[['Revoke', () => revoke(s), 'danger', 'Revoke the session of ' + ua]]}", false},
+		{"api token audit label", "a.js", "const labels = { 'api_token.revoke': 'API token revoked' }", false},
+		{"api route prose", "a.md", "`?cut=1` also revokes the invites its joiners created.\n", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
