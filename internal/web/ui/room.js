@@ -110,7 +110,7 @@ function end(text) {
   $('upload-open').hidden = true;
   for (const el of document.querySelectorAll('.dropping')) el.classList.remove('dropping');
   document.body.classList.remove('drag-files');
-  for (const id of ['manage-open', 'invite-open', 'personas-open', 'links-open']) $(id).hidden = true;
+  for (const id of ['manage-open', 'invite-open', 'personas-open', 'links-open', 'leave-open', 'leave-why', 'room-proposed-in']) $(id).hidden = true;
   $('room-open').disabled = true;
   delete $('room-open').dataset.tip;
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
@@ -176,6 +176,8 @@ async function loadRoom() {
   departed = data.departed || {};
   uploadRules = data.upload;
   $('doc-delete').hidden = !meAdmin;
+  showLeave();
+  showProposedIn(data.room.proposed_in);
   renameSenders();
   renderBlocked();
   renderProposals();
@@ -200,7 +202,7 @@ async function loadRoom() {
   return true;
 }
 
-// showLinks names the rooms linked to this one in the room menu, once there is one (023-AC8), and
+// showLinks names the rooms linked to this one in the room menu, or offers a room admin to link one (023-AC8, 038-AC8), and
 // hands the list to Room settings › Links (admin/room-admin.js), which reloads through it.
 async function showLinks() {
   let links;
@@ -216,8 +218,9 @@ async function showLinks() {
   }
   // One room linked both ways is one linked room.
   const n = new Set(links.map((l) => (l.reader_room === roomID ? l.read_room : l.reader_room))).size;
-  $('links-count').textContent = String(n);
-  $('links-open').hidden = n === 0;
+  // 038-AC8: at zero, a room admin gets the way to link one; a plain member has nothing to do there.
+  $('links-label').textContent = n ? 'Linked rooms (' + n + ')' : 'Link a room…';
+  $('links-open').hidden = !n && !meAdmin;
   window.grillLinks = links;
   window.dispatchEvent(new CustomEvent('grill:links', { detail: links }));
 }
@@ -247,6 +250,40 @@ function showMe() {
   $('me').dataset.initials = initials(myName);
   $('me').hidden = false;
   $('me-head').textContent = myName;
+}
+
+// leaveBlocked is why the viewer may not leave, '' when they may: the server refuses a room admin,
+// and refuses the last one stepping down. Admin rights are the profile's: self marks its seats.
+function leaveBlocked() {
+  if (!meAdmin) return '';
+  return participants.some((p) => p.admin && !p.self) ? 'Step down as room admin first' : 'Make someone else room admin, then step down.';
+}
+
+// showLeave offers Leave room in the avatar menu (038-AC10), its reason in words with a way to the
+// admins tab. Redrawn only on a change: a reload must not drop the focus on its link.
+function showLeave() {
+  const why = leaveBlocked();
+  const el = $('leave-why');
+  $('leave-open').hidden = false;
+  $('leave-open').setAttribute('aria-disabled', String(!!why));
+  el.hidden = !why;
+  if (el.dataset.key === why) return;
+  el.dataset.key = why;
+  el.replaceChildren(...(why ? [why.replace(/\.?$/, '.') + ' ', Object.assign(document.createElement('a'), { href: '#manage/admins', textContent: 'Step down' })] : []));
+}
+// Disabled, the menu stays open on its reason.
+$('leave-open').addEventListener('click', (e) => { if (leaveBlocked()) e.stopPropagation(); else leaveRoom(); });
+
+// showProposedIn names the room this one was proposed in at the head of the room menu, linked for
+// its members (038-AC7).
+function showProposedIn(pi) {
+  const el = $('room-proposed-in');
+  el.hidden = !pi;
+  const key = pi ? JSON.stringify([pi.name, pi.member && pi.room]) : '';
+  if (!pi || el.dataset.key === key) return;
+  el.dataset.key = key;
+  const name = pi.member && pi.room ? Object.assign(document.createElement('a'), { href: '/r/' + encodeURIComponent(pi.room), textContent: pi.name }) : pi.name;
+  el.replaceChildren('Proposed in ', name);
 }
 
 // initials takes the first letter of the first two words, "Ana María" → "AM".
@@ -437,7 +474,28 @@ function showFilter() {
     const n = filterCounts[b.dataset.filter];
     if (n !== undefined) b.querySelector('.count').textContent = n ? ' · ' + n : '';
   }
+  queueHidden();
 }
+
+// The filter says how many lines it hides now (038-AC11): counted from the list, as the segment
+// counts reset once seen. Once a frame, as the history comes a line at a time.
+let hiddenQueued = false;
+function queueHidden() {
+  if (hiddenQueued) return;
+  hiddenQueued = true;
+  requestAnimationFrame(() => {
+    hiddenQueued = false;
+    const f = shownFilter();
+    const n = f === 'all' ? 0 : messages.querySelectorAll(f === 'written' ? ':scope > li.msg.voice' : ':scope > li.msg:not(.voice)').length;
+    $('filter-hidden').hidden = !n;
+    if (n) $('filter-hidden-text').textContent = n + (f === 'written' ? ' voice' : ' written') + (n === 1 ? ' line' : ' lines') + ' hidden';
+  });
+}
+// The hint goes with its button: the focus moves to the segment now pressed.
+$('filter-show-all').addEventListener('click', () => {
+  setFilter('all');
+  $('chat-filter').querySelector('[data-filter=all]').focus();
+});
 
 // setFilter shows f; keep, for a segment click only, makes it the stored choice.
 function setFilter(f, keep) {
@@ -559,6 +617,7 @@ function addMessage(m) {
   const list = m.kind === 'voice' && paneShows() ? voiceLines : messages;
   const li = renderMessage(m);
   list.append(li);
+  if (filterHides(m.kind)) queueHidden();
   stick(list);
   hear(m, li);
   if (m.id === jumpTo) jump(m.id);
@@ -3330,7 +3389,7 @@ function personaForm(p) {
     grid(field('Name', input('name', p.name, { maxLength: 30, required: true })),
       field('Badge', input('badge', p.badge, { maxLength: 8, required: true })),
       field('Colour', input('colour', p.colour, { type: 'color' }))),
-    field('Persona text', text), ...(ttsOn ? [voiceBlock(p, input)] : []));
+    field('Persona text', text), ttsOn ? voiceBlock(p, input) : voiceUnavailable());
   const use = contextUse(p);
   const model = panel('model',
     grid(field('Model', picker('model', agent.models, p.model)), field('Effort', picker('effort', agent.efforts, p.effort)),
@@ -3751,6 +3810,14 @@ function pluginsBlock(p) {
 
 // voiceBlock is the persona in the call (013-AC26, AC27, AC37): whether it speaks, its voice, each
 // with a sample and its credit, and its rate.
+// voiceUnavailable keeps the call's place on a server without speech (038-AC12); voiceFields then sends nothing.
+function voiceUnavailable() {
+  const box = Object.assign(document.createElement('fieldset'), { className: 'persona-voice' });
+  box.append(Object.assign(document.createElement('legend'), { textContent: 'In the call' }),
+    Object.assign(document.createElement('p'), { className: 'empty unavailable', textContent: 'Not available on this server' }));
+  return box;
+}
+
 function voiceBlock(p, input) {
   const box = document.createElement('fieldset');
   box.className = 'persona-voice';
@@ -4333,7 +4400,7 @@ function personActions(p, id) {
   if (other && meAdmin) {
     acts.push({ label: 'Remove from room…', disabled: p.admin ? 'Remove their room admin role first' : '', run: () => removePerson(p) });
   }
-  if (!other) acts.push({ label: 'Leave room…', disabled: meAdmin ? 'Step down as room admin first' : '', run: leaveRoom });
+  if (!other) acts.push({ label: 'Leave room…', disabled: leaveBlocked(), run: leaveRoom });
   return acts;
 }
 
@@ -4769,13 +4836,10 @@ function showSTT(st) {
   sttButton();
   sttEngines = st.engines || [];
   showCredit();
-  if (sttGlossary !== !!st.glossary) {
-    sttGlossary = !!st.glossary;
-    showManage();
-  }
+  sttGlossary = !!st.glossary;
   // The Room settings sheet (admin/room-admin.js) shows its glossary tab from the same state, and
   // stt/device.js offers device transcription from it, the credit included (010-AC8).
-  window.grillSTT = { glossary: sttGlossary, device: st.device || null };
+  window.grillSTT = { glossary: sttGlossary, available: !!st.available, device: st.device || null };
   window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
 }
 let sttDown = false;
@@ -4790,8 +4854,7 @@ window.addEventListener('grill:device-stt', showCredit);
 // sttGlossary is true while a transcription worker reads room glossaries (007-AC14).
 let sttGlossary = false;
 
-// showManage offers Room settings to every member: each reads the room's plugins there (009-AC5),
-// and the glossary while one is in use (005-AC23).
+// showManage offers Room settings to every member: each reads the room's plugins there (009-AC5).
 function showManage() {
   $('manage-open').hidden = false;
 }

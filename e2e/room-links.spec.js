@@ -32,8 +32,23 @@ async function linksTab(page, roomID) {
 test('room links from Room settings', async ({ browser, request }) => {
   const lobby = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Lobby' } })).json();
   const ana = await join(browser, request, lobby.id, 'Ana');
+  // 038-AC8: with no link, a plain member's room menu has nothing about links.
+  await expect(ana.locator('#links-label')).toHaveText('Link a room…');
+  await ana.locator('#room-open').click();
+  await expect(ana.locator('#links-open')).toBeHidden();
+  await ana.keyboard.press('Escape');
   const make = async (name) => (await (await ana.request.post('/api/profile/rooms', { data: { name, display_name: 'Ana' } })).json()).id;
   const pricing = await make('Pricing ' + uniq());
+  // 038-AC8: a room admin's offers to link one; with no other room to link, the sheet says where to make one.
+  await ana.goto(`/r/${pricing}`);
+  await ana.locator('#room-open').click();
+  await expect(ana.locator('#links-open')).toHaveText('Link a room…');
+  await ana.locator('#links-open').click();
+  await expect(ana.locator('#manage')).toBeVisible();
+  await ana.locator('#manage').getByRole('button', { name: 'Link a room' }).click();
+  await expect(ana.locator('#link-none')).toHaveText('You are a room admin of no other room. Create one first.');
+  await expect(ana.locator('#link-none').getByRole('link', { name: 'Create one first' })).toHaveAttribute('href', '/profile#rooms');
+  await ana.locator('#link-sheet').getByRole('button', { name: 'Close' }).click();
   const legal = await make('Legal ' + uniq());
   const names = await Promise.all([pricing, legal].map(async (id) => (await (await ana.request.get(`/api/rooms/${id}`)).json()).room.name));
 
@@ -210,10 +225,15 @@ test('a persona proposes a room; a member creates it from the card', async ({ br
     await expect(sheet.getByLabel(`${legalName} reads ${pricingName}`)).toBeChecked();
     await expect(sheet.getByLabel(`${pricingName} reads ${legalName}`)).toBeChecked();
     await sheet.getByRole('button', { name: 'Create', exact: true }).click();
-    await expect(sheet).toBeHidden();
+    // 038-AC6: the sheet says the room exists and offers to open it or stay.
+    await expect(sheet.locator('#proposal-made')).toHaveText(`Room ${legalName} created`);
+    await expect(sheet.getByRole('link', { name: 'Open the room' })).toBeFocused();
     // 023-AC18: the card says who created it and links there for its members.
     const link = card(ana).getByRole('link', { name: `Created by Ana: ${legalName}` });
     await expect(link).toBeVisible();
+    await sheet.getByRole('button', { name: 'Stay here' }).click();
+    await expect(sheet).toBeHidden();
+    await expect(link).toBeFocused();
     await expect(card(ana).getByRole('button')).toHaveCount(0);
     // A second room created in the same page load links too, though the page fetched its rooms
     // before. No link: no line in this room makes the page reload its state meanwhile.
@@ -228,6 +248,11 @@ test('a persona proposes a room; a member creates it from the card', async ({ br
     await sheet.getByLabel(`${pricingName} reads ${opsName}`).uncheck();
     await sheet.getByRole('button', { name: 'Create', exact: true }).click();
     await expect(second.getByRole('link', { name: `Created by Ana: ${opsName}` })).toBeVisible();
+    // 038-AC6: "Open the room" goes to the room just created.
+    await sheet.getByRole('link', { name: 'Open the room' }).click();
+    await expect(ana).toHaveURL(new RegExp('/r/[^/]+$'));
+    await expect(ana.locator('#room-name')).toHaveText(opsName);
+    await ana.goto(`/r/${pricing}`);
     await expect(link).toBeVisible();
     // A reload of the room's state fetches the rooms once: Bob, not in Ops, sends for them no twice.
     await expect(bob.locator('#messages li.msg.system.proposal.created')).toHaveCount(2);
@@ -254,6 +279,14 @@ test('a persona proposes a room; a member creates it from the card', async ({ br
     // Bob sits in it, through Ana's shareable invite.
     await bob.goto(`/r/${legal}`);
     await expect(bob.locator('#me')).toHaveText('Bob');
+    // 038-AC7: every member reads where it was proposed in the room menu, linked for a member of that room.
+    await bob.locator('#room-open').click();
+    await expect(bob.locator('#room-proposed-in')).toHaveText(`Proposed in ${pricingName}`);
+    await expect(bob.locator('#room-proposed-in a')).toHaveAttribute('href', `/r/${pricing}`);
+    const cleo = await join(browser, request, legal, 'Cleo');
+    await cleo.locator('#room-open').click();
+    await expect(cleo.locator('#room-proposed-in')).toHaveText(`Proposed in ${pricingName}`);
+    await expect(cleo.locator('#room-proposed-in a')).toHaveCount(0);
   } finally {
     d();
   }

@@ -13,23 +13,24 @@ import { PluginsTab, mountReview } from './plugins.js';
 /**
  * @typedef {{id: number, name: string, admin: boolean}} Participant
  * @typedef {{quiet_ms: number, resume_s: number, queue_s: number, words: number}} Speech
- * @typedef {{room: {id: string, name: string, speech?: Speech}, me: Participant, participants: Participant[], tts?: boolean}} RoomData
+ * @typedef {{room: {id: string, name: string, speech?: Speech}, me: Participant, participants: Participant[], tts?: boolean, voice?: boolean}} RoomData
  * @typedef {{id: number, name: string, version: number, author: string, pending?: boolean}} RoomSkill
  * @typedef {{id: number, name: string, badge: string, model: string, effort: string, pending?: boolean}} Persona
  * @typedef {{room_skills?: RoomSkill[], personas?: Persona[], host_participant_id?: number, you_host?: boolean, egress_admins_allow?: boolean,
  *   connectors?: {name: string, actions?: boolean}[]}} AgentState
  * @typedef {{glossary: string, prompt: string, used: number, total: number, capacity: number}} Glossary
- * @typedef {{glossary: boolean}} STTState
+ * @typedef {{glossary: boolean, available?: boolean}} STTState
  */
 
 const w = /** @type {Window & {grillRoom?: RoomData, grillAgent?: AgentState, grillSTT?: STTState, grillLinks?: RoomLink[], grillShowLinks?: () => void}} */ (window);
 const roomData = signal(w.grillRoom);
 const agentState = signal(w.grillAgent);
-// The glossary tab shows only while a transcription worker reads it (007-AC14); its data stays.
-const sttGlossary = signal(!!w.grillSTT?.glossary);
+// The glossary tab works only while a transcription worker reads it (007-AC14); its data stays.
+// Undefined until the room's stream sends the state.
+const sttState = signal(/** @type {STTState | undefined} */ (w.grillSTT));
 addEventListener('grill:room', (e) => { roomData.value = /** @type {CustomEvent<RoomData>} */ (e).detail; });
 addEventListener('grill:agent', (e) => { agentState.value = /** @type {CustomEvent<AgentState>} */ (e).detail; });
-addEventListener('grill:stt', (e) => { sttGlossary.value = /** @type {CustomEvent<STTState>} */ (e).detail.glossary; });
+addEventListener('grill:stt', (e) => { sttState.value = /** @type {CustomEvent<STTState>} */ (e).detail; });
 // room.js fetches the links with each room reload (023-AC8); the Links tab shows that list.
 const roomLinks = signal(/** @type {RoomLink[] | null | undefined} */ (w.grillLinks));
 addEventListener('grill:links', (e) => { roomLinks.value = /** @type {CustomEvent<RoomLink[] | null>} */ (e).detail; });
@@ -109,10 +110,21 @@ function Manage({ data, tab, tabs }) {
       ${tab === 'plugins' && html`<${PluginsTab} base=${base} admin=${true} host=${approves(data)} personas=${personas}/>`}
       ${tab === 'network' && html`<${NetworkTab} base=${base} host=${isHost(data)} show=${show}/>`}
       ${tab === 'documents' && html`<${DeletedDocuments} base=${base} show=${show}/>`}
-      ${tab === 'glossary' && html`<${STTGlossary} data=${data}/>`}
-      ${tab === 'voices' && html`<${CallVoices} data=${data} base=${base} show=${show}/>`}
+      ${tab === 'glossary' && (sttState.value?.glossary ? html`<${STTGlossary} data=${data}/>` : glossaryNone(data))}
+      ${tab === 'voices' && (data.tts ? html`<${CallVoices} data=${data} base=${base} show=${show}/>` : unavailable())}
     <//>`}`;
 }
+
+// A setting whose engine this server lacks keeps its place and says so (038-AC12).
+const unavailable = () => html`<p class="empty unavailable">Not available on this server</p>`;
+/**
+ * glossaryNone is the glossary tab while no worker reads it: a server without voice has no engine;
+ * with one, the state may not be in yet, or its worker may be down (007's wording), or read no glossary.
+ * @param {RoomData} data
+ */
+const glossaryNone = (data) => (!data.voice ? unavailable()
+  : !sttState.value ? html`<p class="empty">Loading…</p>`
+  : !sttState.value.available ? html`<p class="empty unavailable">Voice-to-text is off</p>` : unavailable());
 
 // The bounds the server holds each call setting to (013-AC25).
 const speechFields = /** @type {[keyof Speech, string, number, number, number, string][]} */ ([
@@ -234,17 +246,16 @@ function App() {
   const data = roomData.value;
   if (data) title.textContent = 'Room settings · ' + data.room.name;
   if (!tab.value || !data) return null;
-  const tabs = allTabs.filter(([id]) => (id !== 'glossary' || sttGlossary.value) && (id !== 'voices' || data.tts));
-  if (data.me.admin) return html`<${Manage} data=${data} tabs=${tabs} tab=${tabs.some(([id]) => id === tab.value) ? tab.value : 'general'}/>`;
-  const mine = tabs.filter(([id]) => memberTabs.includes(id));
-  // A link to an admin's tab, or to the glossary while no engine reads it, opens the first one.
+  if (data.me.admin) return html`<${Manage} data=${data} tabs=${allTabs} tab=${allTabs.some(([id]) => id === tab.value) ? tab.value : 'general'}/>`;
+  const mine = allTabs.filter(([id]) => memberTabs.includes(id));
+  // A link to an admin's tab opens the first one.
   const t = mine.some(([id]) => id === tab.value) ? tab.value : mine[0][0];
   const base = '/api/rooms/' + encodeURIComponent(data.room.id);
   /** @param {number} id */
   const byName = (id) => data.participants.find((p) => p.id === id)?.name || 'a former participant';
   return html`<${TabBar} tabs=${mine} active=${t} href=${(/** @type {string} */ id) => '#manage/' + id} label="Room settings"/>
     ${said && html`<p class="said" role="alert">${said}</p>`}
-    <div class="tab-panel" id=${'panel-' + t}>${t === 'glossary' && html`<${STTGlossary} data=${data}/>`}
+    <div class="tab-panel" id=${'panel-' + t}>${t === 'glossary' && (sttState.value?.glossary ? html`<${STTGlossary} data=${data}/>` : glossaryNone(data))}
       ${t === 'invites' && html`<${Invites} base=${base} api=${fetchJSON} show=${show} byName=${byName} me=${data.me.id}/>`}
       ${t === 'links' && html`<${LinksTab} data=${data} base=${base} show=${show}/>`}
       ${t === 'plugins' && html`<${PluginsTab} base=${base} admin=${false} host=${approves(data)} personas=${agentState.value?.personas || []}/>`}
@@ -366,7 +377,7 @@ function LinkSheet({ data, base, links, done }) {
     <div class="sheet-head"><h2 id="link-title">Link a room</h2>
       <button type="button" class="btn-icon btn-ghost" aria-label="Close" onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
     ${!rooms && said && html`<p class="said error" role="alert">${said}</p>`}
-    ${rooms && !rooms.length ? html`<p class="empty" id="link-none">You are a room admin of no other room.</p>`
+    ${rooms && !rooms.length ? html`<p class="empty" id="link-none">You are a room admin of no other room. <a href="/profile#rooms">Create one first</a>.</p>`
     : rooms && html`<form id="link-form" class="stack" onSubmit=${save}>
       <label>Room<select id="link-room" value=${other} onChange=${pick}>
         ${rooms.map((r) => html`<option key=${r.room_id} value=${r.room_id}>${r.room_name}</option>`)}</select></label>
@@ -427,7 +438,10 @@ function ProposalSheet({ data, m, done }) {
   const [readBy, setReadBy] = useState(true);
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState('');
+  const [made, setMade] = useState(/** @type {{id: string, name: string} | null} */ (null));
   useEffect(() => { ref.current?.showModal(); }, []);
+  // The form, and the focus on its Create, go: the focus moves to what comes next.
+  useEffect(() => { if (made) document.getElementById('proposal-open')?.focus(); }, [made]);
   const here = data.room.name;
   const admin = data.me.admin;
   const members = /** @type {Member[]} */ (data.participants).filter((p) => !p.no_profile);
@@ -446,14 +460,24 @@ function ProposalSheet({ data, m, done }) {
     setSaid('');
     const base = '/api/rooms/' + encodeURIComponent(data.room.id);
     fetchJSON('POST', `${base}/proposals/${m.proposal.id}/create`, { name, members: picked, reads: admin && reads, read_by: admin && readBy })
-      .then(close).catch((/** @type {Error} */ err) => { setSaid(err.message); setBusy(false); });
+      .then(setMade).catch((/** @type {Error} */ err) => { setSaid(err.message); setBusy(false); });
   };
   const shown = name.trim() || m.proposal.name;
   const brief = useMemo(() => headingsUnder(m.html || '', 3), [m.html]);
-  return html`<dialog ref=${ref} id="proposal-sheet" class="sheet" aria-labelledby="proposal-title" onClose=${done}>
+  // Its Create… button was replaced by a link to the room: the focus goes there, not to the page.
+  const closed = () => {
+    if (made) /** @type {HTMLElement | null} */ (document.querySelector(`#messages li[data-id="${m.id}"] a`))?.focus();
+    done();
+  };
+  return html`<dialog ref=${ref} id="proposal-sheet" class="sheet" aria-labelledby="proposal-title" onClose=${closed}>
     <div class="sheet-head"><h2 id="proposal-title">Create a room</h2>
       <button type="button" class="btn-icon btn-ghost" aria-label="Close" onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
-    <form id="proposal-form" class="stack" onSubmit=${save}>
+    ${made ? html`<div class="stack"><p id="proposal-made" role="status">Room ${made.name} created</p>
+      <div class="actions">
+        <button type="button" class="btn-secondary" onClick=${close}>Stay here</button>
+        <a class="btn btn-primary" id="proposal-open" href=${'/r/' + encodeURIComponent(made.id)}>Open the room</a>
+      </div></div>`
+    : html`<form id="proposal-form" class="stack" onSubmit=${save}>
       <label>Name<input id="proposal-name" required maxlength="100" value=${name} onInput=${(/** @type {Event} */ e) => setName(/** @type {HTMLInputElement} */ (e.currentTarget).value)}/></label>
       <h3>Brief</h3>
       <div class="msg"><div class="body" id="proposal-brief" dangerouslySetInnerHTML=${{ __html: brief }}></div></div>
@@ -468,7 +492,7 @@ function ProposalSheet({ data, m, done }) {
       <div class="actions">
         <button type="button" class="btn-secondary" onClick=${close}>Cancel</button>
         <button type="submit" class="btn-primary" disabled=${busy || !name.trim()}>Create</button>
-      </div></form>
+      </div></form>`}
   </dialog>`;
 }
 

@@ -243,7 +243,8 @@ function Edit({ v, latest, done, cancel, conflict, reopen, reopened }) {
       <label>Description<input name="description" maxlength="200" value=${f.description} onInput=${text('description')} aria-describedby="persona-lib-desc-hint"/></label>
       <p class="hint" id="persona-lib-desc-hint">One line, shown in the library and the room's picker.</p>
       <label>Persona text<textarea name="text" rows="6" required maxlength="8000" value=${f.text} onInput=${text('text')}></textarea></label>
-      ${/* Without speech on this server the call fields hide, as on the room's persona sheet (035-AC3). */ ''}
+      ${/* Without speech on this server the call fields say so, as on the room's persona sheet (038-AC12). */ ''}
+      ${!v.tts && html`<fieldset class="persona-voice"><legend>In the call</legend><p class="empty unavailable">Not available on this server</p></fieldset>`}
       ${v.tts && html`<fieldset class="persona-voice"><legend>In the call</legend>
         <label class="check"><input type="checkbox" name="speaks" checked=${f.speaks} onChange=${check('speaks')}/> Speaks in the call</label>
         <p class="hint">After its turns it says a short line while someone is in the call. Each listener can mute it for themselves.</p>

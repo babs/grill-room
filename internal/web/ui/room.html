@@ -92,11 +92,14 @@
   <button type="button" id="recovery-open" data-icon="device">Use on another device</button>
   <button type="button" id="diag-open" data-icon="pulse">Diagnostics</button>
   <a href="/profile" data-icon="profile">My rooms and profile</a>
+  <button type="button" id="leave-open" data-icon="leave" aria-describedby="leave-why">Leave room…</button>
+  <p id="leave-why" class="menu-note" hidden></p>
 </div>
 <div id="room-menu" class="menu" popover>
+  <p id="room-proposed-in" class="menu-head" hidden></p>
   <button type="button" id="invite-open" data-icon="invite">Invite people</button>
   <button type="button" id="manage-open" data-icon="settings" hidden>Room settings</button>
-  <a id="links-open" href="#manage/links" data-icon="clip" hidden>Linked rooms (<span id="links-count"></span>)</a>
+  <a id="links-open" href="#manage/links" data-icon="clip" hidden><span id="links-label"></span></a>
   <button type="button" id="personas-open" data-icon="personas">Personas</button>
   <a id="docs-window-menu" data-icon="external">Open documents in a new window</a>
   <a id="chat-window-menu" data-icon="external">Open chat in a new window</a>
@@ -503,6 +506,7 @@
       <button type="button" data-filter="written" aria-pressed="true">Written<span class="count"></span></button>
       <button type="button" data-filter="voice" aria-pressed="false">Voice<span class="count"></span></button>
     </div>
+    <p id="filter-hidden" class="hint" hidden><span id="filter-hidden-text"></span> <button type="button" id="filter-show-all" class="text-link">Show all</button></p>
     <ol id="messages" aria-labelledby="chat-title"></ol>
     <p id="filter-empty" class="empty"></p>
     <div id="chat-empty" class="empty" hidden>

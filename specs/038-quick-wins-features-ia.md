@@ -125,3 +125,7 @@ None.
 - AC3: the pill's tip is a plain tooltip and holds no button, so "Ask someone to run it" sits in the pill's card. The card and the ▶ dialog offer it only when the room has no AI host at all; a known host whose app is away is named, and members ask that host. The host sheet always offers it. A failed copy shows the message to copy by hand.
 - AC4: a toast holds one action, a button ("Undo") or a link ("Open").
 - AC5: "Create a room from this" opens the new-room sheet in that starter's editor (006-AC9); Back returns to the picker.
+- AC7: "Proposed in" stays in Room settings › General as well: /admin's room panel shares that tab.
+- AC10: both reasons end with the "Step down" link to `#manage/admins`. The avatar menu and the People ⋯ entry give the same reason, counted per profile as the server counts room admins.
+- AC11: N counts the lines the shown filter hides in the chat list, not the unread counts, which reset once seen.
+- AC12: covers the settings, editable places; the persona card and the picker, read only, still leave the call out without a voice engine. Words to recognise says "Loading…" until the room's voice-to-text state comes and "Voice-to-text is off" (007) while the workers are down; "Not available on this server" is for a server where no live worker reads a glossary: none, parakeet, or whisper without `APP_GLOSSARY_PROMPT`.

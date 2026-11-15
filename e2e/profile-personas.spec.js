@@ -72,8 +72,9 @@ test('persona library: the profile Personas tab', async ({ browser, request }, t
   // 035-AC3: the author edits it to v2.
   const edit = page.getByRole('button', { name: 'Edit', exact: true });
   await edit.click();
-  // The e2e server has no speech: the call fields hide, as on the room's sheet.
+  // 038-AC12: the e2e server has no speech: the call fields say so in their place, as on the room's sheet.
   await expect(page.getByLabel('Speaks in the call')).toHaveCount(0);
+  await expect(page.locator('.persona-voice .unavailable')).toHaveText('Not available on this server');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(edit).toBeFocused();
   await edit.click();

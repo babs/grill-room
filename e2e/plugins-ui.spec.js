@@ -454,9 +454,8 @@ test('empty capabilities and room skills link to their place', async ({ browser,
   await alice.reload();
   await expect(alice.locator('#personas')).toBeHidden();
   const toSheet = alice.locator('#panel-skills').getByRole('button', { name: 'the Personas sheet' });
-  // It reads as a link inside the sentence, not on a row of its own.
-  const [btn, line] = await Promise.all([toSheet.boundingBox(), alice.locator('#panel-skills p.empty').boundingBox()]);
-  expect(btn.x).toBeGreaterThan(line.x + 50);
+  // It reads as a link inside the sentence, not on a row of its own: inline computes inline-block for a button.
+  expect(await toSheet.evaluate((b) => getComputedStyle(b).display)).toMatch(/^inline/);
   await toSheet.click();
   await expect(alice.locator('#personas')).toBeVisible();
   await expect(alice.locator('#panel-skills')).toBeHidden();
