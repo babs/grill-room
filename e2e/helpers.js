@@ -564,3 +564,68 @@ export async function approveEverything(admin) {
 
 // A name unique across parallel workers: Date.now() alone repeats when two start in the same ms.
 export const uniq = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8).padEnd(6, '0');
+
+// The e2e server has no LiveKit: this LiveKit stand-in keeps the room page's own mic handling and
+// takes the mic from navigator.mediaDevices.getUserMedia on each enable, as LiveKit's restart does.
+export const fakeLiveKit = `window.LivekitClient = (() => {
+  const names = new Proxy({}, { get: (_, k) => k });
+  class Room {
+    constructor() {
+      this.state = 'connected';
+      this.canPlaybackAudio = true;
+      this.remoteParticipants = new Map();
+      let track = null;
+      // No camera, no screen and no device choice (spec 030): what the page reads of them is empty.
+      this.localParticipant = {
+        isMicrophoneEnabled: false,
+        isCameraEnabled: false,
+        isScreenShareEnabled: false,
+        videoTrackPublications: new Map(),
+        trackPublications: new Map(),
+        getTrackPublication: () => (track ? { track: { mediaStreamTrack: track } } : undefined),
+        setMicrophoneEnabled: async (on) => {
+          if (on) track = (await navigator.mediaDevices.getUserMedia({ audio: true })).getAudioTracks()[0];
+          this.localParticipant.isMicrophoneEnabled = on;
+        },
+      };
+    }
+    on() { return this; }
+    getActiveDevice() { return 'default'; }
+    async switchActiveDevice() {}
+    // Counted per page: the chat window must open none (031-AC10).
+    async connect() { window.lkConnects = (window.lkConnects || 0) + 1; }
+    async disconnect() {}
+    async startAudio() {}
+  }
+  return { Room, RoomEvent: names, TrackEvent: names, Track: { Source: { Microphone: 'microphone' } }, DisconnectReason: { CLIENT_INITIATED: 1 } };
+})();
+`;
+
+// fakeCall gives page's room a call: the LiveKit stand-in, a voice token, voice (and extra) in the
+// room answer, and a getUserMedia that window.denyMic turns into a refusal with denied's text.
+export async function fakeCall(page, roomID, extra = {}, denied = 'Permission denied') {
+  const ctx = page.context();
+  await ctx.route('**/static/vendor/livekit-client.umd.js', (r) => r.fulfill({ contentType: 'text/javascript', body: fakeLiveKit }));
+  await ctx.route(`**/api/rooms/${roomID}/voice`, (r) => r.fulfill({ json: { url: 'ws://127.0.0.1:9', token: 't' } }));
+  await ctx.route(`**/api/rooms/${roomID}`, async (r) => {
+    let res;
+    try {
+      res = await r.fetch();
+    } catch {
+      // A reload dropped the request: nothing is waiting for it.
+      await r.abort().catch(() => {});
+      return;
+    }
+    // An error answer passes through as it is; a reload mid-body (Firefox disposes it) leaves no one to answer.
+    const json = await res.json().catch(() => null);
+    await r.fulfill(json && res.ok ? { response: res, json: { ...json, voice: true, ...extra } } : { response: res }).catch(() => {});
+  });
+  await ctx.addInitScript((text) => {
+    window.denyMic = false;
+    navigator.mediaDevices.getUserMedia = async () => {
+      if (window.denyMic) throw new DOMException(text, 'NotAllowedError');
+      return new AudioContext().createMediaStreamDestination().stream;
+    };
+  }, denied);
+  await page.reload();
+}

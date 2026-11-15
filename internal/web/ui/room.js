@@ -111,7 +111,7 @@ function end(text) {
   $('upload-open').hidden = true;
   for (const el of document.querySelectorAll('.dropping')) el.classList.remove('dropping');
   document.body.classList.remove('drag-files');
-  for (const id of ['manage-open', 'invite-open', 'personas-open', 'ai-open', 'links-open', 'leave-open', 'leave-why', 'room-proposed-in']) $(id).hidden = true;
+  for (const id of ['manage-open', 'invite-open', 'personas-open', 'ai-open', 'overview-open', 'links-open', 'leave-open', 'leave-why', 'room-proposed-in']) $(id).hidden = true;
   $('room-open').disabled = true;
   delete $('room-open').dataset.tip;
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
@@ -200,6 +200,9 @@ async function loadRoom() {
   // The room admin panel (admin/room-admin.js) renders from the same answer.
   window.grillRoom = data;
   window.dispatchEvent(new CustomEvent('grill:room', { detail: data }));
+  // A glossary edit writes a system line, which reloads the room (042-AC6).
+  if ($('call-overview').open) loadGlossaryWords();
+  renderOverview();
   showLinks().catch(console.error);
   return true;
 }
@@ -2666,6 +2669,7 @@ function connect() {
     const wasHost = agentSeen && isHost();
     const wasOnline = agent.online;
     agent = JSON.parse(e.data);
+    agentSeq++;
     // A version under inspection says whether the AI host is there to check it (009-AC13).
     if (agentSeen && wasOnline !== agent.online && plugins.length) loadPlugins().catch(console.error);
     // Someone else moved the role away from this participant (009-AC34).
@@ -3028,12 +3032,15 @@ async function loadVoices() {
   const res = await netFetch(api + '/voices?lang=' + lang);
   if (!res.ok) return;
   voiceList = await res.json();
+  renderOverview();
   staleSheet();
   renderPersonaSheet();
   renderPersonaCard();
 }
 
 function renderAgent() {
+  // Every agent state passes here, the stream's and loadSkills' (042-AC6).
+  renderOverview();
   hidePairingOnceConnected();
   // The app's page is on this computer only when one of my apps is connected (daemon-r2).
   $('host-app-open').hidden = docsMode || mobileOS || !agent.daemons.some((d) => String(d.participant_id) === myID);
@@ -3524,7 +3531,8 @@ function personaForm(p) {
     const bad = form.querySelector('input:invalid, select:invalid, textarea:invalid');
     if (bad) {
       const tab = bad.closest('[data-tab]').dataset.tab;
-      history.replaceState(null, '', '#personas/' + p.id + '/' + tab);
+      // Keeps the entry's state: the overview's return (042-AC7).
+      history.replaceState(history.state, '', '#personas/' + p.id + '/' + tab);
       showPersonaTab(tab);
       bad.reportValidity();
       return;
@@ -3759,13 +3767,16 @@ async function turnSkillOn(p, id) {
 }
 
 async function loadSkills() {
+  const seq = agentSeq;
   const [lib, st] = await Promise.all([netFetch(api + '/skills'), netFetch(api + '/agent')]);
   if (!lib.ok) return;
   skillLib = await lib.json();
   staleSheet();
   // An upload to the library does not wake the room: read the update offers afresh.
-  if (st.ok) {
-    agent = await st.json();
+  const read = st.ok ? await st.json() : null;
+  // A stream event since the read is newer: the read would bring back a removed persona.
+  if (read && seq === agentSeq) {
+    agent = read;
     renderAgent();
   } else {
     renderPersonas();
@@ -4073,6 +4084,8 @@ function showPersonaTab(tab) {
 
 // agentSeen: the room's personas are known, so a deep link to a missing one closes its sheet.
 let agentSeen = false;
+// agentSeq counts the stream's agent states: a read sent before the latest is stale.
+let agentSeq = 0;
 
 // renderPersonaSheet draws the persona the hash names; a form being edited keeps what its user typed.
 function renderPersonaSheet() {
@@ -4094,7 +4107,8 @@ function renderPersonaSheet() {
       a.addEventListener('click', (e) => {
         if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return;
         e.preventDefault();
-        location.replace(a.href);
+        // history.state carries the overview's return (042-AC7): location.replace would drop it.
+        history.replaceState(history.state, '', a.href);
         renderPersonaSheet();
       });
       return a;
@@ -4111,8 +4125,10 @@ function renderPersonaSheet() {
   showPersonaTab(r.tab);
 }
 
-// sheetReturn is the Room settings link the sheet was opened from, to go back to on close.
+// sheetReturn is the Room settings link the sheet was opened from, to go back to on close;
+// sheetReturnStamp, that entry's return to the overview or Help (042-AC7).
 let sheetReturn = '';
+let sheetReturnStamp = null;
 
 // followPersona opens, moves or closes the persona sheet as the hash says (009-AC2). Room settings
 // follows #manage on its own (admin/room-admin.js).
@@ -4125,6 +4141,8 @@ function followPersona(e) {
   if (!d.open) {
     const from = e instanceof HashChangeEvent ? new URL(e.oldURL).hash : '';
     sheetReturn = /^#manage(\/|$)/.test(from) ? from : '';
+    // Before the stamp follows the new entry: it is still Room settings'.
+    sheetReturnStamp = sheetReturn ? stamp : null;
     personasStatus('');
     $('persona-body').replaceChildren();
     d.showModal();
@@ -4136,11 +4154,16 @@ function followPersona(e) {
 addEventListener('hashchange', followPersona);
 // Closed by Escape, a click outside or ✕: the deep link goes too, without a history entry.
 $('persona-sheet').addEventListener('close', () => {
+  // The close event is queued: a Back then Forward may have reopened the sheet meanwhile.
+  if ($('persona-sheet').open) return;
   if ($('persona-menu').matches(':popover-open')) $('persona-menu').hidePopover();
-  // Opened from Room settings › Personas, closing goes back there.
-  if (sheetRoute()) {
-    if (sheetReturn) location.replace(sheetReturn);
-    else history.replaceState(null, '', location.pathname + location.search);
+  // Opened from the overview or Help, it goes back there (042-AC7); from Room settings › Personas, there.
+  if (sheetRoute() && !sheetBack()) {
+    if (sheetReturn) {
+      location.replace(sheetReturn);
+      // The replaced entry sits one past Room settings' own: one more step back to the overview.
+      if (sheetReturnStamp) history.replaceState({ ...sheetReturnStamp, steps: sheetReturnStamp.steps + 1 }, '');
+    } else history.replaceState(null, '', location.pathname + location.search);
   }
   sheetReturn = '';
 });
@@ -4251,15 +4274,18 @@ function aiRow(r) {
   const li = document.createElement('li');
   li.className = 'list-row ai-row';
   li.dataset.row = r.id;
-  li.dataset.state = r.state;
-  const icon = span('ai-state ' + r.state, '');
-  // The icon is aria-hidden: the state is read out as a word.
-  icon.append(grillIcon(aiIcons[r.state]), span('sr-only', { ready: 'Ready: ', waiting: 'Waiting: ', blocked: 'Blocked: ' }[r.state]));
+  // The overview's rows (042) state no readiness: no icon.
+  const icon = r.state ? span('ai-state ' + r.state, '') : null;
+  if (icon) {
+    li.dataset.state = r.state;
+    // The icon is aria-hidden: the state is read out as a word.
+    icon.append(grillIcon(aiIcons[r.state]), span('sr-only', { ready: 'Ready: ', waiting: 'Waiting: ', blocked: 'Blocked: ' }[r.state]));
+  }
   const main = document.createElement('div');
   main.className = 'main';
   const line = (cls, text) => Object.assign(document.createElement('div'), { className: cls, textContent: text });
   main.append(line('name', r.lines[0]), ...r.lines.slice(1).map((t) => line('meta', t)), ...(r.who ? [line('meta ai-who', 'Who: ' + r.who)] : []));
-  li.append(icon, main);
+  li.append(...(icon ? [icon] : []), main);
   if (r.actions?.length) {
     const acts = document.createElement('div');
     acts.className = 'actions';
@@ -4267,6 +4293,7 @@ function aiRow(r) {
       if (a.href) {
         const el = Object.assign(document.createElement('a'), { className: 'btn btn-secondary', href: a.href, textContent: a.label });
         if (!a.href.startsWith('#')) Object.assign(el, { target: '_blank', rel: 'noopener noreferrer' });
+        if (a.run) el.addEventListener('click', a.run);
         return el;
       }
       const b = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-secondary', textContent: a.label });
@@ -4314,12 +4341,13 @@ function renderAI() {
 // drawRows replaces a list's rows; a redraw keeps the focus on the action that had it.
 function drawRows(list, rows) {
   const a = document.activeElement;
-  const had = list.contains(a) ? [a.closest('.ai-row')?.dataset.row, a.textContent] : null;
+  const had = list.contains(a) ? [a.closest('[data-row]')?.dataset.row, a.textContent] : null;
   list.replaceChildren(...rows);
   if (!had) return;
   const same = sameAction(list, had[0], had[1]);
-  // Its row gone, the focus lands somewhere useful, not on the page: the sheet's close, else the composer.
-  (same || list.closest('dialog')?.querySelector('.close') || $('body')).focus();
+  // Its row gone, the focus lands somewhere useful, not on the page: the sheet's title where it takes
+  // the focus (042-AC7), its close, else the composer.
+  (same || list.closest('dialog')?.querySelector('h2[tabindex="-1"], .close') || $('body')).focus();
 }
 
 // spoken: the room has a message other than a system line; the checklist then goes for good.
@@ -4357,7 +4385,8 @@ addEventListener('hashchange', followAI);
 followAI();
 // Closed by Escape, a click outside or ✕: the deep link goes too, without a history entry.
 $('ai').addEventListener('close', (e) => {
-  if (location.hash === '#ai') history.replaceState(null, '', location.pathname + location.search);
+  if ($('ai').open) return;
+  if (location.hash === '#ai' && !sheetBack()) history.replaceState(null, '', location.pathname + location.search);
   // After the page's focus return: a chat line redraws with the room's state, while the sheet is
   // open or soon after it closed, and its new link takes the focus for a few seconds, unless the
   // user has put it somewhere else or acted. An opener gone otherwise hands it to the composer.
@@ -4394,6 +4423,157 @@ $('ai').addEventListener('close', (e) => {
   // A line redrawn without its link, or gone, leaves nothing to follow.
   focusLost(e);
 });
+
+// "Call and voice-to-text" (042): what applies to this room's call, read-only. Each row names who
+// changes it and links there; the controls stay in the audio bar and their own sheets.
+const absent = 'Not available on this server: the server admin turns it on.';
+// glossaryWords is the room's glossary term count: null while it loads, false when it failed.
+let glossaryWords = null;
+let glossarySeq = 0;
+async function loadGlossaryWords() {
+  if (!window.grillRoom?.voice) return;
+  const seq = ++glossarySeq;
+  let n = false;
+  try {
+    const res = await netFetch(api + '/glossary');
+    // As the server's splitTerms: newlines and commas.
+    if (res.ok) n = (await res.json()).glossary.split(/[\n,]/).filter((t) => t.trim()).length;
+  } catch { /* the row says it failed */ }
+  if (seq !== glossarySeq) return;
+  glossaryWords = n;
+  renderOverview();
+}
+
+function youRows(data) {
+  if (!data.voice) return [{ id: 'call', lines: [absent] }];
+  if (!voice) return [{ id: 'call', lines: ['Not in the call. Join it from the audio bar.'] }];
+  // The audio bar's own state: the mic as LiveKit has it, deaf, the transcription toggle, the device engine.
+  const muted = !voice.localParticipant.isMicrophoneEnabled;
+  const dev = window.grillDeviceSTT;
+  const engine = dev?.state || 'off';
+  const wait = 'Transcription is on, waiting: ';
+  const rows = [{ id: 'call', lines: ['In the call · ' + (muted ? 'muted' : 'mic on') + ' · ' + (deaf ? 'stopped hearing the call' : 'hearing the call')] },
+    { id: 'stt', lines: [sttOff ? 'Your voice is not written down' : muted ? wait + 'your mic is muted'
+      : sttMine || engine === 'ready' ? 'Your voice is written down now'
+      : engine === 'off' ? wait + 'voice-to-text is off' : wait + 'the model is downloading'] }];
+  // Only where 010 offers the choice: the audio menu shows its toggle.
+  if (dev?.info.offered) rows.push({ id: 'where', lines: ['Voice-to-text runs ' + (engine === 'off' ? 'on the server' : 'on this device')] });
+  return rows;
+}
+
+function roomRows(data) {
+  const sp = data.room.speech;
+  const rows = [data.voice
+    ? { id: 'glossary', lines: ['Words to recognise', glossaryWords === null ? 'Loading…' : glossaryWords === false ? 'Could not load the words.'
+      : glossaryWords + (glossaryWords === 1 ? ' word' : ' words')], who: 'any member', actions: [ovLink('glossary', 'Open Words to recognise', '#manage/glossary')] }
+    : { id: 'glossary', lines: ['Words to recognise', absent] }];
+  if (!ttsOn) return [...rows, { id: 'voices', lines: ['Call voices', absent] }];
+  // Plain members have no Call voices tab: no link for them.
+  rows.push({ id: 'voices', lines: ['Call voices', 'pause ' + sp.quiet_ms / 1000 + ' s, resume ' + sp.resume_s + ' s, queue ' + sp.queue_s + ' s, up to ' + sp.words + ' words'],
+    who: 'room admins', actions: meAdmin ? [ovLink('voices', 'Open Call voices', '#manage/voices')] : [] });
+  for (const p of agent.personas) {
+    rows.push({ id: 'persona-' + p.id, lines: [p.badge + ' ' + p.name, p.speaks ? 'speaks in the call with ' + voiceName(p.voice) + ', rate ' + (p.voice_rate || 1) : 'stays silent in the call'],
+      who: 'whoever may edit the persona', actions: [ovLink('persona-' + p.id, 'Open ' + p.name, '#personas/' + p.id + '/identity')] });
+  }
+  return rows;
+}
+
+function serverRows(data) {
+  const st = window.grillSTT;
+  return [{ id: 'stt', lines: ['Voice-to-text', !data.voice ? absent : !st ? 'Loading…' : !st.available ? 'Voice-to-text is off' : 'Available'], ...(data.voice && { who: 'the server admin' }) },
+    { id: 'tts', lines: ['Persona voices', ttsOn ? 'Available' : absent], ...(ttsOn && { who: 'the server admin' }) },
+    // The room page cannot tell the server admin (its cookie is scoped to /api/admin): no link.
+    // Pronunciation only shapes persona voices.
+    { id: 'pronunciation', lines: ['Pronunciation', ttsOn ? 'Set by the server admin, on the server\'s admin page.' : absent] }];
+}
+
+function renderOverview() {
+  if (!$('call-overview').open) return;
+  const data = window.grillRoom;
+  const loading = () => [Object.assign(document.createElement('li'), { className: 'empty', textContent: 'Loading…' })];
+  for (const [id, rows] of [['ov-you', youRows], ['ov-room', roomRows], ['ov-server', serverRows]]) drawRows($(id), data ? rows(data).map(aiRow) : loading());
+}
+window.addEventListener('grill:device-stt', renderOverview);
+
+// The return rule of links out of the overview and Help (042-AC7). A link stamps the history entry
+// it opens with its origin; the target's tabs carry the stamp, counting the entries they push.
+// Closing the target goes back that many entries, so Forward reopens it. The origin's own entry
+// keeps the row that linked, for the focus on the way back.
+let linkFrom = '';
+// A reload keeps the entry's state: the stamp with it.
+let stamp = history.state?.origin ? history.state : null;
+const sheetOf = (h) => (/^#(manage|links)(\/|$)/.test(h) ? '#manage' : /^#ai(\/|$)/.test(h) ? '#ai' : h.match(/^#personas\/\d+/)?.[0] || h);
+addEventListener('hashchange', (e) => {
+  if (linkFrom && location.hash !== linkFrom) history.replaceState({ origin: linkFrom, steps: 1 }, '');
+  else if (!history.state && stamp && sheetOf(location.hash) === sheetOf(new URL(e.oldURL).hash)) history.replaceState({ ...stamp, steps: stamp.steps + 1 }, '');
+  linkFrom = '';
+  stamp = history.state?.origin ? history.state : null;
+});
+
+// ovLink is a row's link out: the origin's entry remembers the row.
+const ovLink = (row, label, href) => ({ label, href, run: (e) => {
+  if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return;
+  history.replaceState({ row }, '');
+  linkFrom = location.hash;
+} });
+
+// sheetBack returns a target sheet to the overview or Help it was opened from; false when it was not.
+function sheetBack() {
+  const s = history.state;
+  if (!s?.origin) return false;
+  history.go(-s.steps);
+  return true;
+}
+window.grillSheetBack = sheetBack;
+
+// followSheet opens or closes a read-only sheet as the hash says. An ended room and the docs and
+// chat windows open none: the hash goes. Back to it from a target, the focus goes to the row that
+// linked, or the title when the row went meanwhile.
+function followSheet(d, hash, render, opened) {
+  const want = location.hash === hash;
+  if (want && (ended || docsMode || chatMode)) {
+    history.replaceState(null, '', location.pathname + location.search);
+    if (d.open) d.close();
+    return;
+  }
+  if (want && !d.open) {
+    delete d.dataset.left;
+    d.showModal();
+    opened();
+    render();
+    const row = history.state?.row;
+    if (row) (d.querySelector(`[data-row="${row}"] a`) || d.querySelector('h2')).focus();
+  } else if (!want && d.open) {
+    d.dataset.left = '1';
+    d.close();
+  }
+}
+// closeSheet clears the deep link without a history entry; the focus goes back to the opener, or to
+// "Join the call" when leaving the call took the Audio options button away.
+function closeSheet(e, hash) {
+  const d = e.target;
+  // The close event is queued: Back then Forward may have reopened the sheet meanwhile, and the
+  // hash, back on this sheet since, is not this close's to clear.
+  if (d.open) return;
+  const left = d.dataset.left;
+  delete d.dataset.left;
+  if (!left && location.hash === hash) history.replaceState(null, '', location.pathname + location.search);
+  // A link out: its target takes the focus.
+  if (location.hash) return;
+  const a = document.activeElement;
+  if (a && a !== document.body && a.checkVisibility()) return;
+  if ($('voice-join').checkVisibility()) $('voice-join').focus();
+  else focusLost(e);
+}
+
+const followOverview = () => followSheet($('call-overview'), '#call-overview', renderOverview, () => {
+  glossaryWords = null;
+  loadGlossaryWords();
+  loadVoices().catch(console.error);
+});
+addEventListener('hashchange', followOverview);
+followOverview();
+$('call-overview').addEventListener('close', (e) => closeSheet(e, '#call-overview'));
 
 async function loadTemplates() {
   const res = await netFetch(api + '/templates');
@@ -5132,6 +5312,7 @@ function showSTT(st) {
   // stt/device.js offers device transcription from it, the credit included (010-AC8).
   window.grillSTT = { glossary: sttGlossary, available: !!st.available, device: st.device || null };
   window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
+  renderOverview();
 }
 let sttDown = false;
 let sttEngines = [];
@@ -5205,6 +5386,8 @@ function sttButton() {
   // Only where ⋯ carries it: wider, the toggle in the bar says it.
   $('voice-more-state').textContent = !phone() ? '' : sttOff ? 'Your voice is not written down' : sttMine && voice ? 'Your voice is being written down' : '';
   grillTip.refresh();
+  // Every audio bar redraw passes here: the overview follows it (042-AC2).
+  renderOverview();
 }
 
 function voiceButtons() {

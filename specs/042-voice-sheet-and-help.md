@@ -1,6 +1,6 @@
 # 042 — Call and voice-to-text overview, and help
 
-**Status**: approved (v3, council consensus)
+**Status**: in progress
 **Requested by**: babs
 **Date**: 2026-11-15
 **Context**: UX audit part B, directions S6 (voice sheet) and S7 (help); journeys 1, 9, 10. Builds on 005-AC23 (words to recognise, any member), 010 (voice-to-text on this device), 013 (call voices, persona voices, pronunciation), 038 (vocabulary, "Not available on this server"), 039 (`#ai` readiness, host and ask derivation), 040 (AI in this room tabs). Council review (Codex, Fable) on 2026-11-15.
@@ -103,3 +103,9 @@ None.
 - Help does not repeat 039's readiness; it links to it, and reuses 039's ask line. Because the "Who runs the AI" row already holds the hand-off and 039 already words every ask case (Fable).
 - The profile line is about a missing email, not a missing profile. Because a seat without a profile lands on `/profile`'s sign-in card, and the page already nudges a profile without an email (Fable, second pass).
 - The transcription line says what is happening, not what is ticked. Because "written down" while muted would be false (Codex, second pass).
+- Rows show the setting on one line and its value on the next ("Words to recognise", "3 words"); the colon in the AC wording is that layout. Because the absent text carries its own colon (implementation).
+- Persona rows show only when the server has persona voices; without them the Call voices row says why. Because one "Not available" line per persona repeats the same fact (implementation).
+- With transcription on, the mic on and no worker on the voice yet, the reason reads "voice-to-text is off"; while the device engine self-tests after its download, "the model is downloading". Because AC2 allows three reasons only (implementation).
+- Pronunciation reads "Not available on this server" without persona voices. Because it only shapes them (implementation).
+- Links read "Open Words to recognise", "Open Call voices", "Open <persona>", and go to `#manage/glossary` and `#manage/voices` until 040 lands. Because the labels then survive 040's renames (implementation).
+- AC7's return rides on `history.state`: the link stamps the entry it opens, the target's tabs carry the stamp, and closing goes back as many entries. Because Forward must reopen the target, which a `replaceState` close cannot give (implementation).
