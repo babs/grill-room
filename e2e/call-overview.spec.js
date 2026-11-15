@@ -77,9 +77,21 @@ test('call overview: a server without a call', async ({ browser, request }) => {
 // Call voices links for a room admin only.
 test('call overview: the viewer, the room and the server, live', async ({ browser, request }) => {
   const { room, alice, bob } = await callRoom(browser, request);
-  await stt(alice, true, false);
   await openFrom(alice);
+  // Before the first voice-to-text state the glossary's count still shows; only the server's row waits.
+  await expect(row(alice, 'room', 'glossary').locator('.meta').first()).toHaveText('0 words');
+  await expect(row(alice, 'server', 'stt').locator('.meta').first()).toHaveText('Loading…');
+  // Section headings name their lists, not a landmark each: one announcement per heading.
+  await expect(sheet(alice).getByRole('region')).toHaveCount(0);
+  await expect(sheet(alice).getByRole('list', { name: 'This room' })).toBeVisible();
   expect(await lines(alice, 'you')).toEqual([['Not in the call. Join it from the audio bar.']]);
+  // The audio bar sits under the modal sheet: its buttons are pressed from the page.
+  const press = (id) => alice.evaluate((id) => document.getElementById(id).click(), id);
+  const you = (n) => row(alice, 'you', n).locator('.name');
+  await press('voice-join');
+  await expect(you('call')).toHaveText('In the call · mic on · hearing the call');
+  await expect(you('stt')).toHaveText('Loading…');
+  await stt(alice, true, false);
   expect(await lines(alice, 'server')).toEqual([['Voice-to-text', 'Available', 'Who: the server admin'], ['Persona voices', 'Available', 'Who: the server admin'],
     ['Pronunciation', 'Set by the server admin, on the server\'s admin page.']]);
   await expect(row(alice, 'room', 'glossary').locator('.meta').first()).toHaveText('0 words');
@@ -88,14 +100,22 @@ test('call overview: the viewer, the room and the server, live', async ({ browse
   await expect(row(alice, 'room', 'voices').locator('.ai-who')).toHaveText('Who: room admins');
   await expect(row(alice, 'room', 'voices').getByRole('link', { name: 'Open Call voices' })).toHaveAttribute('href', '#manage/voices');
 
-  // The audio bar sits under the modal sheet: its buttons are pressed from the page.
-  const press = (id) => alice.evaluate((id) => document.getElementById(id).click(), id);
-  const you = (n) => row(alice, 'you', n).locator('.name');
-  await press('voice-join');
-  await expect(you('call')).toHaveText('In the call · mic on · hearing the call');
-  // No worker on the voice yet, the server's voice-to-text up: not "off", which "This server" would contradict.
-  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is starting');
+  // No worker on the voice, the server's voice-to-text up: not "off", which "This server" would contradict.
+  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is in the call but not writing down your voice');
   await expect(row(alice, 'server', 'stt').locator('.meta').first()).toHaveText('Available');
+  await stt(alice, true, false, { listening: false });
+  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is not in the call');
+  // The device engine's self-test, after its download.
+  await alice.evaluate(() => {
+    window.realDeviceSTT = window.grillDeviceSTT;
+    window.grillDeviceSTT = { state: 'testing', info: { offered: false }, pipeline: {} };
+    dispatchEvent(new CustomEvent('grill:device-stt'));
+  });
+  await expect(you('stt')).toHaveText('Transcription is on, waiting: this device is testing the model');
+  await alice.evaluate(() => {
+    window.grillDeviceSTT = window.realDeviceSTT;
+    dispatchEvent(new CustomEvent('grill:device-stt'));
+  });
   await stt(alice, true, true);
   await expect(you('stt')).toHaveText('Your voice is written down now');
   await press('voice-mute');
@@ -146,6 +166,19 @@ test('call overview: the viewer, the room and the server, live', async ({ browse
   await expect(row(bob, 'room', 'voices').locator('.meta').first()).toHaveText('pause 1 s, resume 20 s, queue 40 s, up to 60 words');
   await expect(row(bob, 'room', 'voices').locator('a')).toHaveCount(0);
   await expect(row(bob, 'room', 'glossary').getByRole('link', { name: 'Open Words to recognise' })).toHaveAttribute('href', '#manage/glossary');
+
+  // 042-AC1: the entry follows "Personas" in the room menu and the toggles in Audio options.
+  await alice.keyboard.press('Escape');
+  await expect(sheet(alice)).toBeHidden();
+  await alice.locator('#room-open').click();
+  await expect(alice.locator('#room-menu > :is(a, button):visible')).toHaveText(['Invite people', 'Room settings', 'Link a room…', 'Personas', 'Call and voice-to-text…', 'AI in this room',
+    'Open documents in a new window', 'Open chat in a new window', 'Run the AI on my computer']);
+  await alice.keyboard.press('Escape');
+  // In markup order: the phone-only and the device toggles count, hidden or not.
+  await alice.locator('#voice-more').click();
+  await expect(alice.locator('#voice-menu > :is(a, button, label)')).toHaveText(['Transcribe my voice', 'Keep my mic on while I stop hearing the call',
+    'Transcribe on this device', 'Call and voice-to-text…', 'Leave the call']);
+  await alice.keyboard.press('Escape');
 });
 
 // 042-AC3 042-AC4 042-AC5: a call with no persona voices: Call voices, Persona voices and each
@@ -224,14 +257,14 @@ test('call overview: voice-to-text on this device and its fall back', async ({ b
   await expect.poll(() => alice.evaluate(() => window.roomReads)).toBeGreaterThanOrEqual(2);
   await stt(alice, true, false, offer);
   await expect(you('where')).toHaveText('Voice-to-text runs on the server');
-  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is starting');
+  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is in the call but not writing down your voice');
   // The toggle sits in Audio options, under the sheet.
   await alice.evaluate(() => document.querySelector('#voice-device input').click());
   await expect(you('stt')).toHaveText('Transcription is on, waiting: the model is downloading');
   await expect(you('where')).toHaveText('Voice-to-text runs on the server');
   await ready();
   expect(await alice.evaluate(() => window.grillDeviceSTT.info.live)).toBe(true);
-  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is starting');
+  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is in the call but not writing down your voice');
 
   await onDevice();
   await expect(said).toHaveText('Transcribed on this device');
@@ -242,7 +275,7 @@ test('call overview: voice-to-text on this device and its fall back', async ({ b
   await send('stub-pipeline', 'slow');
   await expect(said).toHaveText('Transcribed by the server: this device is too slow right now');
   await expect(you('where')).toHaveText('Voice-to-text runs on the server');
-  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is starting');
+  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is in the call but not writing down your voice');
   await stt(alice, true, true, offer);
   await expect(you('stt')).toHaveText('Your voice is written down now');
   // No worker on the server: nobody writes it down.
@@ -354,7 +387,12 @@ test('call overview: links out and back', async ({ browser, request }) => {
   // A Save that jumps to the tab of an invalid field keeps the way back.
   await grillLink.click();
   const ps = alice.locator('#persona-sheet');
-  await ps.getByLabel('Name').fill('');
+  // The form may redraw once its skills read lands, before anything is typed: a fill on the
+  // replaced field would be lost, so fill until the sheet counts the change.
+  await expect(async () => {
+    await ps.getByLabel('Name').fill('');
+    await expect(ps.getByRole('button', { name: 'Save', exact: true })).toBeEnabled({ timeout: 500 });
+  }).toPass();
   await ps.getByRole('link', { name: 'Model', exact: true }).click();
   await ps.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(alice).toHaveURL(new RegExp(`#personas/${grill.id}/identity$`));
