@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, personaSheet, personaAction, agentState, confirmSheet, noOverflow, uniq } from './helpers.js';
+import { roomWith, personaSheet, personaAction, agentState, confirmSheet, noOverflow, uniq, editPersona } from './helpers.js';
 
 // sourceLine is the Identity tab's line naming where the room persona name came from (035-AC16).
 async function sourceLine(context, roomID, name) {
@@ -38,7 +38,7 @@ test('persona library: the profile Personas tab', async ({ browser, request }, t
   const other = 'Bob' + uniq();
   const { room, pages: [alice, bob] } = await roomWith(browser, request, [me, other]);
   const sheet = await personaSheet(alice, 'Grill', 'Identity');
-  await sheet.getByLabel('Persona text').fill('Sharper.');
+  await editPersona(sheet, () => sheet.getByLabel('Persona text').fill('Sharper.'));
   await sheet.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(sheet.locator('#persona-status')).toHaveText('Grill saved. It applies from its next turn.');
   await personaAction(alice, 'Save Grill to my personas');

@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { roomWith, personaSheet, agentState, uniq, appointAdmin, fakeDaemon, skillZip, patchPersona, menuItem, personaRow, confirmSheet,
-  noOverflow, smallTargets, openStrip, patchJSON } from './helpers.js';
+  noOverflow, smallTargets, openStrip, patchJSON, editPersona } from './helpers.js';
 import { adminToken, gitPort } from './playwright.config.js';
 
 // call sends a JSON request with page's session and returns its status and body.
@@ -66,7 +66,7 @@ test('persona library: save to my personas from a room', async ({ browser, reque
   await expect(source).toHaveText(/^From Grill v\d+, built in\.$/);
   const menu = alice.locator('#persona-menu');
 
-  await sheet.getByLabel('Persona text').fill('Sharper.');
+  await editPersona(sheet, () => sheet.getByLabel('Persona text').fill('Sharper.'));
   await sheet.getByRole('link', { name: 'Triggers', exact: true }).click();
   await sheet.getByLabel('Speaks up').selectOption('every_n');
   await sheet.getByLabel('N', { exact: true }).fill('3');

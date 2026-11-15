@@ -406,6 +406,17 @@ export async function personaSheet(page, name, tab = 'Identity') {
   return sheet;
 }
 
+// editPersona runs edit, a fill, on the open persona sheet until its Save counts the change. The
+// form is redrawn once after it opens, when the skills read comes back: a fill that took its field
+// just before writes into the replaced one, and is lost. A form with a change is never redrawn.
+export async function editPersona(sheet, edit) {
+  const save = sheet.getByRole('button', { name: 'Save', exact: true });
+  await expect(async () => {
+    await edit();
+    await expect(save).toBeEnabled({ timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
+}
+
 // personaAction runs an item of the open persona sheet's ⋯ menu (009-AC3).
 export async function personaAction(page, name) {
   await page.locator('#persona-more').click();

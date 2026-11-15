@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon, ask, confirmSheet, personaSheet, closePersonas } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, confirmSheet, personaSheet, closePersonas, editPersona } from './helpers.js';
 
 // 003-AC24 003-AC25: Alice sets Grill's autocompact, which reaches claude -p. A session past 80% of
 // its context window shows the share in the personas panel and a banner offering the host a new
@@ -16,7 +16,7 @@ test('handoff: autocompact, context banner, new session from the note', async ({
 
     // 009-AC2: the memory size sits on the Model tab.
     const grill = await personaSheet(alice, 'Grill', 'Model');
-    await grill.getByLabel('Memory size (k tokens)').fill('300');
+    await editPersona(grill, () => grill.getByLabel('Memory size (k tokens)').fill('300'));
     await grill.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(bob.locator('#messages')).toContainText('Alice changed 🔥 Grill: autocompact auto → 300k.');
     await closePersonas(alice);
