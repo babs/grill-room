@@ -19,7 +19,7 @@ import { PluginsTab, mountReview } from './plugins.js';
  * @typedef {{room_skills?: RoomSkill[], personas?: Persona[], host_participant_id?: number, you_host?: boolean, egress_admins_allow?: boolean,
  *   connectors?: {name: string, actions?: boolean}[]}} AgentState
  * @typedef {{glossary: string, prompt: string, used: number, total: number, capacity: number}} Glossary
- * @typedef {{glossary: boolean, available?: boolean}} STTState
+ * @typedef {{glossary: boolean, available?: boolean, listening?: boolean}} STTState
  */
 
 const w = /** @type {Window & {grillRoom?: RoomData, grillAgent?: AgentState, grillSTT?: STTState, grillLinks?: RoomLink[], grillShowLinks?: () => void, grillSheetBack?: () => boolean}} */ (window);
