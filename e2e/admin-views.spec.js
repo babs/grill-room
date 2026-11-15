@@ -103,7 +103,8 @@ for (const vp of widths) {
 
     // Invites, from a deep link: a new link shown once, then revoked.
     await page.goto(`/admin#rooms/${room.id}/invites`);
-    await expect(panel.getByRole('link', { name: 'Invites', exact: true })).toHaveAttribute('aria-current', 'page');
+    // By id: on a phone the bar may be folded, its links hidden in the closed menu (038-AC9).
+    await expect(panel.locator('nav.tabs #tab-invites')).toHaveAttribute('aria-current', 'page');
     const invites = panel.locator('#invites-all .list-row:not(.head)');
     await expect(invites).toHaveCount(1);
     await panel.getByRole('button', { name: 'New invite link' }).click();

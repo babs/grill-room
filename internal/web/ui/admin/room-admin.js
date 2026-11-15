@@ -466,8 +466,27 @@ function ProposalSheet({ data, m, done }) {
   const shown = name.trim() || m.proposal.name;
   const brief = useMemo(() => headingsUnder(m.html || '', 3), [m.html]);
   // Its Create… button was replaced by a link to the room: the focus goes there, not to the page.
+  // The link comes with the room's next state, which may land after the sheet closes: wait for it,
+  // unless the user has put the focus somewhere else meanwhile.
   const closed = () => {
-    if (made) /** @type {HTMLElement | null} */ (document.querySelector(`#messages li[data-id="${m.id}"] a`))?.focus();
+    if (made) {
+      const sel = `#messages li[data-id="${m.id}"] a`;
+      const link = () => /** @type {HTMLElement | null} */ (document.querySelector(sel));
+      const was = document.activeElement;
+      const a = link();
+      if (a) a.focus();
+      else {
+        const watch = new MutationObserver(() => {
+          const l = link();
+          if (!l) return;
+          watch.disconnect();
+          const now = document.activeElement;
+          if (!now || now === document.body || now === was || !now.isConnected) l.focus();
+        });
+        watch.observe(/** @type {HTMLElement} */ (document.getElementById('messages')), { childList: true, subtree: true });
+        setTimeout(() => watch.disconnect(), 10000);
+      }
+    }
     done();
   };
   return html`<dialog ref=${ref} id="proposal-sheet" class="sheet" aria-labelledby="proposal-title" onClose=${closed}>
