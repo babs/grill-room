@@ -77,7 +77,7 @@ test('a persona speaks in the call and nobody writes it down', async ({ browser,
   await page.getByLabel('Your name').fill('Alice');
   await page.getByRole('button', { name: 'Join the room' }).click();
   await expect(page.locator('#me')).toHaveText('Alice');
-  await page.getByRole('button', { name: 'Join audio' }).click();
+  await page.getByRole('button', { name: 'Join the call' }).click();
   await expect(page.getByRole('button', { name: 'Audio options' })).toBeVisible();
   // The worker joins on its own poll: wait until it listens to Alice before judging what it hears.
   await expect.poll(() => metric(sttMetrics, 'grill_stt_tracks'), { timeout: 30_000 }).toBe(1);
@@ -116,7 +116,7 @@ test('a persona speaks in the call and nobody writes it down', async ({ browser,
 
   // The bot leaves once nobody listens (013-AC15, 5 s in this stack).
   await page.getByRole('button', { name: 'Audio options' }).click();
-  await page.getByRole('button', { name: 'Leave audio' }).click();
+  await page.getByRole('button', { name: 'Leave the call' }).click();
   await expect.poll(() => metric(ttsMetrics, 'grill_tts_bots'), { timeout: 30_000 }).toBe(0);
   await ctx.close();
 });

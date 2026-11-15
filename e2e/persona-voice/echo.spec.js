@@ -61,7 +61,7 @@ async function run(request, room, name, echoCancellation) {
     await expect(page.locator('#me')).toHaveText(name);
     const me = (await (await page.request.get(`/api/rooms/${room}`)).json()).me.id;
     const inAudio = page.waitForResponse((r) => r.url().endsWith('/presence') && r.request().postDataJSON().audio === true);
-    await page.getByRole('button', { name: 'Join audio' }).click();
+    await page.getByRole('button', { name: 'Join the call' }).click();
     await inAudio;
     await expect(page.locator('#voice-audio audio[data-pid^="persona-"]')).toHaveCount(1, { timeout: 60_000 });
     const heard = async () => {

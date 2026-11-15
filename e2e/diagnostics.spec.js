@@ -71,7 +71,7 @@ for (const [label, size] of [['desktop', { width: 1440, height: 900 }], ['phone'
     expect(Object.keys(stt)).toEqual(['Mode', 'Engine', 'Model', 'Device memory', 'Tab memory', 'End of speech to line', 'Hand-overs']);
     expect(stt.Mode).toMatch(/^(On this device|By the server: .+)$/);
     expect(stt['Device memory']).toMatch(/\(Chrome and Edge only, rounded and capped by the browser\)$/);
-    await expect.poll(() => facts(alice, '#diag-net')).toMatchObject({ 'Event stream': 'open', Audio: 'not in the audio', 'Audio path': 'none' });
+    await expect.poll(() => facts(alice, '#diag-net')).toMatchObject({ 'Event stream': 'open', Audio: 'not in the call', 'Audio path': 'none' });
     // The room server's own version: the e2e build's.
     expect((await facts(alice, '#diag-net'))['App version']).toMatch(/^v\d+\.\d+\.\d+/);
     // Measured again while open.
@@ -169,7 +169,7 @@ test('diagnostics says why the server has the voice', async ({ browser, request 
     [{ failed: true, live: false }, 'failed', 'By the server: the engine failed on this device, until the page reloads'],
     [{ untapped: true, live: false }, undefined, "By the server: this browser can't pass your microphone to the engine"],
     [{ on: false, live: false }, undefined, 'By the server: transcription on this device is off'],
-    [{ inAudio: false, live: false }, undefined, 'By the server: you are not in the audio'],
+    [{ inAudio: false, live: false }, undefined, 'By the server: you are not in the call'],
     [{ delayed: true, live: false }, undefined, 'By the server: waiting a few seconds after the page reload'],
     [{}, 'slow', 'By the server: this device is too slow right now'],
     [{}, 'loading', 'By the server: starting on this device'],

@@ -53,16 +53,16 @@
   <div class="zone zone-me">
     <button type="button" id="video-open" class="btn-ghost" aria-controls="stage" aria-expanded="false" data-tip="Watch the cameras and screens shared in the call" data-icon="camera" hidden>Video <span id="video-count" class="count"></span></button>
     <div id="voice" class="audio" role="group" aria-label="Audio" hidden>
-      <button type="button" id="voice-join" class="btn-primary">Join audio</button>
+      <button type="button" id="voice-join" class="btn-primary">Join the call</button>
       <button type="button" id="voice-unlock" class="btn-primary" hidden>Play audio</button>
       <button type="button" id="voice-mute" class="btn-icon" aria-label="Mute my mic" aria-pressed="false" hidden></button>
       <button type="button" id="voice-cam" class="btn-icon" aria-label="Turn my camera on" aria-pressed="false" hidden></button>
       <button type="button" id="voice-screen" class="btn-icon" aria-label="Share my screen" aria-pressed="false" hidden></button>
-      <button type="button" id="voice-deaf" class="btn-icon" aria-label="Mute the room" aria-pressed="false" hidden></button>
+      <button type="button" id="voice-deaf" class="btn-icon" aria-label="Stop hearing the call" aria-pressed="false" hidden></button>
       <button type="button" id="voice-stt" class="btn-icon" aria-label="Transcribe my voice" aria-pressed="true" hidden></button>
       <button type="button" id="voice-more" class="btn-icon" popovertarget="voice-menu" aria-label="Audio options" data-tip="More audio options, and what is being written down" data-icon="more" aria-describedby="voice-more-state" hidden></button>
       <span id="voice-more-state" class="sr-only" aria-hidden="true"></span>
-      <button type="button" id="voice-leave" class="btn-icon" aria-label="Leave audio" data-tip="Leave the audio: stop hearing and being heard" data-icon="leave" hidden></button>
+      <button type="button" id="voice-leave" class="btn-icon" aria-label="Leave the call" data-tip="Leave the call: stop hearing and being heard" data-icon="leave" hidden></button>
     </div>
     <button type="button" id="me" class="avatar" popovertarget="me-menu" data-tip="You: your name, notifications, your profile" hidden></button>
     <a id="me-anon" class="anon-mark" href="/profile#email" hidden></a>
@@ -71,7 +71,7 @@
 <div id="voice-menu" class="menu" popover>
   <p id="stt-status" class="menu-head" role="status"></p>
   <label id="voice-stt-menu"><input type="checkbox" checked><span>Transcribe my voice</span></label>
-  <label id="voice-keepmic" data-tip="Keep your voice going out, and written down, while the room is muted: useful when you share a physical room"><input type="checkbox"><span>Keep my mic on while the room is muted</span></label>
+  <label id="voice-keepmic" data-tip="Keep your voice going out, and written down, while you stop hearing the call: useful when you share a physical room"><input type="checkbox"><span>Keep my mic on while I stop hearing the call</span></label>
   <label id="voice-device" data-tip="Your browser writes your voice down instead of the server. It downloads the voice-to-text model once, then tests this device." hidden><input type="checkbox"><span>Transcribe on this device</span></label>
   <p id="device-stt-status" class="hint" role="status" tabindex="-1"></p>
   <div id="voice-devices" role="group" aria-labelledby="voice-devices-head">
@@ -80,7 +80,7 @@
     <label>Camera<select id="dev-videoinput"></select></label>
     <label id="dev-speaker" hidden>Speaker<select id="dev-audiooutput"></select></label>
   </div>
-  <button type="button" id="voice-leave-menu">Leave audio</button>
+  <button type="button" id="voice-leave-menu">Leave the call</button>
   <p id="stt-credit" class="hint" hidden>Voice-to-text by <a href="https://huggingface.co/moondream/parakeet-ultra" target="_blank" rel="noopener">parakeet-ultra</a>
     (Moondream, from NVIDIA Parakeet TDT 0.6B v3),
     <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC-BY-4.0</a>.</p>
@@ -334,7 +334,7 @@
   <p id="host-intro">The AI host app runs this room's personas on your computer, with your Claude subscription. It needs Docker.</p>
   <div id="host-has-app">
   <h3>Already have the app?</h3>
-  <p>Open <a href="http://127.0.0.1:47680/" target="_blank" rel="noopener noreferrer">its page</a> on the computer that runs it, Rooms, and paste this room's link under "Add a room".</p>
+  <p>Open <a href="http://127.0.0.1:47680/" target="_blank" rel="noopener noreferrer">the AI host app</a> on the computer that runs it, Rooms, and paste this room's link under "Add a room".</p>
   <p class="copy-row"><input id="host-room-link" readonly aria-label="This room's link">
     <button type="button" id="host-room-copy">Copy link</button></p>
   </div>
@@ -472,18 +472,18 @@
     <div class="viewer-body">
       <div id="doc-frame"></div>
       <div id="notes-handle" class="pane-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="annotations" aria-label="Resize the notes"></div>
-      <aside id="annotations" aria-label="Annotations">
+      <aside id="annotations" aria-label="Notes">
         <button type="button" id="notes-back" class="btn-secondary" data-icon="back">Back to the document</button>
         <div class="pane-head"><h2 id="notes-title"><svg class="ico sec-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> <span class="sec-label">Notes</span></h2></div>
         <p id="notes-watcher" class="hint" hidden></p>
         <div class="annot-tools">
-          <button type="button" id="annot-doc">Comment on the document</button>
-          <button type="button" id="annot-pick" aria-pressed="false" hidden>Annotate an element</button>
+          <button type="button" id="annot-doc">Add a note on the document</button>
+          <button type="button" id="annot-pick" aria-pressed="false" hidden>Add a note on an element</button>
         </div>
-        <p class="annot-hint hint">Select text in the document to annotate it.</p>
+        <p class="annot-hint hint">Select text in the document to add a note on it.</p>
         <form id="annot-new" hidden>
           <p id="annot-target"></p>
-          <textarea id="annot-body" rows="3" maxlength="4000" aria-label="Annotation" placeholder="What should change here?"></textarea>
+          <textarea id="annot-body" rows="3" maxlength="4000" aria-label="Note" placeholder="What should change here?"></textarea>
           <div class="annot-actions">
             <span class="attach"><button type="button" class="btn-icon btn-ghost attach-open" aria-label="Attach images" data-tip="Attach images" data-icon="clip"></button><input type="file" id="annot-files" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden></span>
             <button type="button" id="annot-cancel" class="btn-secondary">Cancel</button>

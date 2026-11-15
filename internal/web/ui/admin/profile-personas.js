@@ -18,7 +18,7 @@ import { RowMenu, triggers, triggerOf, triggerText } from './starters.js';
  */
 
 /** The sections in the order the tab lists them (035-AC1). */
-const sections = /** @type {const} */ ([['personal', 'Yours'], ['instance', 'Shared with everyone'], ['builtin', 'Built-in']]);
+const sections = /** @type {const} */ ([['personal', 'Yours'], ['instance', 'Shared with everyone on this server'], ['builtin', 'Built-in']]);
 /** @type {Record<string, string>} */
 const emptyText = {
   personal: 'No personas of yours yet. Save one from a room, or duplicate one below.',
@@ -57,7 +57,7 @@ function actionsFor(t, say, reload, gone = reload) {
   // 035-AC5: sharing asks first; stopping does not, rooms keep their copies either way.
   out.push(t.section === 'personal'
     ? ['Share with everyone', () => window.grillConfirm('Share ' + t.title + ' with everyone?',
-      'Everyone on this server will see ' + t.title + ' and can add it to their rooms. Rooms keep their copies if you stop sharing.', 'Share')
+      'Every profile on this server will see ' + t.title + ' and can add it to their rooms. Rooms keep their copies if you stop sharing.', 'Share')
       .then((yes) => { if (yes) fetchJSON('POST', base + '/share').then(() => { say('Shared ' + t.title + ' with everyone.'); reload(); }).catch(fail); })]
     : ['Stop sharing', () => fetchJSON('POST', base + '/unshare').then(() => { say('Stopped sharing ' + t.title + '.'); reload(); }).catch(fail)]);
   out.push(['Delete…', () => window.grillConfirm('Delete ' + t.title + '?', 'Rooms keep the personas they added from it.', 'Delete')

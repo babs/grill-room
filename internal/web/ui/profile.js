@@ -195,7 +195,7 @@ async function loadSkills() {
     name.textContent = k.name;
     const meta = document.createElement('span');
     meta.className = 'hint';
-    meta.textContent = 'v' + k.version + ' · ' + (k.shared ? 'Everyone on this server' : 'Only my rooms');
+    meta.textContent = 'v' + k.version + ' · ' + (k.shared ? 'Shared with everyone on this server' : 'Only my rooms');
     const about = document.createElement('span');
     about.className = 'hint';
     about.textContent = k.description;
@@ -619,7 +619,7 @@ $('name-form').addEventListener('submit', async (e) => {
 // keeps the copy a room paints first with (room.js textSizeKey); its storage event reaches open rooms.
 let textSizes = {};
 function showTextSizes(sizes) {
-  textSizes = sizes || {};
+  textSizes = sizes && typeof sizes === 'object' && !Array.isArray(sizes) ? sizes : {};
   for (const r of $('text-size').querySelectorAll('input')) r.checked = (textSizes[r.name] || 'm') === r.value;
 }
 // One save at a time: each sends the whole map, so the last pick must be the last write.

@@ -100,7 +100,7 @@ test('leaving and rejoining the audio keeps every line under its speaker', async
     await joinAudio(carol);
     await expect.poll(sttTracks, { timeout: 15_000 }).toBe(2);
     // Carol's track goes away and its transceiver is free for the next one.
-    await audioItem(carol, 'Leave audio');
+    await audioItem(carol, 'Leave the call');
     await expect.poll(sttTracks, { timeout: 15_000 }).toBe(1);
 
     const alice = await join(aliceBrowser, await invite(request, room.id), 'Alice');
@@ -112,7 +112,7 @@ test('leaving and rejoining the audio keeps every line under its speaker', async
     }).toBe(true);
 
     // Alice leaves and rejoins: her microphone restarts the fixture on a new track.
-    await audioItem(alice, 'Leave audio');
+    await audioItem(alice, 'Leave the call');
     await expect.poll(sttTracks, { timeout: 15_000 }).toBe(1);
     await joinAudio(carol);
     await joinAudio(alice);

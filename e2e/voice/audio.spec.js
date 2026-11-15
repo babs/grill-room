@@ -41,8 +41,8 @@ test('two participants exchange audio', async ({ request }) => {
     await expect(alice.locator('#banner')).toHaveText('Your access to this room has ended.');
     await expect.poll(() => bob.evaluate((id) => voice.remoteParticipants.has(id), aliceID)).toBe(false);
 
-    await audioItem(bob, 'Leave audio');
-    await expect(bob.getByRole('button', { name: 'Join audio' })).toBeVisible();
+    await audioItem(bob, 'Leave the call');
+    await expect(bob.getByRole('button', { name: 'Join the call' })).toBeVisible();
     await request.delete(`/api/rooms/${room.id}`, { headers: admin });
   } finally {
     await aliceBrowser.close();

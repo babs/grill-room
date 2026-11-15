@@ -162,7 +162,7 @@ test('the voice hands over between the device and the server', async ({ request,
     await page.getByLabel('Your name').fill('Alice');
     await page.getByRole('button', { name: 'Join the room' }).click();
     await expect(page.locator('#me')).toHaveText('Alice');
-    await page.getByRole('button', { name: 'Join audio' }).click();
+    await page.getByRole('button', { name: 'Join the call' }).click();
     await expect(page.getByRole('button', { name: 'Audio options' })).toBeVisible();
     await expect.poll(listened, { timeout: 30_000 }).toBe(1);
 
@@ -240,7 +240,7 @@ test('the voice hands over between the device and the server', async ({ request,
     const tracksBefore = tracksHeard(room.id);
     const reloaded = Date.now();
     await page.reload();
-    await page.getByRole('button', { name: 'Join audio' }).click();
+    await page.getByRole('button', { name: 'Join the call' }).click();
     await expect(page.getByRole('button', { name: 'Audio options' })).toBeVisible();
     const delayed = 'Transcribed by the server: starting on this device in a few seconds';
     await expect(said).toHaveText(delayed);

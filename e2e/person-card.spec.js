@@ -32,7 +32,7 @@ test('the people details card', async ({ browser, request, baseURL }) => {
     const bobName = row(alice, 'Bob').locator('.name');
     await bobName.hover();
     const host = await lines(alice);
-    expect(host.slice(0, 7)).toEqual(['Bob', 'Roles: AI host', 'Can ask the AI', 'Audio: not in the audio', 'Not transcribed', host[5], host[6]]);
+    expect(host.slice(0, 7)).toEqual(['Bob', 'Roles: AI host', 'Can ask the AI', 'Audio: not in the call', 'Not transcribed', host[5], host[6]]);
     expect(host[5]).toMatch(/^Here since /);
     expect(host[6]).toMatch(/^Joined /);
     expect(host).toHaveLength(7);
@@ -48,7 +48,7 @@ test('the people details card', async ({ browser, request, baseURL }) => {
     await expect(alice.locator('#person-card')).toContainText('Audio: listening only');
     await expect(alice.locator('#person-card')).toBeVisible();
     expect(await beat({ tab: 'bob-second', gone: true })).toBe(204);
-    await expect(alice.locator('#person-card')).toContainText('Audio: not in the audio');
+    await expect(alice.locator('#person-card')).toContainText('Audio: not in the call');
     await expect(alice.locator('#person-card')).toBeVisible();
     await expect(row(alice, 'Bob').locator('.name')).toHaveAttribute('aria-describedby', 'person-card');
     await bobName.hover();
@@ -85,7 +85,7 @@ test('the people details card', async ({ browser, request, baseURL }) => {
     // A member renamed by the admin, on focus.
     await row(alice, 'Caroline').locator('.name').focus();
     const member = await lines(alice);
-    expect(member.slice(0, 5)).toEqual(['Caroline', 'Earlier name: Carol', 'Roles: member', 'Audio: not in the audio', 'Not transcribed']);
+    expect(member.slice(0, 5)).toEqual(['Caroline', 'Earlier name: Carol', 'Roles: member', 'Audio: not in the call', 'Not transcribed']);
     await alice.keyboard.press('Escape');
 
     // The room admin herself, then as a standby host once her app connects.

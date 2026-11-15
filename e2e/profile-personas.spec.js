@@ -46,7 +46,7 @@ test('persona library: the profile Personas tab', async ({ browser, request }, t
 
   await alice.goto('/profile#personas');
   await expect(alice.locator('#tab-personas')).toHaveAttribute('aria-current', 'page');
-  await expect(alice.locator('#panel-personas h3')).toHaveText(['Yours', 'Shared with everyone', 'Built-in']);
+  await expect(alice.locator('#panel-personas h3')).toHaveText(['Yours', 'Shared with everyone on this server', 'Built-in']);
   await expect(alice.locator('#count-personas')).toHaveText('1');
   const mine = alice.locator('#personas-personal li', { hasText: 'Grill' });
   await expect(mine).toHaveCount(1);
@@ -97,10 +97,10 @@ test('persona library: the profile Personas tab', async ({ browser, request }, t
   await expect(mine).toContainText('v2 · by ' + me);
   await expect(mine).toContainText('Challenges the plan.');
 
-  // 035-AC5: sharing asks, in these words.
+  // 035-AC5, 038-AC15: sharing asks, in these words.
   await rowPick(alice, 'personal', 'Grill', me, 'Share with everyone');
   await expect(alice.locator('dialog.confirm #confirm-text'))
-    .toHaveText('Everyone on this server will see Grill and can add it to their rooms. Rooms keep their copies if you stop sharing.');
+    .toHaveText('Every profile on this server will see Grill and can add it to their rooms. Rooms keep their copies if you stop sharing.');
   await confirmSheet(alice, 'Share');
   const shared = alice.locator('#personas-instance li', { hasText: 'Grill' }).filter({ hasText: 'by ' + me });
   await expect(shared).toHaveCount(1);

@@ -41,7 +41,7 @@ test('add a room from the AI host app page', async ({ browser, request, baseURL 
     await openDaemonPage(page, await daemon.link);
     await expect(page.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
     const approval = await approve(page, alice.context());
-    await expect(approval.locator('#pairing-text')).toContainText('Daemon paired');
+    await expect(approval.locator('#pairing-text')).toContainText('AI host app paired');
     await expect(connectedRow(page, first.id)).toBeAttached({ timeout: 30_000 });
     await expect(approval.locator('#pairing')).toBeHidden();
 
@@ -110,7 +110,7 @@ test('phone host sheet: no download, a message to send', async ({ browser, reque
       const sheet = page.locator('#host-agent');
       await expect(sheet.getByText('Running the AI needs a computer with Docker.'), name).toBeVisible({ visible: mobile });
       await expect(sheet.locator('#host-download'), name).toBeVisible({ visible: !mobile });
-      await expect(sheet.getByRole('link', { name: 'its page' }), name).toBeVisible({ visible: !mobile });
+      await expect(sheet.getByRole('link', { name: 'the AI host app', exact: true }), name).toBeVisible({ visible: !mobile });
       if (mobile) {
         await sheet.getByRole('button', { name: 'Ask someone to run it' }).click();
         await expect(page.locator('.toast', { hasText: 'Message copied.' })).toBeVisible();

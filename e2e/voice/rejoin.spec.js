@@ -16,7 +16,7 @@ test('transcription resumes after LiveKit closes the empty room', async ({ reque
     await expect(label).toHaveText(/^1 voice is being written down/, { timeout: 60_000 });
     await expect(lines.first()).toBeVisible({ timeout: 60_000 });
 
-    await audioItem(alice, 'Leave audio');
+    await audioItem(alice, 'Leave the call');
     await expect(label).toHaveText('', { timeout: 60_000 });
     // Past LiveKit's departure timeout (20 s by default): the room is closed. LiveKit runs in its
     // own container with no clock to move: this waits for it, it asserts nothing.

@@ -1571,7 +1571,7 @@ const textScales = { s: 0.875, m: 1, l: 1.125, xl: 1.25 };
 const textSizeKey = 'grill-room-text-size';
 let textSizes = {};
 function applyTextSizes(sizes) {
-  textSizes = sizes && typeof sizes === 'object' ? sizes : {};
+  textSizes = sizes && typeof sizes === 'object' && !Array.isArray(sizes) ? sizes : {};
   for (const area of ['chat', 'transcript']) document.body.style.setProperty(`--${area}-scale`, String(textScales[textSizes[area]] || 1));
   for (const r of $('text-size').querySelectorAll('input')) r.checked = (textSizes[r.name] || 'm') === r.value;
   fitBody();
@@ -2105,7 +2105,7 @@ async function loadAnnotations() {
   if (!d) return;
   const res = await netFetch(docURL(d.id, '/annotations'));
   if (res.status === 401) return;
-  if (!res.ok) throw new Error('annotations: HTTP ' + res.status);
+  if (!res.ok) throw new Error('notes: HTTP ' + res.status);
   const list = await res.json();
   // The viewer moved on while this was in flight.
   if (!openDoc || openDoc.id !== d.id) return;
@@ -4127,7 +4127,7 @@ $('personas-close').addEventListener('click', () => $('personas').close());
 // The persona library picker (035-AC14): Yours, Shared with everyone, Built-in, and what the chosen one does.
 const pickSections = [['Yours', (t) => t.section === 'personal' && t.mine, () => (hasProfile ? 'No personas of yours yet. Save one from a persona\'s ⋯ in a room.'
   : 'Saving personas of your own needs a profile.')],
-  ['Shared with everyone', (t) => t.section === 'instance', () => 'Nobody has shared a persona yet.'], ['Built-in', (t) => t.section === 'builtin', () => '']];
+  ['Shared with everyone on this server', (t) => t.section === 'instance', () => 'Nobody has shared a persona yet.'], ['Built-in', (t) => t.section === 'builtin', () => '']];
 let pickOpener = null;
 
 // renderRoomFull marks the sheet's Add a persona and the picker's Add at the room's limit (035-AC15):
@@ -4323,7 +4323,7 @@ function audioState(id) {
   const pr = presence.get(id);
   const vp = voiceParticipant(id);
   const audio = !!(pr && pr.audio) || !!vp;
-  if (!audio) return { key: 'none', icon: '', text: 'Not in the audio' };
+  if (!audio) return { key: 'none', icon: '', text: 'Not in the call' };
   const mic = vp ? vp.isMicrophoneEnabled : !!(pr && pr.mic);
   const muted = !mic && (vp ? !!vp.getTrackPublication(LivekitClient.Track.Source.Microphone) : !!(pr && pr.muted));
   if (mic) return { key: 'live', icon: 'mic', text: 'Mic live' };
@@ -4363,10 +4363,10 @@ function personTags(p, id, isHere) {
   // Their own browser writes their voice down instead of the server (010-AC12).
   if (presence.get(id)?.device_stt) t.transcribed = ['transcribed-device', 'Their device transcribes this voice', 'Their device transcribes this voice'];
   else if (transcribed.has(id)) t.transcribed = ['transcribed', 'The transcription hears this voice', 'The transcription hears this voice'];
-  const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the audio' };
+  const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the call' };
   const deaf = isHere && !!presence.get(id)?.deaf;
   // One icon per square: deafened shows its own alone, its audio state in the tooltip.
-  t.audio = [deaf ? 'deafened' : st.icon, '', st.text + (deaf ? ', deafened: hears nobody' : ''), st.key, deaf];
+  t.audio = [deaf ? 'deafened' : st.icon, '', st.text + (deaf ? ', stopped hearing the call' : ''), st.key, deaf];
   return t;
 }
 
@@ -4527,8 +4527,8 @@ function personRoles(p, id) {
 }
 
 function cardAudio(id) {
-  if (id !== myID && !presence.get(id)?.here) return 'not in the audio';
-  if (presence.get(id)?.deaf) return 'room muted';
+  if (id !== myID && !presence.get(id)?.here) return 'not in the call';
+  if (presence.get(id)?.deaf) return 'stopped hearing the call';
   return audioState(id).text.toLowerCase();
 }
 
@@ -4749,7 +4749,7 @@ function askHand(up) {
 $('hand-raise').addEventListener('click', () => askHand($('hand-raise').getAttribute('aria-pressed') !== 'true'));
 
 // tagSpan is one badge square, or an empty one keeping its column. The audio one is always there
-// with its state, for the people that are not in the audio too.
+// with its state, for the people that are not in the call too.
 // el, when given, is the column's square from the last render, updated in place: an open tip stays
 // on it.
 function tagSpan(col, t, el = document.createElement('span')) {
@@ -4938,8 +4938,8 @@ function voiceButtons() {
   $('voice-screen').setAttribute('aria-label', screen ? 'Stop sharing my screen' : 'Share my screen');
   if (!on && $('voice-menu').matches(':popover-open')) $('voice-menu').hidePopover();
   iconToggle('voice-deaf', on && deaf, on && deaf ? 'volume-off' : 'volume', on && deaf
-    ? "Room muted: you don't hear the others. Press to hear them again."
-    : 'Mute the room: stop hearing the others.');
+    ? "You stopped hearing the call. Press to hear the others again."
+    : 'Stop hearing the call: the others go silent for you.');
   sttButton();
   const muted = on && !voice.localParticipant.isMicrophoneEnabled;
   // stt/device.js taps the live mic only: muted, or deafened without keeping it, it hears nothing (010-AC9).
@@ -5326,7 +5326,7 @@ async function joinVoice() {
       if (voice !== room) return;
       cleanupVoice(room);
       // Leaving on purpose is CLIENT_INITIATED; anything else, a kick included, is worth saying.
-      if (reason !== LK.DisconnectReason.CLIENT_INITIATED) voiceError('You were disconnected from the audio.');
+      if (reason !== LK.DisconnectReason.CLIENT_INITIATED) voiceError('You were disconnected from the call.');
     });
     voice = room;
     await room.connect(url, token);
@@ -5368,7 +5368,7 @@ async function joinVoice() {
     // A Leave pressed while connecting rejects connect(): nothing to report then.
     if (room && voice !== room) return;
     leaveVoice();
-    voiceError('Could not join the audio: ' + err.message);
+    voiceError('Could not join the call: ' + err.message);
   } finally {
     $('voice-join').disabled = false;
   }
@@ -5631,7 +5631,7 @@ window.grillDiag = {
     return { identity: p.identity, source: pub.source, subscribed: pub.isSubscribed, width };
   }))),
   voice: async () => {
-    if (!voice) return { state: 'not in the audio', stats: null };
+    if (!voice) return { state: 'not in the call', stats: null };
     const lp = voice.localParticipant;
     // A track's own report holds its transport and the candidate pair in use.
     const track = lp.getTrackPublication(LivekitClient.Track.Source.Microphone)?.track
@@ -6283,8 +6283,8 @@ async function showPairing(id) {
     return;
   }
   const p = await res.json();
-  text.textContent = 'An agent daemon asks to run the agent for you in this room, with your Claude subscription. ' +
-    'Approve only if your daemon page shows the code ' + p.code + '.';
+  text.textContent = 'An AI host app asks to run the AI for you in this room, with your Claude subscription. ' +
+    'Approve only if your AI host app shows the code ' + p.code + '.';
   const answer = async (approve) => {
     $('pairing-actions').hidden = true;
     // Before the request: the approved app may announce itself before the answer is read.
@@ -6296,7 +6296,7 @@ async function showPairing(id) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) text.textContent = data.error || 'Pairing failed: HTTP ' + r.status;
-    else text.textContent = approve ? 'Daemon paired. Its page shows it connected within a few seconds.' : 'Pairing denied.';
+    else text.textContent = approve ? 'AI host app paired. It shows the room connected within a few seconds.' : 'Pairing denied.';
     pairingApproved = approve && r.ok;
     hidePairingOnceConnected();
   };
@@ -6335,7 +6335,7 @@ async function showHostAgent() {
     const target = ($('host-os').value === 'darwin' ? 'darwin' : 'linux') + '-' + $('host-arch').value;
     const link = $('host-download');
     link.href = '/download/grill-room-daemon-' + target;
-    link.textContent = 'Download grill-room-daemon ' + rel.version + ' (' + target + ')';
+    link.textContent = 'Download the AI host app ' + rel.version + ' (' + target + ')';
     $('host-sha').textContent = 'sha256 ' + (rel.sha256[target] || '');
     $('host-wsl').hidden = $('host-os').value !== 'wsl';
     const file = '~/Downloads/grill-room-daemon-' + target;

@@ -131,3 +131,34 @@ test('a room pick survives the next pick on an open /profile', async ({ browser,
   await expect.poll(() => prof.evaluate(() => fetch('/api/profile').then((r) => r.json()).then((r) => r.profile.text_sizes)))
     .toEqual({ chat: 'l', transcript: 'xl' });
 });
+
+// 038-AC14: a stored copy that is not a map, here an array from another tab, is ignored: a pick in
+// the room and one on /profile send chat and transcript keys only.
+test('a text size copy that is not a map is ignored', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await playEvents(alice, room.id, lines);
+  const prof = await alice.context().newPage();
+  await prof.goto('/profile#account');
+  const sent = [];
+  for (const page of [alice, prof]) {
+    page.on('request', (r) => { if (r.url().endsWith('/api/profile/text-size')) sent.push(r.postDataJSON()); });
+  }
+  const tab = await alice.context().newPage();
+  await tab.goto('/profile');
+  // Each copy lands before the pick: a map both pages show, then the array, which leaves them on M.
+  const seed = async () => {
+    await tab.evaluate(() => localStorage.setItem('grill-room-text-size', '{"chat":"s"}'));
+    await expect.poll(() => alice.evaluate(() => document.body.style.getPropertyValue('--chat-scale'))).toBe('0.875');
+    await expect(prof.locator('#text-size').getByRole('group', { name: 'Chat' }).getByLabel('S', { exact: true })).toBeChecked();
+    await tab.evaluate(() => localStorage.setItem('grill-room-text-size', '["xl"]'));
+    await expect.poll(() => alice.evaluate(() => document.body.style.getPropertyValue('--chat-scale'))).toBe('1');
+    await expect(prof.locator('#text-size').getByRole('group', { name: 'Chat' }).getByLabel('M', { exact: true })).toBeChecked();
+  };
+  await seed();
+  await pick(alice, 'Chat', 'L');
+  await expect.poll(() => sent.length).toBe(1);
+  await seed();
+  await prof.locator('#text-size').getByRole('group', { name: 'Transcription' }).getByLabel('XL', { exact: true }).check();
+  await expect.poll(() => sent.length).toBe(2);
+  for (const body of sent) expect(Object.keys(body).every((k) => k === 'chat' || k === 'transcript'), JSON.stringify(body)).toBe(true);
+});

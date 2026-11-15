@@ -21,7 +21,7 @@ import { size, ago, icon } from './room-panel.js';
  */
 
 /** The picker's groups, in the words of docs/design.md §8 (006-AC8). */
-export const libraries = /** @type {const} */ ([['builtin', 'Built-in'], ['personal', 'Yours'], ['instance', 'Shared with everyone']]);
+export const libraries = /** @type {const} */ ([['builtin', 'Built-in'], ['personal', 'Yours'], ['instance', 'Shared with everyone on this server']]);
 
 /**
  * RowMenu is a row's ⋯ (docs/design.md §5, 008-AC13): a popover under its button, its first item
@@ -407,12 +407,12 @@ export function Editor({ view, api, displayName = '', back, mode = 'create', pat
       <input type="checkbox" checked=${docs.includes(d.name)} onChange=${(/** @type {Event} */ e) => setDocs(toggle(docs, d.name, /** @type {HTMLInputElement} */ (e.currentTarget).checked))}/> ${d.name}</label>`)}</fieldset>`}
     ${m.skills.length > 0 && html`<fieldset id="starter-skills"><legend>Skills</legend>${m.skills.map((k) => html`<label class="check" key=${k.name}>
       <input type="checkbox" checked=${skills.includes(k.name)} onChange=${(/** @type {Event} */ e) => setSkills(toggle(skills, k.name, /** @type {HTMLInputElement} */ (e.currentTarget).checked))}/> ${k.name} v${k.version}</label>`)}
-      ${creating && view.library !== 'builtin' && html`<span class="hint">They wait for the AI host's approval when it approves everything.</span>`}</fieldset>`}
+      ${creating && view.library !== 'builtin' && html`<span class="hint">They wait for the AI host when it holds changes for its approval.</span>`}</fieldset>`}
     ${(m.plugins || []).length > 0 && html`<fieldset id="starter-plugins"><legend>Plugins</legend>
       ${mode === 'save' && html`<p class="hint">Each one you check goes in at the version the room runs, with the personas that have it on.</p>`}
       ${(m.plugins || []).map((p) => html`<label class="check" key=${p.name}>
       <input type="checkbox" checked=${plugins.includes(p.name)} onChange=${(/** @type {Event} */ e) => setPlugins(toggle(plugins, p.name, /** @type {HTMLInputElement} */ (e.currentTarget).checked))}/> ${pluginLabel(p)}${p.private ? ' (private repo)' : ''}</label>`)}
-      ${creating && html`<span class="hint">The AI host checks each one first. They wait for its approval when it approves everything.</span>`}</fieldset>`}
+      ${creating && html`<span class="hint">The AI host checks each one first. They wait for it when it holds changes for its approval.</span>`}</fieldset>`}
     <p class="hint" id="starter-missing">${missing.length ? 'Fill in ' + missing.join(', ') + ' to create the room.' : ''}</p>
     ${undeclared.length > 0 && html`<p class="said error" id="starter-undeclared" role="alert">${undeclared.map((k) => '{{' + k + '}}').join(', ')} ${undeclared.length > 1 ? 'are' : 'is'} no field: add it to the fields, or remove it.</p>`}
     ${unlabelled && html`<p class="said error" id="starter-unlabelled" role="alert">Every field needs a label: name it, or remove it.</p>`}

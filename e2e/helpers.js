@@ -204,7 +204,7 @@ export async function annotateSelection(page, needle, comment) {
   await select(frame, needle);
   await page.frameLocator('#doc-frame iframe').locator('.gr-annot-bubble').click();
   await expect(page.locator('#annot-target')).toHaveText(`"${needle}"`);
-  await page.getByRole('textbox', { name: 'Annotation', exact: true }).fill(comment);
+  await page.getByRole('textbox', { name: 'Note', exact: true }).fill(comment);
   await page.locator('#annot-new').getByRole('button', { name: 'Save' }).click();
   await expect(page.locator('#annot-new')).toBeHidden();
 }
@@ -489,8 +489,8 @@ export async function addSecretary(page, fields = {}) {
 
 // commentOnDocument saves a whole-document note on the open document (005-AC37 calls them notes).
 export async function commentOnDocument(page, text) {
-  await page.getByRole('button', { name: 'Comment on the document' }).click();
-  await page.getByRole('textbox', { name: 'Annotation', exact: true }).fill(text);
+  await page.getByRole('button', { name: 'Add a note on the document' }).click();
+  await page.getByRole('textbox', { name: 'Note', exact: true }).fill(text);
   await page.locator('#annot-new').getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.locator('#annot-new')).toBeHidden();
 }

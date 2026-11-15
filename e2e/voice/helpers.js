@@ -57,7 +57,7 @@ export async function join(browser, inv, name, init) {
 }
 
 export async function joinAudio(page) {
-  await page.getByRole('button', { name: 'Join audio' }).click();
+  await page.getByRole('button', { name: 'Join the call' }).click();
   await expect(page.getByRole('button', { name: 'Audio options' })).toBeVisible();
 }
 
@@ -87,8 +87,8 @@ export async function dropProfiles(request, pages) {
   expect(left, 'profiles left behind').toEqual([]);
 }
 
-// audioItem presses a button of the audio bar (005-AC49): Mute my mic, Mute the room, Transcribe my
-// voice, Leave audio.
+// audioItem presses a button of the audio bar (005-AC49): Mute my mic, Stop hearing the call, Transcribe my
+// voice, Leave the call.
 export async function audioItem(page, name) {
   await page.locator('#voice').getByRole('button', { name, exact: true }).click();
 }

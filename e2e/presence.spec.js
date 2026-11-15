@@ -96,7 +96,7 @@ test('participant list shows audio states and transcription', async ({ browser, 
   await expect(alice.locator('#participants [title], #participants-away [title]')).toHaveCount(0);
   await expect(state('Bob')).toHaveAttribute('data-state', 'muted');
   await expect(state('Carol')).toHaveAttribute('data-state', 'listening');
-  await expect(state('Carol')).toHaveAttribute('data-tip', 'Listening only, deafened: hears nobody');
+  await expect(state('Carol')).toHaveAttribute('data-tip', 'Listening only, stopped hearing the call');
   await expect(state('Carol')).toHaveAttribute('data-icon', 'deafened');
   await expect(state('Dan')).toHaveAttribute('data-state', 'none');
   for (const [name, n] of [['Alice', 1], ['Bob', 1], ['Carol', 0], ['Dan', 0]]) {

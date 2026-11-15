@@ -27,7 +27,7 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     const [approval] = await Promise.all([alice.context().waitForEvent('page'), admin.getByRole('link', { name: 'approve in the room' }).click()]);
     await approval.getByRole('button', { name: 'Approve' }).click();
     expect(shown).toBe(code);
-    await expect(approval.locator('#pairing-text')).toContainText('Daemon paired');
+    await expect(approval.locator('#pairing-text')).toContainText('AI host app paired');
 
     await expect(connectedRow(admin, room.id)).toBeAttached({ timeout: 30_000 });
     // 003-AC12: the Claude account is the supervisor's CLAUDE_CONFIG_DIR, read only, with its status.

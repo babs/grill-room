@@ -96,7 +96,7 @@ async function person(browser, request, room, name, { noScreen = false, noLiveKi
 }
 
 async function joinAudio(page) {
-  await page.getByRole('button', { name: 'Join audio' }).click();
+  await page.getByRole('button', { name: 'Join the call' }).click();
   await expect(page.getByRole('button', { name: 'Audio options' })).toBeVisible();
 }
 
@@ -245,13 +245,13 @@ test('camera tile and the stage', async ({ browser, request }) => {
   await expect(tile(b, '#stage-tiles', 'Alice')).toBeVisible();
   await expect.poll(async () => (await remoteVideo(b))[0].width).toBeGreaterThan(0);
   // Leaving the audio closes the stage (030-AC7).
-  await a.getByRole('button', { name: 'Leave audio' }).click();
+  await a.getByRole('button', { name: 'Leave the call' }).click();
   await expect.poll(() => a.evaluate(() => window.grillDiag.localVideo())).toEqual(['ended']);
   await expect(a.locator('#stage')).toBeHidden();
-  // The Leave button goes with the audio: its focus moves to Join audio.
+  // The Leave button goes with the audio: its focus moves to Join the call.
   await expect(a.locator('#voice-join')).toBeFocused();
   // Leaving without the Leave button (a removal does) while on the Video button: the focus lands on
-  // Join audio, the audio options being gone too (030-AC7).
+  // Join the call, the audio options being gone too (030-AC7).
   await b.locator('#stage-close').click();
   await joinAudio(a);
   await press(a, 'Turn my camera on', 'Turn my camera off');
@@ -443,7 +443,7 @@ test('leaving releases the camera and the screen', async ({ browser, request }) 
     await videoButton(a).click();
     await expect(a.locator('#stage .tile')).toHaveCount(2);
     expect(await a.evaluate(() => window.grillDiag.localVideo())).toEqual(['live', 'live']);
-    if (leave === 'button') await a.getByRole('button', { name: 'Leave audio' }).click();
+    if (leave === 'button') await a.getByRole('button', { name: 'Leave the call' }).click();
     else await a.evaluate(() => voice.disconnect());
     await expect.poll(() => a.evaluate(() => window.grillDiag.localVideo())).toEqual(['ended', 'ended']);
     await expect(a.locator('#stage')).toBeHidden();
@@ -451,7 +451,7 @@ test('leaving releases the camera and the screen', async ({ browser, request }) 
     await expect(videoButton(a)).toBeHidden();
     await expect(a.locator('#voice-cam')).toBeHidden();
     await expect(a.locator('#voice-screen')).toBeHidden();
-    await expect(a.getByRole('button', { name: 'Join audio' })).toBeVisible();
+    await expect(a.getByRole('button', { name: 'Join the call' })).toBeVisible();
   }
 
   // A leave while the camera or the screen picker has not answered yet: what they hand over after
@@ -460,7 +460,7 @@ test('leaving releases the camera and the screen', async ({ browser, request }) 
     await joinAudio(a);
     await a.evaluate(() => { window.gotVideo = []; window.mediaDelay = 1500; });
     await a.getByRole('button', { name, exact: true }).click();
-    await a.getByRole('button', { name: 'Leave audio' }).click();
+    await a.getByRole('button', { name: 'Leave the call' }).click();
     await holds(a, () => gotVideo(a), ['ended']);
     await a.evaluate(() => { window.mediaDelay = 0; });
   }
@@ -699,7 +699,7 @@ test('device switch on a phone, and its failure', async ({ browser, request }) =
   await expect(a.locator('#voice-error')).toBeHidden();
   await expect(devSelect(a, 'Camera')).toHaveValue(cams[0]);
   expect(await a.evaluate(() => localStorage.getItem('grill-room-device:videoinput'))).toBe(cams[0]);
-  // Left from the audio options menu, the phone's Leave: its focus moves to Join audio, not the page.
+  // Left from the audio options menu, the phone's Leave: its focus moves to Join the call, not the page.
   await devices(a);
   await a.locator('#voice-leave-menu').click();
   await expect(a.locator('#voice-join')).toBeFocused();
@@ -851,7 +851,7 @@ test('camera picked before it is on', async ({ browser, request }) => {
   await holds(a, async () => (await gotVideo(a)).slice(tried), ['live']);
 
   // Picked while the camera is starting on the device before.
-  await a.getByRole('button', { name: 'Leave audio' }).click();
+  await a.getByRole('button', { name: 'Leave the call' }).click();
   await joinAudio(a);
   await a.evaluate(() => { window.mediaDelay = 1500; });
   await a.getByRole('button', { name: 'Turn my camera on', exact: true }).click();
@@ -1047,7 +1047,7 @@ test('sharing strip', async ({ browser, request }) => {
   await press(a, 'Share my screen', 'Stop sharing my screen');
   await expect(tile(b, '#stage-main', "Alice's screen")).toBeVisible();
   await holds(b, () => strip.isVisible(), false);
-  // Out of the audio with the focus on Watch: it goes to Join audio, not the message box.
+  // Out of the audio with the focus on Watch: it goes to Join the call, not the message box.
   await b.locator('#stage-close').click();
   await press(a, 'Stop sharing my screen', 'Share my screen');
   await press(a, 'Share my screen', 'Stop sharing my screen');
@@ -1077,19 +1077,19 @@ test('muting the room mutes a screen', async ({ browser, request }) => {
   await expect.poll(() => screenAudio(b)).toEqual([true]);
   // A's mic and A's screen each play in an element of their own.
   await expect.poll(() => playing(b)).toBe(2);
-  await b.getByRole('button', { name: 'Mute the room' }).click();
+  await b.getByRole('button', { name: 'Stop hearing the call' }).click();
   await expect(b.locator('#voice-deaf')).toHaveAttribute('aria-pressed', 'true');
   await expect.poll(() => screenAudio(b)).toEqual([false]);
   await expect.poll(() => playing(b)).toBe(0);
   await flowing(b, 'video');
-  await b.getByRole('button', { name: 'Mute the room' }).click();
+  await b.getByRole('button', { name: 'Stop hearing the call' }).click();
   await expect(b.locator('#voice-deaf')).toHaveAttribute('aria-pressed', 'false');
   await expect.poll(() => screenAudio(b)).toEqual([true]);
   await expect.poll(() => playing(b)).toBe(2);
   // A second round leaves one element per track received, no empty one from the first.
-  await b.getByRole('button', { name: 'Mute the room' }).click();
+  await b.getByRole('button', { name: 'Stop hearing the call' }).click();
   await expect.poll(() => playing(b)).toBe(0);
-  await b.getByRole('button', { name: 'Mute the room' }).click();
+  await b.getByRole('button', { name: 'Stop hearing the call' }).click();
   await expect.poll(() => playing(b)).toBe(2);
   const received = await b.evaluate(() => [...voice.remoteParticipants.values()].flatMap((p) => [...p.audioTrackPublications.values()]).filter((p) => p.isSubscribed).length);
   expect(received).toBe(2);
@@ -1250,7 +1250,7 @@ const videoPlays = (w, box) => w.locator(`${box} .tile video`).first().evaluate(
 // 031-AC12, 031-AC13, 031-AC14: the stage pops out into a Document PiP window, B's screen large over
 // B's camera, the room's stylesheets with it; its controls act on the call; the page says where the
 // video went, keeps its count and its one LiveKit connection; closing the window or Bring it back
-// returns the stage, open or closed as it was; Leave audio there ends every local track.
+// returns the stage, open or closed as it was; Leave the call there ends every local track.
 test('pop-out window', async ({ browser, request }) => {
   const room = await newRoom(request);
   const a = await person(browser, request, room, 'Alice');
@@ -1420,7 +1420,7 @@ test('pop-out window', async ({ browser, request }) => {
   // Measured again without restarting a stream.
   expect(await a.locator('#stage .tile video').evaluateAll((vs) => vs.map((v) => !!v.srcObject?.kept))).toEqual([true, true, true]);
 
-  // Leave audio from the window ends the call as the page's button does (030-AC5).
+  // Leave the call from the window ends the call as the page's button does (030-AC5).
   w = await popOut(a);
   await w.locator('#voice-leave').click();
   await expect.poll(() => w.isClosed()).toBe(true);

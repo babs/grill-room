@@ -26,12 +26,12 @@ detect_target() {
 	case $(uname -s) in
 		Linux) os=linux ;;
 		Darwin) os=darwin ;;
-		*) die "unsupported OS $(uname -s): the daemon runs on Linux, macOS, and Windows inside WSL" ;;
+		*) die "unsupported OS $(uname -s): the AI host app runs on Linux, macOS, and Windows inside WSL" ;;
 	esac
 	case $(uname -m) in
 		x86_64 | amd64) arch=amd64 ;;
 		aarch64 | arm64) arch=arm64 ;;
-		*) die "unsupported CPU $(uname -m): the daemon is built for amd64 and arm64" ;;
+		*) die "unsupported CPU $(uname -m): the AI host app is built for amd64 and arm64" ;;
 	esac
 	# A shell under Rosetta reports x86_64 on Apple silicon; the native build is faster. Intel Macs
 	# have no such sysctl, hence the silenced error.

@@ -12,7 +12,7 @@ You need the deployment up (`make k8s-apply`), a laptop on the LAN, and a phone 
    ```
    Run the second command twice, one invite per person. Each answer holds the invite link in `url`.
 2. Turn Wi-Fi off on the phone, check it shows 4G or 5G, and open one invite link in its browser. The padlock must show a valid certificate.
-3. Open the other link on the laptop. Join the room on both sides, then press Join audio on both.
+3. Open the other link on the laptop. Join the room on both sides, then press Join the call on both.
 4. Speak on the phone and listen on the laptop, then the other way round. Each side must hear the other within a second or two, and the speaking dot must light next to the speaker's name.
 5. Say one sentence on the phone and wait. With parakeet (spec 007), a voice line with the phone's display name must appear on both screens within 5 s. Then speak at the same time on the phone and the laptop: both get their lines.
 6. The phone can only reach LiveKit through `turns:grill-room-turn.<domain>:443`, so steps 4 and 5 passing prove that path. Firefox on the phone is worth a second try, because spike S4 tested Chrome only.
@@ -38,7 +38,7 @@ KUBECONFIG=<lab kubeconfig> kubectl -n grill-room set env deploy/stt APP_ENGINE=
 On a desktop Chrome with 4 cores or more, after a deploy. It takes about two minutes, plus the first download of about 430 MB.
 
 1. Check the model volume: the `models` init container's log lists seven files, downloaded or skipped, and `curl -sI https://grill-room.<domain>/models/<revision>/vocab.txt` answers 200 with `Cache-Control: public, max-age=31536000, immutable` and `Cross-Origin-Resource-Policy: same-origin`. The revision is in the `device_stt_offered` log line of the room server.
-2. Join a room, join the audio, open the audio menu and turn on "Transcribe on this device". The menu shows the download size, the progress, then "Testing this device…", then that this device can write your voice down.
+2. Join a room, join the call, open the audio menu and turn on "Transcribe on this device". The menu shows the download size, the progress, then "Testing this device…", then that this device can write your voice down.
 3. Say a sentence. It shows as a voice line whose "(voice)" mark reads "Transcribed on <your name>'s device"; People shows the device badge on you, and your details card says "Transcribed on their device".
 4. Turn the option off and say another sentence. Within about 5 s the next line reads "Transcribed by the server".
 5. Delete the room as above.
@@ -47,7 +47,7 @@ On a desktop Chrome with 4 cores or more, after a deploy. It takes about two min
 
 Needs the `tts` pod (`kubectl -n grill-room get deploy tts`) and an AI host for the room. Use headphones on one side so its speakers do not feed its mic.
 
-1. Create a room from the Retro starter: Facilitator, Secretary and Timekeeper speak in the call. Join the audio on the phone and the laptop.
+1. Create a room from the Retro starter: Facilitator, Secretary and Timekeeper speak in the call. Join the call on the phone and the laptop.
 2. Each speaking persona's pill shows a speaker button; a click on a pill opens its card, which names its voice.
 3. Ask Facilitator, then Secretary, with the ▶ on their pills. When Facilitator's turn ends its pill shows "speaking" and you hear a short line in its voice; if Secretary's turn ends meanwhile, its pill shows "waiting to speak" until Facilitator is done, then it speaks in another voice.
 4. While Facilitator speaks, say a sentence on the phone. It stops at once, its pill says "waiting to speak", and once the room has been quiet a second it says the cut sentence again from its start.

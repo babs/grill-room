@@ -356,7 +356,7 @@ function RoomAdmins({ base }) {
 
 /** @type {[string, string][]} */
 const importKinds = [['participants', 'Participants'], ['messages', 'Lines'], ['message_versions', 'Earlier versions'],
-  ['documents', 'Documents'], ['revisions', 'Revisions'], ['uploads', 'Uploads'], ['annotations', 'Annotations'],
+  ['documents', 'Documents'], ['revisions', 'Revisions'], ['uploads', 'Uploads'], ['annotations', 'Notes'],
   ['annotation_messages', 'Thread messages'], ['attachments', 'Attachments'], ['mentions', 'Mentions'], ['personas', 'Personas'], ['skills', 'Skills'],
   ['plugins', 'Plugins'], ['sessions', 'Agent sessions']];
 
@@ -449,7 +449,7 @@ function Profiles() {
   };
   /** @param {Profile} p */
   const unbind = (p) => {
-    window.grillConfirm(`Unbind ${p.name || p.uuid} from the provider?`, 'This signs the person out everywhere: browsers, API tokens, room seats, paired daemons. They come back as a guest through their recovery link or an invite. Delete the profile to keep them out.', 'Unbind')
+    window.grillConfirm(`Unbind ${p.name || p.uuid} from the provider?`, 'This signs the person out everywhere: browsers, API tokens, room seats, paired AI host apps. They come back as a guest through their recovery link or an invite. Delete the profile to keep them out.', 'Unbind')
       .then((yes) => { if (yes) api('DELETE', `/api/admin/profiles/${p.id}/oidc`).then(() => { toast('Profile unbound'); load(); }).catch(show); });
   };
   // Restricted mode adds the sign-in column, and Unbind on a bound profile (021-AC10).
@@ -622,7 +622,7 @@ function MergeSheet({ profiles, from, done }) {
         <div><dt>Room admin, moved</dt><dd>${listed(p.room_admin.merge)}</dd></div>
         <div><dt>API tokens, revoked</dt><dd id="merge-tokens">${p.api_tokens}</dd></div>
       </dl>
-      ${unbound && html`<p id="merge-bound" class="warn">The result is an organisation account: devices signed into ${unbound.name || 'the other profile'} are signed out, its paired daemons removed and their running turn failed.</p>`}
+      ${unbound && html`<p id="merge-bound" class="warn">The result is an organisation account: devices signed into ${unbound.name || 'the other profile'} are signed out, its paired AI host apps removed and their running turn failed.</p>`}
       ${p.over_limits.length > 0 && html`<ul id="merge-limits" class="warn">${p.over_limits.map((o) => html`<li>
         ${limitKinds[o.kind] || o.kind}: ${o.after} after the merge, over the limit of ${o.limit}. The profile keeps them all and adds no more until under it.</li>`)}</ul>`}
     </section>`}

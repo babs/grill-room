@@ -50,7 +50,7 @@ The `access` object never holds a Claude token, an account name or a config dir 
 | `proxies` | by room link: `addr`, the `<gateway>:<port>` the sandbox relay dials for the room's account proxy (`host-gateway` under Docker Desktop), and `bearer`, the dummy token that proxy knows this worker by; with claude.ai connectors on for the room, `connectors` (each `id`, `name`, `key`, its MCP server name in the turn, `actions`, and `disallowed`, the tools a turn may not call) and `connector_bearer`, the room's own token for the proxy's `/v1/mcp/<id>` route (version 6); or `error`, why the room cannot reach Claude now, in words the room may show |
 | `cut_off` | the host cut this worker off: it ends its running turns with an error and starts none |
 
-A room the host paused gets `error` "paused on the host's machine" instead of a proxy (003b-AC5). The worker then reports to the room that it cannot host, with that reason, and the room moves the AI host role to another daemon able to host. The paused room keeps its account's bearer, so an answer running as it pauses finishes. The pause is saved in the instance's `instance.json` (`paused`).
+A room the host paused gets `error` "paused on the host's machine" instead of a proxy (003b-AC5). The worker then reports to the room that it cannot host, with that reason, and the room moves the AI host role to another AI host app able to host. The paused room keeps its account's bearer, so an answer running as it pauses finishes. The pause is saved in the instance's `instance.json` (`paused`).
 
 ## Supervisor to worker
 
@@ -69,7 +69,7 @@ Requests carry an `id`; the worker answers each one with `{"type":"reply","id":N
 | `plugin_options` | `room`, `plugin` (the room's plugin id), `values`, `clear` | saves the values the host gave a room plugin's options, under its id, with which options are sensitive: an absent key keeps its value, an empty string or a key in `clear` forgets it; only the plugin's declared options, each of its type (version 4) |
 | `plugin_fetch` | `room`, `fetch`, `accept` | `accept` starts the room's fetch request `fetch` with the host's git and replies at once; the room status shows it `fetching`. Without `accept` it declines the request (version 4) |
 | `access` | `access` | replaces the access: a room whose proxy moved gets a new sandbox at its next turn, and a new `cut_off` ends the running turns. Sent whenever it changes: an account added, mapped or expired, a cut-off, Docker coming up |
-| `remove_room` | `room`, `force` | revokes the room's daemon token on the room server (`DELETE /api/rooms/{room}/daemon`), ends the room's run and sandboxes, and deletes its token, workspace cache and plugin option values. A room server that does not answer, or one too old for the endpoint, fails the request unless `force`, which removes the room here only (version 5) |
+| `remove_room` | `room`, `force` | revokes the room's AI host app token on the room server (`DELETE /api/rooms/{room}/daemon`), ends the room's run and sandboxes, and deletes its token, workspace cache and plugin option values. A room server that does not answer, or one too old for the endpoint, fails the request unless `force`, which removes the room here only (version 5) |
 | `update` | | refused with an error: only the supervisor updates, and it updates itself (003-AC5). Phase 2 workers replaced their binary here |
 | `wait` | `slot` | no reply: the worker's turn waits in the supervisor's queue (version 3) |
 | `grant` | `slot` | no reply: the turn may run (version 3) |
@@ -81,7 +81,7 @@ A closed stdin means the same as `stop`, so a worker whose supervisor died stops
 
 | Type | Fields | When |
 |---|---|---|
-| `status` | `status`, the page's view of the worker; `update.served` is the version its room server hands out; `rooms` lists each room's pairing, connection, and turns `running` and `queued`, and for a room this daemon hosts its `plugins` (`name`, `version`, `options`, the non-sensitive `values`, `set` naming every option with a value, `needs_setup`, `domains`, `off_allowlist`) and `fetches` (the requests waiting for the host, `fetching` while one runs). A sensitive value never travels | whenever it changes, checked every 250 ms |
+| `status` | `status`, the page's view of the worker; `update.served` is the version its room server hands out; `rooms` lists each room's pairing, connection, and turns `running` and `queued`, and for a room this AI host app hosts its `plugins` (`name`, `version`, `options`, the non-sensitive `values`, `set` naming every option with a value, `needs_setup`, `domains`, `off_allowlist`) and `fetches` (the requests waiting for the host, `fetching` while one runs). A sensitive value never travels | whenever it changes, checked every 250 ms |
 | `metrics` | `metrics`: `uptime_seconds`, `turns`, `failed_turns`, `heap_bytes`, `goroutines` | at start, then every 30 s |
 | `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms`, and at the end `queue_ms`, the wait for a slot, `persona`, the session's `context_tokens` and `context_window`, `cause`, `asked_model` and `asked_effort`, `model` and `effort` as run, `model_note` and `model_mismatch` as in the turn result, `tokens_in`, `tokens_out`, `tokens_cache_read` and `tokens_cache_write` summed over every model claude called, `cost_usd` from claude's `total_cost_usd`, and `workspace_bytes`, the workspace tar's size. Absent fields are unknown | as a turn starts and ends |
 | `acquire` | `slot`, a number the worker picks; `turn`: `room`, `id` | before each turn, version 3: the supervisor answers `grant`, or `wait` then `grant` |
@@ -104,9 +104,9 @@ The page shows four alerts (003-AC29): a Claude account's expiry warning, a runn
 
 The page is written with Preact, htm and @preact/signals, served from `internal/uivendor/esm/`, shared with the room server's `/admin`, as unmodified ESM files with their licenses, and mapped by an import map that the CSP admits by its hash. No CDN, no build step. `tools/ui/package.json` pins the versions; `make ui-vendor` copies them again, and `make ui-check` (part of `make lint`) runs `tsc --checkJs` on the page's JSDoc types.
 
-The stream opens with `hello`: `{"daemon":…, "heartbeat_seconds":20, "room_name":"…"}`. The daemon's page shows the room by that name; a room server from before 005-AC42 sends none, and the page shows the link. A rename reaches the page at the next connection.
+The stream opens with `hello`: `{"daemon":…, "heartbeat_seconds":20, "room_name":"…"}`. The AI host app shows the room by that name; a room server from before 005-AC42 sends none, and the page shows the link. A rename reaches the page at the next connection.
 
-The room's stream tells each daemon whether it hosts the room's agent and whether the room runs personas in parallel: a `room` event, `{"host":true,"parallel_turns":false}`, sent after `hello` and whenever either changes. Daemons from before ignore it.
+The room's stream tells each AI host app whether it hosts the room's agent and whether the room runs personas in parallel: a `room` event, `{"host":true,"parallel_turns":false}`, sent after `hello` and whenever either changes. AI host apps from before ignore it.
 
 ## Claude accounts
 
