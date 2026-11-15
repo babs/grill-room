@@ -3777,7 +3777,7 @@ async function turnSkillOn(p, id) {
   }
 }
 
-async function loadSkills() {
+async function loadSkills(retry = true) {
   const seq = agentSeq;
   const [lib, st] = await Promise.all([netFetch(api + '/skills'), netFetch(api + '/agent')]);
   if (!lib.ok) return;
@@ -3785,7 +3785,8 @@ async function loadSkills() {
   staleSheet();
   // An upload to the library does not wake the room: read the update offers afresh.
   const read = st.ok ? await st.json() : null;
-  // A stream event since the read is newer: the read would bring back a removed persona.
+  // A stream event landed during the read: either may be the newer, so read again once.
+  if (read && seq !== agentSeq && retry) return loadSkills(false);
   if (read && seq === agentSeq) {
     agent = read;
     renderAgent();
@@ -4383,6 +4384,8 @@ function showApprovals() {
   // The page's close handler gives the focus back to focusBefore, not to a chat line's link.
   focusBefore = $('approvals');
   missingLine = '';
+  // The strip replaces the sheet: its close must not go back to Help (042-AC7).
+  history.replaceState(null, '', location.pathname + location.search);
   $('ai').close();
 }
 
@@ -4463,29 +4466,36 @@ function youRows(data) {
   const muted = !voice.localParticipant.isMicrophoneEnabled;
   const dev = window.grillDeviceSTT;
   const engine = dev?.state || 'off';
+  // A ready engine holds the voice only while its pipeline runs on the device: a fall back hands it to the server (010-AC17).
+  const onDevice = engine === 'ready' && dev.pipeline.mode === 'device';
   const wait = 'Transcription is on, waiting: ';
   const rows = [{ id: 'call', lines: ['In the call · ' + (muted ? 'muted' : 'mic on') + ' · ' + (deaf ? 'stopped hearing the call' : 'hearing the call')] },
     { id: 'stt', lines: [sttOff ? 'Your voice is not written down' : muted ? wait + 'your mic is muted'
-      : sttMine || engine === 'ready' ? 'Your voice is written down now'
-      : engine === 'off' ? wait + 'voice-to-text is off' : wait + 'the model is downloading'] }];
+      : sttMine || onDevice ? 'Your voice is written down now'
+      : engine === 'loading' || engine === 'testing' ? wait + 'the model is downloading'
+      // "This server"'s own test: off here only where it reads off.
+      : window.grillSTT && !window.grillSTT.available ? wait + 'voice-to-text is off' : wait + 'voice-to-text is starting'] }];
   // Only where 010 offers the choice: the audio menu shows its toggle.
-  if (dev?.info.offered) rows.push({ id: 'where', lines: ['Voice-to-text runs ' + (engine === 'off' ? 'on the server' : 'on this device')] });
+  if (dev?.info.offered) rows.push({ id: 'where', lines: ['Voice-to-text runs ' + (onDevice ? 'on this device' : 'on the server')] });
   return rows;
 }
 
 function roomRows(data) {
   const sp = data.room.speech;
-  const rows = [data.voice
-    ? { id: 'glossary', lines: ['Words to recognise', glossaryWords === null ? 'Loading…' : glossaryWords === false ? 'Could not load the words.'
-      : glossaryWords + (glossaryWords === 1 ? ' word' : ' words')], who: 'any member', actions: [ovLink('glossary', 'Open Words to recognise', '#manage/glossary')] }
-    : { id: 'glossary', lines: ['Words to recognise', absent] }];
-  if (!ttsOn) return [...rows, { id: 'voices', lines: ['Call voices', absent] }];
+  const st = window.grillSTT;
+  // No worker reads the glossary: the reason its tab gives (admin/room-admin.js glossaryNone).
+  const none = !data.voice ? absent : !st ? 'Loading…' : !st.available ? 'Voice-to-text is off' : !st.glossary ? absent : '';
+  const rows = [none ? { id: 'glossary', lines: ['Words to recognise', none] }
+    : { id: 'glossary', lines: ['Words to recognise', glossaryWords === null ? 'Loading…' : glossaryWords === false ? 'Could not load the words.'
+      : glossaryWords + (glossaryWords === 1 ? ' word' : ' words')], who: 'any member', actions: [ovLink('glossary', 'Open Words to recognise', '#manage/glossary')] }];
   // Plain members have no Call voices tab: no link for them.
-  rows.push({ id: 'voices', lines: ['Call voices', 'pause ' + sp.quiet_ms / 1000 + ' s, resume ' + sp.resume_s + ' s, queue ' + sp.queue_s + ' s, up to ' + sp.words + ' words'],
-    who: 'room admins', actions: meAdmin ? [ovLink('voices', 'Open Call voices', '#manage/voices')] : [] });
+  rows.push(ttsOn ? { id: 'voices', lines: ['Call voices', 'pause ' + sp.quiet_ms / 1000 + ' s, resume ' + sp.resume_s + ' s, queue ' + sp.queue_s + ' s, up to ' + sp.words + ' words'],
+    who: 'room admins', actions: meAdmin ? [ovLink('voices', 'Open Call voices', '#manage/voices')] : [] } : { id: 'voices', lines: ['Call voices', absent] });
   for (const p of agent.personas) {
-    rows.push({ id: 'persona-' + p.id, lines: [p.badge + ' ' + p.name, p.speaks ? 'speaks in the call with ' + voiceName(p.voice) + ', rate ' + (p.voice_rate || 1) : 'stays silent in the call'],
-      who: 'whoever may edit the persona', actions: [ovLink('persona-' + p.id, 'Open ' + p.name, '#personas/' + p.id + '/identity')] });
+    const name = p.badge + ' ' + p.name;
+    rows.push(ttsOn ? { id: 'persona-' + p.id, lines: [name, p.speaks ? 'speaks in the call with ' + voiceName(p.voice) + ', rate ' + (p.voice_rate || 1) : 'stays silent in the call'],
+      who: 'whoever may edit the persona', actions: [ovLink('persona-' + p.id, 'Open ' + p.name, '#personas/' + p.id + '/identity')] }
+      : { id: 'persona-' + p.id, lines: [name, absent] });
   }
   return rows;
 }
@@ -4506,7 +4516,18 @@ function renderOverview() {
   for (const [id, rows] of [['ov-you', youRows], ['ov-room', roomRows], ['ov-server', serverRows]]) drawRows($(id), data ? rows(data).map(aiRow) : loading());
   focusRow($('call-overview'), !!data && agentSeen);
 }
-window.addEventListener('grill:device-stt', renderOverview);
+// The pipeline reports its counters at each beat: only a mode change moves the "You" lines. Every
+// pipeline start or stop follows an engine state, and a new pipeline's first report is a change.
+let pipelineMode = '';
+window.addEventListener('grill:device-stt', () => {
+  pipelineMode = '';
+  renderOverview();
+});
+window.addEventListener('grill:device-pipeline', (e) => {
+  if (e.detail.mode === pipelineMode) return;
+  pipelineMode = e.detail.mode;
+  renderOverview();
+});
 
 // The return rule of links out of the overview and Help (042-AC7). A link stamps the history entry
 // it opens with its origin; the target's tabs carry the stamp, counting the entries they push.

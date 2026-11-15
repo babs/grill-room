@@ -34,8 +34,8 @@ async function callRoom(browser, request) {
 }
 
 // stt plays the transcription state the server sends from its workers, with mine among the voices.
-const stt = (page, available, mine) => page.evaluate(([available, mine]) => showSTT({ available, listening: available, glossary: available,
-  transcribed: mine ? [Number(myID)] : [], engines: [] }), [available, mine]);
+const stt = (page, available, mine, more = {}) => page.evaluate(([available, mine, more]) => showSTT({ available, listening: available, glossary: available,
+  transcribed: mine ? [Number(myID)] : [], engines: [], ...more }), [available, mine, more]);
 
 // 042-AC1 042-AC4 042-AC5: on a server without a call the overview still opens from the room menu,
 // every row saying the setting is not there and who turns it on; an ended room, the docs and the
@@ -45,7 +45,8 @@ test('call overview: a server without a call', async ({ browser, request }) => {
   await expect(bob.locator('#voice')).toBeHidden();
   await openFrom(bob);
   expect(await lines(bob, 'you')).toEqual([[absent]]);
-  expect(await lines(bob, 'room')).toEqual([['Words to recognise', absent], ['Call voices', absent]]);
+  const grill = (await agentState(bob, room.id)).personas[0];
+  expect(await lines(bob, 'room')).toEqual([['Words to recognise', absent], ['Call voices', absent], [grill.badge + ' ' + grill.name, absent]]);
   expect(await lines(bob, 'server')).toEqual([['Voice-to-text', absent], ['Persona voices', absent], ['Pronunciation', absent]]);
   await expect(sheet(bob).locator('a[href^="/admin"], a[href^="#"]')).toHaveCount(0);
   await bob.keyboard.press('Escape');
@@ -92,7 +93,9 @@ test('call overview: the viewer, the room and the server, live', async ({ browse
   const you = (n) => row(alice, 'you', n).locator('.name');
   await press('voice-join');
   await expect(you('call')).toHaveText('In the call · mic on · hearing the call');
-  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is off');
+  // No worker on the voice yet, the server's voice-to-text up: not "off", which "This server" would contradict.
+  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is starting');
+  await expect(row(alice, 'server', 'stt').locator('.meta').first()).toHaveText('Available');
   await stt(alice, true, true);
   await expect(you('stt')).toHaveText('Your voice is written down now');
   await press('voice-mute');
@@ -103,7 +106,15 @@ test('call overview: the viewer, the room and the server, live', async ({ browse
   await stt(alice, false, false);
   await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is off');
   await expect(row(alice, 'server', 'stt').locator('.meta').first()).toHaveText('Voice-to-text is off');
+  // No worker reads the glossary: the row gives its tab's reason, no link.
+  const glossary = row(alice, 'room', 'glossary');
+  expect(await lines(alice, 'room').then((l) => l[0])).toEqual(['Words to recognise', 'Voice-to-text is off']);
+  await expect(glossary.locator('a')).toHaveCount(0);
+  await stt(alice, true, true, { glossary: false });
+  expect(await lines(alice, 'room').then((l) => l[0])).toEqual(['Words to recognise', absent]);
+  await expect(glossary.locator('a')).toHaveCount(0);
   await stt(alice, true, true);
+  await expect(glossary.getByRole('link', { name: 'Open Words to recognise' })).toBeVisible();
   await press('voice-deaf');
   await expect(you('call')).toHaveText('In the call · muted · stopped hearing the call');
   await press('voice-deaf');
@@ -130,38 +141,129 @@ test('call overview: the viewer, the room and the server, live', async ({ browse
   await expect(persona.locator('.meta').first()).toHaveText('speaks in the call with Camille (French), rate 1.1');
 
   // Bob, a plain member, has no Call voices tab: no link; the glossary is his to change too.
+  await stt(bob, true, false);
   await openFrom(bob);
   await expect(row(bob, 'room', 'voices').locator('.meta').first()).toHaveText('pause 1 s, resume 20 s, queue 40 s, up to 60 words');
   await expect(row(bob, 'room', 'voices').locator('a')).toHaveCount(0);
   await expect(row(bob, 'room', 'glossary').getByRole('link', { name: 'Open Words to recognise' })).toHaveAttribute('href', '#manage/glossary');
 });
 
-// 042-AC2 042-AC3 042-AC4 042-AC5: a call with no persona voices: Call voices and Persona voices
-// say why, no persona row; voice-to-text on this device names where it runs and waits for its model.
-test('call overview: no persona voices, voice-to-text on this device', async ({ browser, request }) => {
+// 042-AC3 042-AC4 042-AC5: a call with no persona voices: Call voices, Persona voices and each
+// persona's row stay and say why.
+test('call overview: no persona voices', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await fakeCall(alice, room.id);
   await stt(alice, true, false);
-  await alice.locator('#voice-join').click();
-  await openFrom(alice, 'voice');
-  expect(await lines(alice, 'room')).toEqual([['Words to recognise', '0 words', 'Who: any member'], ['Call voices', absent]]);
+  await openFrom(alice);
+  const grill = (await agentState(alice, room.id)).personas[0];
+  // The word count loads as the sheet opens.
+  await expect.poll(() => lines(alice, 'room')).toEqual([['Words to recognise', '0 words', 'Who: any member'], ['Call voices', absent],
+    [grill.badge + ' ' + grill.name, absent]]);
+  await expect(row(alice, 'room', 'persona-' + grill.id).locator('a')).toHaveCount(0);
   await expect(row(alice, 'server', 'tts').locator('.meta')).toHaveText(absent);
   await expect(row(alice, 'server', 'pronunciation').locator('.meta')).toHaveText(absent);
-  // The device engine as stt/device.js reports it, offered on this browser.
-  const device = (state) => alice.evaluate((state) => {
-    window.grillDeviceSTT = { state, info: { offered: true } };
-    window.dispatchEvent(new CustomEvent('grill:device-stt', { detail: { state } }));
-  }, state);
+});
+
+// Stand-ins for stt/engine.js and stt/pipeline.js around the real stt/device.js: the engine is ready
+// once the test says so; the pipeline, like the real one, reports nothing before its first mode,
+// then the mode the test sends it.
+const stubEngine = `onmessage = (e) => {
+  if (e.data.cmd === 'load') new BroadcastChannel('stub-engine').onmessage = () => postMessage({ ev: 'ready', backend: 'wasm', isolated: true, ms: {} });
+};`;
+const stubPipeline = `const stats = (mode) => postMessage({ ev: 'stats', mode });
+onmessage = (e) => {
+  if (e.data.cmd === 'stop') postMessage({ ev: 'stopped' });
+  if (e.data.cmd !== 'start') return;
+  new BroadcastChannel('stub-pipeline').onmessage = (m) => {
+    postMessage({ ev: 'mode', mode: m.data });
+    stats(m.data);
+  };
+};`;
+
+// 042-AC2 042-AC6, 010-AC17: voice-to-text on this device, through stt/device.js itself. The line
+// on where it runs comes with the offer, the sheet already open; it waits for the model, then says
+// the device holds the voice only while the pipeline does: after a fall back the server writes it
+// down, or nobody when the server has no worker.
+test('call overview: voice-to-text on this device and its fall back', async ({ browser, request, browserName }) => {
+  test.skip(browserName !== 'chromium', 'the device option is checked on Chrome (010-AC1)');
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const ctx = alice.context();
+  await ctx.addInitScript(() => {
+    globalThis.grillReloadDelayMs = 0;
+    for (const [k, v] of Object.entries({ userAgentData: { mobile: false }, hardwareConcurrency: 8, deviceMemory: 8 })) {
+      Object.defineProperty(Navigator.prototype, k, { get: () => v, configurable: true });
+    }
+    // Passed earlier: no self-test.
+    localStorage.setItem('grill-room-device-stt-passed:rev-042', 'wasm');
+    window.roomReads = 0;
+    addEventListener('grill:room', () => window.roomReads++);
+  });
+  for (const [path, body] of [['engine', stubEngine], ['pipeline', stubPipeline]]) {
+    // The real answer's headers: the isolated page refuses a worker script without them.
+    await ctx.route(`**/static/stt/${path}.js`, async (r) => r.fulfill({ response: await r.fetch(), body }));
+  }
+  await fakeCall(alice, room.id);
+  const offer = { device: { revision: 'rev-042', bytes: 432e6, files: [] } };
+  await alice.locator('#voice-join').click();
+  await openFrom(alice, 'voice');
   const you = (n) => row(alice, 'you', n).locator('.name');
-  await device('off');
+  const said = alice.locator('#device-stt-status');
+  const send = (channel, data) => alice.evaluate(([channel, data]) => new BroadcastChannel(channel).postMessage(data), [channel, data]);
+  // A worker just started may not listen yet: the engine and the pipeline are told until they answer.
+  const ready = () => expect.poll(async () => {
+    await send('stub-engine', 'ready');
+    return alice.evaluate(() => window.grillDeviceSTT.state);
+  }).toBe('ready');
+  const onDevice = () => expect.poll(async () => {
+    await send('stub-pipeline', 'device');
+    return alice.evaluate(() => window.grillDeviceSTT.pipeline.mode);
+  }).toBe('device');
+
+  // The replayed "joined" line reloads the room once more, which redraws the sheet: past it, only
+  // stt/device.js's word on the offer draws the line.
+  await expect.poll(() => alice.evaluate(() => window.roomReads)).toBeGreaterThanOrEqual(2);
+  await stt(alice, true, false, offer);
   await expect(you('where')).toHaveText('Voice-to-text runs on the server');
-  await device('loading');
-  await expect(you('where')).toHaveText('Voice-to-text runs on this device');
+  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is starting');
+  // The toggle sits in Audio options, under the sheet.
+  await alice.evaluate(() => document.querySelector('#voice-device input').click());
   await expect(you('stt')).toHaveText('Transcription is on, waiting: the model is downloading');
-  await device('testing');
-  await expect(you('stt')).toHaveText('Transcription is on, waiting: the model is downloading');
-  await device('ready');
+  await expect(you('where')).toHaveText('Voice-to-text runs on the server');
+  await ready();
+  expect(await alice.evaluate(() => window.grillDeviceSTT.info.live)).toBe(true);
+  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is starting');
+
+  await onDevice();
+  await expect(said).toHaveText('Transcribed on this device');
   await expect(you('stt')).toHaveText('Your voice is written down now');
+  await expect(you('where')).toHaveText('Voice-to-text runs on this device');
+
+  // Too slow: the server's worker takes the voice back.
+  await send('stub-pipeline', 'slow');
+  await expect(said).toHaveText('Transcribed by the server: this device is too slow right now');
+  await expect(you('where')).toHaveText('Voice-to-text runs on the server');
+  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is starting');
+  await stt(alice, true, true, offer);
+  await expect(you('stt')).toHaveText('Your voice is written down now');
+  // No worker on the server: nobody writes it down.
+  await stt(alice, false, false, offer);
+  await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is off');
+  await expect(you('where')).toHaveText('Voice-to-text runs on the server');
+  await expect(row(alice, 'server', 'stt').locator('.meta').first()).toHaveText('Voice-to-text is off');
+  // Fast again: back on the device.
+  await send('stub-pipeline', 'device');
+  await expect(you('stt')).toHaveText('Your voice is written down now');
+  await expect(you('where')).toHaveText('Voice-to-text runs on this device');
+  // Transcription off and on again: a new engine, a new pipeline, whose first word is "device".
+  const press = (id) => alice.evaluate((id) => document.getElementById(id).click(), id);
+  await press('voice-stt');
+  await expect(you('stt')).toHaveText('Your voice is not written down');
+  await expect(you('where')).toHaveText('Voice-to-text runs on the server');
+  await press('voice-stt');
+  await ready();
+  await onDevice();
+  await expect(you('stt')).toHaveText('Your voice is written down now');
+  await expect(you('where')).toHaveText('Voice-to-text runs on this device');
 });
 
 // 042-AC7: a link out opens its target as a new entry and closes the overview; closing the target
@@ -315,6 +417,30 @@ test('call overview: links out and back', async ({ browser, request }) => {
   await alice.keyboard.press('Escape');
   await expect(alice).not.toHaveURL(/#/);
   await expect(sheet(alice)).toBeHidden();
+});
+
+// 042-AC6: the persona sheet's own read of the agent state is sent before a stream event lands and
+// answered after it, but read on the server after it: the newer read is not dropped. The read
+// carries an update offer, as a library upload leaves one without waking the stream.
+test('persona sheet: a read newer than the event that landed during it', async ({ browser, request }) => {
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  const grill = (await agentState(alice, room.id)).personas[0];
+  let first = true;
+  await alice.route(`**/api/rooms/${room.id}/agent`, async (r) => {
+    if (first) {
+      first = false;
+      expect(await patchPersona(bob, room.id, grill.id, { name: 'Grilly' })).toBeLessThan(300);
+      await expect.poll(() => alice.evaluate(() => agent.personas[0].name)).toBe('Grilly');
+    }
+    const res = await r.fetch();
+    const json = await res.json();
+    json.personas[0].update_version = 99;
+    await r.fulfill({ response: res, json });
+  });
+  await alice.evaluate((id) => { location.hash = `#personas/${id}/identity`; }, grill.id);
+  await expect(alice.locator('#persona-sheet')).toBeVisible();
+  await expect.poll(() => alice.evaluate(() => agent.personas[0].update_version)).toBe(99);
+  expect(await alice.evaluate(() => agent.personas[0].name)).toBe('Grilly');
 });
 
 // 042-AC1: full screen on a phone, nothing sticking out and 44 px targets, at 390 and 1440 px and

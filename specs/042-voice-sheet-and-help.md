@@ -35,10 +35,10 @@ The product has no help. Its core words are explained only where they first appe
 - [x] **AC2** Section "You", state lines only, read from the same effective state the audio bar uses (it tells "on" from "writing now"):
   - not in the call: one line, "Not in the call. Join it from the audio bar.", and nothing else in the section;
   - in the call: "In the call · mic on / muted · hearing the call / stopped hearing the call";
-  - "Your voice is written down now" only while transcription is on, the mic on and voice-to-text running; "Transcription is on, waiting: <your mic is muted | voice-to-text is off | the model is downloading>" while it is on but not writing; "Your voice is not written down" while it is off;
-  - "Voice-to-text runs on this device" or "on the server", only where 010 offers the choice.
+  - "Your voice is written down now" only while transcription is on, the mic on and voice-to-text running; "Transcription is on, waiting: <your mic is muted | voice-to-text is off | voice-to-text is starting | the model is downloading>" while it is on but not writing; "Your voice is not written down" while it is off;
+  - "Voice-to-text runs on this device" while the device's pipeline holds the voice, else "on the server" (a fall back, 010-AC17), only where 010 offers the choice.
   Each line follows the audio bar live.
-- [x] **AC3** Section "This room": "Words to recognise: N words" (from the room's glossary) linking to AI in this room › Words to recognise, "Who: any member"; "Call voices: pause <quiet> s, resume <resume> s, queue <queue> s, up to <words> words", "Who: room admins", linking to › Call voices for room admins only (plain members have no such tab, 040-AC3); then one row per persona: "<badge> <name>: speaks in the call with <voice>, rate <rate>" or "stays silent in the call", linking to its sheet's Identity tab, "Who: whoever may edit the persona" (013-AC26).
+- [x] **AC3** Section "This room": "Words to recognise: N words" (from the room's glossary) linking to AI in this room › Words to recognise, "Who: any member"; "Call voices: pause <quiet> s, resume <resume> s, queue <queue> s, up to <words> words", "Who: room admins", linking to › Call voices for room admins only (plain members have no such tab, 040-AC3); then one row per persona: "<badge> <name>: speaks in the call with <voice>, rate <rate>" or "stays silent in the call", linking to its sheet's Identity tab, "Who: whoever may edit the persona" (013-AC26). Without a worker that reads the glossary, Words to recognise gives its tab's reason; without persona voices, Call voices and each persona row say so (AC5).
 - [x] **AC4** Section "This server": "Voice-to-text": "Available", "Loading…", "Voice-to-text is off" or "Not available on this server" (038-AC12's texts); "Persona voices": "Available" when the server has call voices, else "Not available on this server"; "Pronunciation: set by the server admin, on the server's admin page." No link to `/admin`.
 - [x] **AC5** A row whose setting is absent stays and says why: "Not available on this server: the server admin turns it on." A row the viewer cannot change names who can ("Who: room admins").
 - [x] **AC6** Rows follow the room, agent, voice-to-text and call events live: a join, a mute, a glossary edit, a persona's voice changed in another session update the row without polling.
@@ -62,7 +62,7 @@ The product has no help. Its core words are explained only where they first appe
 - [x] **AC10** "Words" lists these definitions, one line each, in this order:
   - **Room**: a place where people and personas talk, with its chat, documents and call.
   - **Persona**: an AI with a name, a prompt and a model, who answers in the room when asked or on its own.
-  - **AI host**: the person whose computer runs the personas. **AI host app**: the app they run for it.
+  - **AI host**: the person whose computer runs the personas. **AI host app**: the app the AI host runs for it.
   - **Call**: the room's audio, and its cameras and screens.
   - **Voice-to-text**: what writes the call down as lines in the chat.
   - **Note**: a comment pinned to a part of a document.
@@ -104,8 +104,12 @@ None.
 - The profile line is about a missing email, not a missing profile. Because a seat without a profile lands on `/profile`'s sign-in card, and the page already nudges a profile without an email (Fable, second pass).
 - The transcription line says what is happening, not what is ticked. Because "written down" while muted would be false (Codex, second pass).
 - Rows show the setting on one line and its value on the next ("Words to recognise", "3 words"); the colon in the AC wording is that layout. Because the absent text carries its own colon (implementation).
-- Persona rows show only when the server has persona voices; without them the Call voices row says why. Because one "Not available" line per persona repeats the same fact (implementation).
-- With transcription on, the mic on and no worker on the voice yet, the reason reads "voice-to-text is off"; while the device engine self-tests after its download, "the model is downloading". Because AC2 allows three reasons only (implementation).
+- Persona rows stay without persona voices, each saying why, with no link. Because AC3 and AC5 keep every row (Codex, code review).
+- With transcription on, the mic on and no worker on the voice yet, the reason reads "voice-to-text is starting"; "voice-to-text is off" only while "This server" reads it off. Because the two lines must not contradict each other (Fable, code review).
+- While the device engine self-tests after its download, the reason reads "the model is downloading". Because it is not writing yet and the self-test is part of getting the model ready (implementation).
+- "Open the approvals" and Room settings' "Open the Personas sheet" hand over to another surface: they drop the return, and closing that surface does not reopen the overview or Help. Back still reaches the origin's own entry. Because the hand-over is the action asked for (Fable, code review).
+- The line on where voice-to-text runs reads "on the server" whenever the device does not hold the voice, the server's voice-to-text off included; the line above then says it waits. Because it names where the voice goes, and "This server" says the rest (code review).
+- The device holds the voice only while its pipeline runs in device mode: a ready engine whose pipeline fell back leaves it to the server, which may have no worker. Because a loaded engine is not a transcribing one (Codex, code review).
 - Pronunciation reads "Not available on this server" without persona voices. Because it only shapes them (implementation).
 - Help's email link reads "Add an email", as the page's nudge, and stays in the tab; Back reopens Help on that row. Because it is a step of the same visit (implementation).
 - The last-admin link reads "Room settings › Members and admins", the tab's name until 040 renames it "Members". Because a link names the place as the page shows it (implementation).

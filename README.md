@@ -593,7 +593,7 @@ The room's name › "AI in this room" (`#ai`) says what the personas need to ans
 
 ### Call and voice-to-text
 
-"Call and voice-to-text…" (`#call-overview`), in the room's name menu and in Audio options, lists read-only what applies to this room's call. You: in the call or not, mic on or muted, hearing the call or not, whether your voice is written down now, or why it waits (mic muted, voice-to-text off, the model downloading), and whether voice-to-text runs on this device or on the server where both are offered. This room: the words to recognise, the call voice settings, and each persona's voice and rate. This server: voice-to-text, persona voices, pronunciation. A row you can change links there; one you cannot says who can; a setting the server lacks says so. The rows follow the call and the room live. Closing a sheet opened from a row comes back to the row.
+"Call and voice-to-text…" (`#call-overview`), in the room's name menu and in Audio options, lists read-only what applies to this room's call. You: in the call or not, mic on or muted, hearing the call or not, whether your voice is written down now, or why it waits (mic muted, voice-to-text off or starting, the model downloading), and whether voice-to-text runs on this device or on the server where both are offered. This room: the words to recognise, the call voice settings, and each persona's voice and rate. This server: voice-to-text, persona voices, pronunciation. A row you can change links there; one you cannot says who can; a setting the server lacks says so. The rows follow the call and the room live. Closing a sheet opened from a row comes back to the row.
 
 ### Help
 

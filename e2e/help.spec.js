@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, fakeDaemon, appointAdmin, agentState, noOverflow, smallTargets } from './helpers.js';
+import { roomWith, fakeDaemon, appointAdmin, agentState, patchPersona, noOverflow, smallTargets } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const lines = {
@@ -170,6 +170,29 @@ test('Help: two seats of one profile, seen from a third', async ({ browser, requ
     expect(await can(carol)).toEqual([['member', lines.member], ['ask', decides('Alice')]]);
     await expect(sheet(carol)).not.toContainText('Bob');
     await expect(sheet(carol)).not.toContainText('as Alice');
+  } finally {
+    host();
+  }
+});
+
+// 042-AC7 039-AC5: Help › AI in this room › "Open the approvals" hands over to the approval strip:
+// Help does not come back over it.
+test('Help: the AI host opens the approvals', async ({ browser, request, baseURL }) => {
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  const host = await fakeDaemon(alice, baseURL, room.id, 'Alice laptop', { approve_all: true });
+  try {
+    const grill = (await agentState(bob, room.id)).personas[0].id;
+    expect(await patchPersona(bob, room.id, grill, { name: 'Griller' })).toBe(202);
+    await openHelp(alice);
+    await row(alice, 'runs').getByRole('link', { name: 'AI in this room' }).click();
+    await expect(alice.locator('#ai')).toBeVisible();
+    await alice.locator('#ai-rows [data-row="waiting"]').getByRole('button', { name: 'Open the approvals' }).click();
+    // A return to Help would leave #help in the address bar: the strip's entry has no hash, no stamp.
+    await expect.poll(() => alice.evaluate(() => [location.hash, history.state])).toEqual(['', null]);
+    await expect(alice.locator('#ai')).toBeHidden();
+    await expect(sheet(alice)).toBeHidden();
+    await expect(alice.locator('#approvals')).toBeVisible();
+    await expect(alice.locator('#approvals')).toBeFocused();
   } finally {
     host();
   }
