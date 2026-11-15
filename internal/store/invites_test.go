@@ -298,13 +298,13 @@ func TestInviteNameAndInRoom(t *testing.T) {
 		}
 		return p
 	}
-	join("inv-x", "Bob")
+	bob := join("inv-x", "Bob")
 	carol := join("inv-x", "Carol")
 	dave := join("inv-x", "Dave")
 	join("inv-z", "Erin")
 	endSeat(t, s, carol.ID, EndLeft)
 	endSeat(t, s, dave.ID, EndLeft)
-	join("inv-y", "Dave again")
+	daveAgain := join("inv-y", "Dave again")
 	if _, err := s.RevokeInvite(ctx, "a", cut.ID, true, "Alice"); err != nil {
 		t.Fatal(err)
 	}
@@ -323,5 +323,24 @@ func TestInviteNameAndInRoom(t *testing.T) {
 	}
 	if one, err := s.Invite(ctx, "a", inv.ID); err != nil || one.InRoom != 1 || one.Name != "" {
 		t.Fatalf("one invite: %+v %v", one, err)
+	}
+	// 040-AC10: each seat still in the room, in join order, with the invite it joined through.
+	if err := s.RenameInvite(ctx, "a", other.ID, "Guests"); err != nil {
+		t.Fatal(err)
+	}
+	seats, err := s.SeatInvites(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for _, si := range seats {
+		ids = append(ids, si.InviteID)
+	}
+	if !slices.Equal(ids, []int64{invs[0].ID, inv.ID, other.ID}) || seats[1].InviteName != "" || seats[2].InviteName != "Guests" ||
+		seats[1].ParticipantID != bob.ID || seats[2].ParticipantID != daveAgain.ID {
+		t.Fatalf("seat invites %+v", seats)
+	}
+	if none, err := s.SeatInvites(ctx, "b"); err != nil || len(none) != 1 {
+		t.Fatalf("room b's seats: %+v %v", none, err)
 	}
 }
