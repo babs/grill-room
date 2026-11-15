@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, menuItem, playSTT, playEvents } from './helpers.js';
+import { roomWith, menuItem, playSTT, playEvents, patchJSON } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -52,10 +52,7 @@ test('glossary tab and model credit follow the workers', async ({ browser, reque
   }
   // 038-AC12: on a server with voice, the tab waits for the stream's state, then says the worker is
   // down in 007's words; "Not available" is for a server without transcription.
-  await bob.route(`**/api/rooms/${room.id}`, async (r) => {
-    const res = await r.fetch();
-    await r.fulfill({ response: res, json: { ...(await res.json()), voice: true } });
-  });
+  await patchJSON(bob, `**/api/rooms/${room.id}`, (json) => ({ ...json, voice: true }));
   await playEvents(bob, room.id, []);
   await bob.goto(`/r/${room.id}#manage/glossary`);
   await expect(bob.locator('#manage .tab-panel')).toHaveText('Loading…');

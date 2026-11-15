@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, menuItem, personaRow, personaSheet, agentState, unfoldTabs, appointAdmin, patchPersona, addFromLibrary } from './helpers.js';
+import { roomWith, menuItem, personaRow, personaSheet, agentState, unfoldTabs, appointAdmin, patchPersona, addFromLibrary, editPersona } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const sizes = { phone: { width: 390, height: 844 }, desktop: { width: 1440, height: 900 } };
@@ -19,7 +19,7 @@ for (const [size, viewport] of Object.entries(sizes)) {
     await alice.setViewportSize(viewport);
     await addSecretary(alice);
     const sec = await personaSheet(alice, 'Secretary', 'Identity');
-    await sec.getByLabel('Name').fill('Secretary_with_a_long_name_xx');
+    await editPersona(sec, () => sec.getByLabel('Name').fill('Secretary_with_a_long_name_xx'));
     await unfoldTabs(sec.locator('#persona-tabs'));
     await sec.getByRole('link', { name: 'Triggers', exact: true }).click();
     await sec.getByLabel('Speaks up').selectOption('every_voice');
@@ -158,7 +158,7 @@ test('persona sheet: one Save for every tab', async ({ browser, request }) => {
   const { pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   const sheet = await personaSheet(alice, 'Grill', 'Identity');
   await expect(sheet.locator('section[data-tab=identity] .persona-voice .unavailable')).toHaveText('Not available on this server');
-  await sheet.getByLabel('Name').fill('');
+  await editPersona(sheet, () => sheet.getByLabel('Name').fill(''));
   await sheet.getByRole('link', { name: 'Model', exact: true }).click();
   await sheet.getByLabel('Effort').selectOption('high');
   await sheet.getByRole('button', { name: 'Save', exact: true }).click();

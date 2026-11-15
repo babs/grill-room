@@ -348,11 +348,21 @@ export async function unfoldTabs(nav) {
   if ((await menu.isVisible()) && (await menu.getAttribute('aria-expanded')) === 'false') await menu.click();
 }
 
-// menuItem picks an item of a header menu (005-AC32): the room's name (room), the user's initials (me)
-// or the audio options (voice).
-export async function menuItem(page, name, which = 'room') {
-  await page.locator({ room: '#room-open', me: '#me', voice: '#voice-more' }[which]).click();
+// openMenu opens a header menu (005-AC32): the room's name (room), the user's initials (me) or the
+// audio options (voice), and returns it. A click on its button while the page is still drawing the
+// room can leave the menu shut: it clicks again until the menu shows.
+export async function openMenu(page, which = 'room') {
   const menu = page.locator({ room: '#room-menu', me: '#me-menu', voice: '#voice-menu' }[which]);
+  await expect(async () => {
+    if (!(await menu.evaluate((m) => m.matches(':popover-open')))) await page.locator({ room: '#room-open', me: '#me', voice: '#voice-more' }[which]).click();
+    await expect(menu).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
+  return menu;
+}
+
+// menuItem picks an item of a header menu (openMenu).
+export async function menuItem(page, name, which = 'room') {
+  const menu = await openMenu(page, which);
   await menu.getByRole(['My rooms and profile', 'Open documents in a new window', 'Open chat in a new window'].includes(name) ? 'link' : 'button', { name, exact: true }).click();
 }
 
@@ -404,6 +414,17 @@ export async function personaSheet(page, name, tab = 'Identity') {
   await sheet.locator('#persona-tabs').getByRole('link', { name: tab, exact: true }).click();
   await expect(sheet.locator(`section[data-tab="${tab.toLowerCase()}"]`)).toBeVisible();
   return sheet;
+}
+
+// editPersona runs edit, a fill, on the open persona sheet until its Save counts the change. The
+// form is redrawn once after it opens, when the skills read comes back: a fill that took its field
+// just before writes into the replaced one, and is lost. A form with a change is never redrawn.
+export async function editPersona(sheet, edit) {
+  const save = sheet.getByRole('button', { name: 'Save', exact: true });
+  await expect(async () => {
+    await edit();
+    await expect(save).toBeEnabled({ timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
 }
 
 // personaAction runs an item of the open persona sheet's ⋯ menu (009-AC3).
@@ -601,25 +622,31 @@ export const fakeLiveKit = `window.LivekitClient = (() => {
 })();
 `;
 
+// patchJSON answers the requests to url, on a page or a context, with the server's JSON answer
+// through patch, which returns the new body. An error answer passes through as it is. A reload
+// can drop the request, or dispose its answer mid-body: nobody waits for it then, and the test
+// goes on.
+export async function patchJSON(target, url, patch) {
+  await target.route(url, async (r) => {
+    let res;
+    try {
+      res = await r.fetch();
+    } catch {
+      await r.abort().catch(() => {});
+      return;
+    }
+    const json = await res.json().catch(() => null);
+    await r.fulfill(json && res.ok ? { response: res, json: patch(json) } : { response: res }).catch(() => {});
+  });
+}
+
 // fakeCall gives page's room a call: the LiveKit stand-in, a voice token, voice (and extra) in the
 // room answer, and a getUserMedia that window.denyMic turns into a refusal with denied's text.
 export async function fakeCall(page, roomID, extra = {}, denied = 'Permission denied') {
   const ctx = page.context();
   await ctx.route('**/static/vendor/livekit-client.umd.js', (r) => r.fulfill({ contentType: 'text/javascript', body: fakeLiveKit }));
   await ctx.route(`**/api/rooms/${roomID}/voice`, (r) => r.fulfill({ json: { url: 'ws://127.0.0.1:9', token: 't' } }));
-  await ctx.route(`**/api/rooms/${roomID}`, async (r) => {
-    let res;
-    try {
-      res = await r.fetch();
-    } catch {
-      // A reload dropped the request: nothing is waiting for it.
-      await r.abort().catch(() => {});
-      return;
-    }
-    // An error answer passes through as it is; a reload mid-body (Firefox disposes it) leaves no one to answer.
-    const json = await res.json().catch(() => null);
-    await r.fulfill(json && res.ok ? { response: res, json: { ...json, voice: true, ...extra } } : { response: res }).catch(() => {});
-  });
+  await patchJSON(ctx, `**/api/rooms/${roomID}`, (json) => ({ ...json, voice: true, ...extra }));
   await ctx.addInitScript((text) => {
     window.denyMic = false;
     navigator.mediaDevices.getUserMedia = async () => {

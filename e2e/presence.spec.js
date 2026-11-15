@@ -200,6 +200,8 @@ test('a person menu, not in-place settings', async ({ browser, request }) => {
   const ids = await alice.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()).then((d) => d.participants.map((p) => p.id)), room.id);
   expect((await request.put(`/api/rooms/${room.id}/admins/${ids[0]}`, { headers: admin })).status()).toBe(204);
   await alice.reload();
+  // The list first: a count of zero passes before the page has drawn it.
+  await expect(row(alice, 'Bob')).toBeVisible();
   await expect(alice.locator('#participants :is(input, label)')).toHaveCount(0);
   await expect(bob.locator('#participants .person-more:not([disabled])')).toHaveCount(1);
   await row(bob, 'Bob').locator('.person-more').click();

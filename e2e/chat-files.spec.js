@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, dropFiles, smallTargets, messageAction } from './helpers.js';
+import { roomWith, dropFiles, smallTargets, messageAction, patchJSON } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const sizes = { desktop: { width: 1440, height: 900 }, phone: { width: 390, height: 844 } };
@@ -150,7 +150,7 @@ for (const [size, viewport] of Object.entries(sizes)) {
 // 029-AC3: a fifth file, an oversize one and an unaccepted one are refused on the spot, in the
 // server's words, before any request.
 test('files refused on the spot', async ({ browser, request }) => {
-  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await alice.setViewportSize(sizes.desktop);
   const posts = [];
   alice.on('request', (r) => { if (r.method() === 'POST' && r.url().endsWith('/messages')) posts.push(r.url()); });
@@ -176,7 +176,9 @@ test('files refused on the spot', async ({ browser, request }) => {
   expect(posts).toEqual([]);
 
   // Before the room has loaded, a file is not dropped silently: the composer says to add it again.
-  await alice.evaluate(() => { uploadRules = null; });
+  // The room's answer holds no rules, so no reload brings them back.
+  await patchJSON(alice, `**/api/rooms/${room.id}`, (json) => ({ ...json, upload: null }));
+  await alice.evaluate(() => loadRoom());
   await dropFiles(alice, '.chat', [{ name: 'early.md', type: 'text/markdown', body: '# Early' }]);
   await expect(alice.locator('#send-error')).toHaveText('The room is still loading, try again in a moment');
   await expect(pending(alice)).toHaveCount(3);

@@ -302,7 +302,8 @@ test('screen share', async ({ browser, request }) => {
   // 030-AC6: a 160 × 90 tile gets a low layer, and keeps it once the bandwidth estimate has ramped
   // up: without adaptiveStream, the top layer (1280) arrives here within about 12 s.
   const camWidth = async () => (await remoteVideo(b)).find((v) => v.source === 'camera')?.width || 0;
-  await expect.poll(camWidth).toBeGreaterThan(0);
+  // The first frames may come on the top layer, before the SFU hears the tile's size.
+  await expect.poll(async () => { const w = await camWidth(); return w > 0 && w <= 640; }, { timeout: 10_000 }).toBe(true);
   for (let i = 0; i < 15; i++) {
     expect(await camWidth()).toBeLessThanOrEqual(640);
     await b.waitForTimeout(1000);
@@ -928,6 +929,14 @@ test('several screen shares', async ({ browser, request }) => {
   await a.evaluate(() => document.exitFullscreen().catch(() => {}));
   await expect.poll(() => a.evaluate(() => document.fullscreenElement)).toBeNull();
   // An Escape a browser delivers right after leaving full screen is that exit's, not the stage's.
+  // fullscreenchange comes frames late here, as on a loaded machine, and the first exit is older
+  // than the stage's 150 ms window: neither the event nor that exit's stamp covers this Escape.
+  await a.evaluate(() => window.addEventListener('fullscreenchange', (e) => {
+    if (e.late) return;
+    e.stopImmediatePropagation();
+    setTimeout(() => document.dispatchEvent(Object.assign(new Event('fullscreenchange'), { late: true })), 100);
+  }, true));
+  await a.waitForTimeout(300);
   await a.getByRole('button', { name: 'Full screen', exact: true }).click();
   await expect.poll(() => a.evaluate(() => document.fullscreenElement?.id)).toBe('stage-main');
   await a.evaluate(async () => {

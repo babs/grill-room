@@ -1,6 +1,12 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from '@playwright/test';
 import { quietPush } from './quiet-push.js';
 import { withFreshDB } from './pgdb.js';
+
+// The browsers and the servers see only the fonts in fonts/ (fonts.conf): text measures the same
+// on every machine. Set here, the workers and the web servers inherit it.
+const fontsDir = fileURLToPath(new URL('./fonts/', import.meta.url));
+process.env.FONTCONFIG_FILE = fontsDir + 'fonts.conf';
 
 const port = process.env.GRILL_ROOM_E2E_PORT || '7690';
 const baseURL = `http://127.0.0.1:${port}`;
@@ -18,7 +24,7 @@ const deviceSpec = 'device-stt.spec.js';
 // mentions.spec.js: its daemon tests skip there, the firefox project runs beside the parallel one.
 const firefoxSpecs = ['doc-frames.spec.js', 'documents.spec.js', 'ui-guards.spec.js', 'isolation.spec.js', 'mentions.spec.js', 'screen-capture.spec.js',
   // 042-AC7's return leans on queued dialog closes and history traversal: both engines.
-  'call-overview.spec.js', 'help.spec.js'];
+  'call-overview.spec.js', 'help.spec.js', 'fonts.spec.js'];
 
 // The specs whose daemons run agent turns, each in a Docker sandbox.
 const sandboxSpecs = ['admin', 'agent', 'approvals', 'concurrency', 'egress', 'export-import', 'handoff', 'mentions', 'personas',
@@ -43,9 +49,10 @@ export default defineConfig({
     { name: 'device', testMatch: deviceSpec, testIgnore: otherStacks, workers: 1, outputDir: 'test-results/device' },
     { name: 'sandbox', testMatch: sandboxSpecs, testIgnore: otherStacks, workers: 1, outputDir: 'test-results/sandbox' },
     // Firefox enforces COEP on the sandboxed document frame where Chrome does not. Playwright's
-    // Firefox ships with its PDF viewer off.
+    // Firefox ships with its PDF viewer off. Its content sandbox reads no font outside the system's
+    // font folders unless listed.
     { name: 'firefox', testMatch: firefoxSpecs, testIgnore: otherStacks, outputDir: 'test-results/firefox',
-      use: { browserName: 'firefox', channel: '', launchOptions: { firefoxUserPrefs: { 'pdfjs.disabled': false } } } },
+      use: { browserName: 'firefox', channel: '', launchOptions: { firefoxUserPrefs: { 'pdfjs.disabled': false, 'security.sandbox.content.read_path_whitelist': fontsDir } } } },
   ],
   // The installed Chrome: no browser download.
   // On CI a failed test keeps its trace: what a flake did is in the artifact.

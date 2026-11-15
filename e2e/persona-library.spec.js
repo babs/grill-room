@@ -1,9 +1,10 @@
 import { test, expect } from './fixtures.js';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { roomWith, personaSheet, agentState, uniq, appointAdmin, fakeDaemon, skillZip, patchPersona, menuItem, personaRow, confirmSheet,
-  noOverflow, smallTargets, openStrip } from './helpers.js';
+  noOverflow, smallTargets, openStrip, patchJSON, editPersona } from './helpers.js';
 import { adminToken, gitPort } from './playwright.config.js';
 
 // call sends a JSON request with page's session and returns its status and body.
@@ -15,7 +16,7 @@ const call = (page, method, path, body) => page.evaluate(async ([m, p, b]) => {
 // publishPlugin commits a one-plugin repo, babs, and publishes it bare where the e2e git server
 // (tools/e2egit) serves it; it returns its link.
 function publishPlugin(name) {
-  const work = mkdtempSync(join('test-results', 'repo-'));
+  const work = mkdtempSync(join(tmpdir(), 'grill-room-e2e-repo-'));
   mkdirSync(join(work, '.claude-plugin'));
   writeFileSync(join(work, '.claude-plugin/plugin.json'), '{"name":"babs","version":"1.0.0","description":"e2e fixture","author":{"name":"e2e"}}\n');
   mkdirSync(join(work, 'commands'));
@@ -24,6 +25,7 @@ function publishPlugin(name) {
     GIT_AUTHOR_EMAIL: 'e2e@example.invalid', GIT_COMMITTER_NAME: 'e2e', GIT_COMMITTER_EMAIL: 'e2e@example.invalid' };
   for (const args of [['init', '-q', '-b', 'main'], ['add', '-A'], ['commit', '-q', '-m', 'fixture']]) execFileSync('git', args, { cwd: work, env });
   execFileSync('git', ['clone', '-q', '--bare', work, resolve('test-results/git', name + '.git')], { env });
+  rmSync(work, { recursive: true });
   return `https://example.com:${gitPort}/${name}.git`;
 }
 
@@ -64,7 +66,7 @@ test('persona library: save to my personas from a room', async ({ browser, reque
   await expect(source).toHaveText(/^From Grill v\d+, built in\.$/);
   const menu = alice.locator('#persona-menu');
 
-  await sheet.getByLabel('Persona text').fill('Sharper.');
+  await editPersona(sheet, () => sheet.getByLabel('Persona text').fill('Sharper.'));
   await sheet.getByRole('link', { name: 'Triggers', exact: true }).click();
   await sheet.getByLabel('Speaks up').selectOption('every_n');
   await sheet.getByLabel('N', { exact: true }).fill('3');
@@ -379,6 +381,9 @@ test('persona library: the Personas sheet rows', async ({ browser, request }, te
   await expect(alice.locator('#persona-sheet-title')).toHaveText('🔥 Grill');
   await alice.locator('#persona-sheet').getByRole('button', { name: 'Close' }).click();
 
+  // From here the room's answer has no profile, not a page variable: each room event reloads the
+  // room, and the answer to the reload this Remove sets off would put the profile back.
+  await patchJSON(alice, `**/api/rooms/${room.id}`, (json) => ({ ...json, profile: null }));
   // Remove from the persona sheet's own ⋯ closes it, and the focus waits on Add a persona.
   expect((await call(alice, 'POST', `/api/rooms/${room.id}/personas`, { template_id: sec.id })).status).toBe(201);
   await panel.getByRole('button', { name: 'More actions for Secretary', exact: true }).click();
@@ -390,14 +395,8 @@ test('persona library: the Personas sheet rows', async ({ browser, request }, te
   await expect(personaRow(alice, 'Secretary')).toHaveCount(0);
   await expect(add).toBeFocused();
 
-  // Without a profile, saving says why and does nothing. Every room reload sets hasProfile again
-  // (the removal above posts a line): the room answer is served without its profile from here on.
-  await alice.route(`**/api/rooms/${room.id}`, async (route) => {
-    if (route.request().method() !== 'GET') return route.fallback();
-    const res = await route.fetch();
-    await route.fulfill({ response: res, json: { ...(await res.json()), profile: null } });
-  });
-  await alice.evaluate(() => { hasProfile = false; });
+  // Without a profile, saving says why and does nothing.
+  await alice.evaluate(() => loadRoom());
   await more.click();
   const noProfile = menu.getByRole('button', { name: 'Saving personas needs a profile', exact: true });
   await expect(noProfile).toHaveAttribute('aria-disabled', 'true');
@@ -415,7 +414,7 @@ test('persona library: the Personas sheet rows', async ({ browser, request }, te
   expect(await noProfile.evaluate((b) => getComputedStyle(b).backgroundColor)).toBe('rgba(0, 0, 0, 0)');
   await alice.keyboard.press('Escape');
   await alice.unroute(`**/api/rooms/${room.id}`);
-  await alice.evaluate(() => { hasProfile = true; });
+  await alice.evaluate(() => loadRoom());
 
   // Remove asks first, as the persona sheet's ⋯ does.
   await more.click();

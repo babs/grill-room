@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, fakeCall, appointAdmin, agentState, patchPersona, noOverflow, smallTargets } from './helpers.js';
+import { roomWith, fakeCall, appointAdmin, agentState, patchPersona, noOverflow, smallTargets, editPersona, openMenu } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const absent = 'Not available on this server: the server admin turns it on.';
@@ -13,8 +13,7 @@ const lines = (page, list) => page.locator(`#ov-${list} [data-row]`).evaluateAll
 
 // openFrom opens the overview from the room menu or the Audio options menu.
 async function openFrom(page, which = 'room') {
-  await page.locator(which === 'room' ? '#room-open' : '#voice-more').click();
-  await page.locator(which === 'room' ? '#room-menu' : '#voice-menu').getByRole('link', { name: 'Call and voice-to-text…' }).click();
+  await (await openMenu(page, which === 'room' ? 'room' : 'voice')).getByRole('link', { name: 'Call and voice-to-text…' }).click();
   await expect(sheet(page)).toBeVisible();
   await expect(page).toHaveURL(/#call-overview$/);
   await expect(sheet(page).getByRole('heading', { name: 'Call and voice-to-text' })).toBeVisible();
@@ -387,12 +386,7 @@ test('call overview: links out and back', async ({ browser, request }) => {
   // A Save that jumps to the tab of an invalid field keeps the way back.
   await grillLink.click();
   const ps = alice.locator('#persona-sheet');
-  // The form may redraw once its skills read lands, before anything is typed: a fill on the
-  // replaced field would be lost, so fill until the sheet counts the change.
-  await expect(async () => {
-    await ps.getByLabel('Name').fill('');
-    await expect(ps.getByRole('button', { name: 'Save', exact: true })).toBeEnabled({ timeout: 500 });
-  }).toPass();
+  await editPersona(ps, () => ps.getByLabel('Name').fill(''));
   await ps.getByRole('link', { name: 'Model', exact: true }).click();
   await ps.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(alice).toHaveURL(new RegExp(`#personas/${grill.id}/identity$`));

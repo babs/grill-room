@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures.js';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { roomWith, appointAdmin, fakeDaemon, agentState, openStrip, personaSheet, closePersonas, confirmSheet, noOverflow, smallTargets, uniq } from './helpers.js';
 import { gitPort } from './playwright.config.js';
@@ -36,7 +37,8 @@ const gitEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/
 // newRepo commits files and publishes the repo bare where the e2e git server (tools/e2egit)
 // serves it. commit(more) adds a commit and publishes it; both return the commit.
 function newRepo(name, files) {
-  const work = mkdtempSync(join('test-results', 'repo-'));
+  // Out of test-results/, which CI uploads: upload-artifact refuses a path with a quote, as this repo's.
+  const work = mkdtempSync(join(tmpdir(), 'grill-room-e2e-repo-'));
   const bare = resolve('test-results/git', name + '.git');
   const git = (...args) => execFileSync('git', args, { cwd: work, env: gitEnv, encoding: 'utf8' }).trim();
   const commit = (fs) => {
@@ -452,6 +454,8 @@ test('empty capabilities and room skills link to their place', async ({ browser,
   // A fresh page: the Personas sheet stays open under Room settings.
   await alice.goto(alice.url().split('#')[0] + '#manage/skills');
   await alice.reload();
+  // The room first: the sheet is hidden before the page has read anything.
+  await expect(alice.locator('#me')).not.toBeEmpty();
   await expect(alice.locator('#personas')).toBeHidden();
   const toSheet = alice.locator('#panel-skills').getByRole('button', { name: 'the Personas sheet' });
   // It reads as a link inside the sentence, not on a row of its own: inline computes inline-block for a button.
