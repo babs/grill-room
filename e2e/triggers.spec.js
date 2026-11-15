@@ -24,7 +24,7 @@ test('triggers: chain pause, re-arm, suspend', async ({ browser, request, baseUR
   try {
     await pairDaemon(alice, daemon);
     await openPersonas(alice);
-    panel = alice.locator('#personas');
+    panel = alice.locator('#ai');
     await panel.getByLabel('Auto-turn limit').fill('3');
     await panel.getByRole('button', { name: 'Set' }).click();
     await expect(panel.locator('#personas-status')).toHaveText('Auto-turn limit set to 3.');
@@ -142,7 +142,7 @@ test('triggers: the notes watcher', async ({ browser, request, baseURL }) => {
   await expect(personaRow(alice, 'Secretary').locator('.watch')).toBeVisible();
   await expect(personaRow(alice, 'Secretary')).toHaveAttribute('aria-label', /Secretary: .*, watches the notes, /);
   await expect(personaRow(alice, 'Grill').locator('.watch')).toBeHidden();
-  await alice.locator('#personas').getByRole('button', { name: 'Close' }).click();
+  await alice.locator('#ai').getByRole('button', { name: 'Close' }).click();
   await expect(alice.getByRole('button', { name: /^Secretary, watches the notes: / }).locator('.watch')).toHaveAttribute('data-tip', 'Watches the notes');
 
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);

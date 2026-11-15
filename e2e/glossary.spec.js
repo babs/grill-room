@@ -18,5 +18,5 @@ test('a member edits the transcription glossary', async ({ browser, request }) =
   await expect(alice.locator('.msg.system', { hasText: 'Bob changed the transcription glossary' })).toHaveCount(1);
   await form.getByLabel('Words to recognise').fill('x'.repeat(61));
   await form.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(bob.locator('#ai .said')).toContainText('at most 60 characters');
+  await expect(bob.locator('#ai-settings .said')).toContainText('at most 60 characters');
 });

@@ -192,8 +192,8 @@ async function loadRoom() {
   }
   ttsOn = !!data.tts;
   showManage();
-  // An appointment or a step-down changes who turns plugins on (Capabilities).
-  renderPersonaSheet();
+  // An appointment or a step-down changes who turns plugins on (Capabilities) and who removes room skills.
+  renderPersonas();
   renderParticipants();
   // An open sheet follows the hash again, now that the room says who the viewer is: the role sets
   // its tabs (040-AC3). A closed one, maybe still holding its hash until its close event, stays closed.
@@ -1490,7 +1490,7 @@ $('strip-more').addEventListener('click', () => {
   updateStrip();
 });
 
-// Room settings, its tabs and its deep links are admin/room-admin.js's (004-AC8, 005-AC15), and so are AI in this room's tabs but Status (040-AC6).
+// Room settings, its tabs and its deep links are admin/room-admin.js's (004-AC8, 005-AC15), and so are AI in this room's tabs but Status and Personas (040-AC6).
 
 // Menus are popovers (005-AC32): the browser closes them on a click outside and on Escape; picking
 // an item closes them too.
@@ -3760,7 +3760,7 @@ function removeItem(p) {
     // Its sheet goes, and its row with the next update: the focus waits on the list's primary
     // action, which the persona sheet's modal would keep inert.
     if ($('persona-sheet').open) $('persona-sheet').close();
-    if ($('personas').open) $('persona-add').focus();
+    if (personasShown()) $('persona-add').focus();
   }, 'danger');
 }
 
@@ -3822,17 +3822,45 @@ let skillLib = { skills: [], disclaimer: false, no_profile: false };
 // scopeNote tells a personal or room skill from a shared one.
 const scopeNote = (k) => ({ personal: ' (personal)', room: ' (room)' }[k.scope] || '');
 
+// skillButton is the room skill list's button named label, or Add a persona once it went.
+const skillButton = (label) => [...$('room-skill-list').querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === label) || $('persona-add');
+
 // renderRoomSkills lists the room's own skills, and offers the member's personal skills to copy in
 // (004-AC10).
 function renderRoomSkills() {
   const own = agent.room_skills || [];
-  $('room-skill-list').replaceChildren(...own.map((k) => {
-    const li = document.createElement('li');
-    li.dataset.skill = k.name;
-    li.textContent = k.name + ' v' + k.version + ', copied by ' + k.author + (k.pending ? ': waits for the AI host\'s approval' : '');
-    return li;
-  }));
-  if (!own.length) $('room-skill-list').append(Object.assign(document.createElement('li'), { className: 'empty', textContent: 'None yet.' }));
+  const list = $('room-skill-list');
+  // Drawn again only on a change: a Remove replaced under a press would lose its click.
+  const seen = JSON.stringify([meAdmin, own]);
+  if (list.dataset.seen !== seen) {
+    list.dataset.seen = seen;
+    const focused = list.contains(document.activeElement) && document.activeElement.getAttribute('aria-label');
+    list.replaceChildren(...own.map((k) => {
+      const li = document.createElement('li');
+      li.dataset.skill = k.name;
+      li.textContent = k.name + ' v' + k.version + ', copied by ' + k.author + (k.pending ? ': waits for the AI host\'s approval' : '');
+      // A room admin removes it (040-AC7).
+      if (meAdmin) {
+        const b = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-secondary', textContent: 'Remove' });
+        b.setAttribute('aria-label', 'Remove the room skill ' + k.name);
+        b.addEventListener('click', () => {
+          grillConfirm('Remove the room skill ' + k.name + '?', 'Personas that have it on lose it.', 'Remove')
+            .then((yes) => {
+              // A redraw while the confirm was open replaced this button: the focus goes to its new self.
+              if (!b.isConnected) skillButton(b.getAttribute('aria-label')).focus();
+              return yes && sendJSON('DELETE', api + '/skills/' + k.id);
+            })
+            .then((done) => { if (done) personasStatus('Removed the room skill ' + k.name + '.'); })
+            .catch((err) => personasStatus(err.message, true));
+        });
+        li.append(' ', b);
+      }
+      return li;
+    }));
+    if (!own.length) list.append(Object.assign(document.createElement('li'), { className: 'empty', textContent: 'None yet.' }));
+    // A focused Remove stays on its redrawn self, or waits on Add a persona once its skill went.
+    if (focused) skillButton(focused).focus();
+  }
   const mine = skillLib.skills.filter((x) => x.scope === 'personal' && !own.some((k) => k.name === x.name));
   $('room-skill-copy').hidden = !mine.length;
   const chosen = $('room-skill-source').value;
@@ -4175,11 +4203,16 @@ function markWatch(el, on) {
 // rowState is the list's word for a persona's state (009-AC1).
 const rowState = (p) => ({ pending: 'waiting for approval', busy: 'working', queued: 'queued', on: 'ready' }[personaState(p).cls] || 'offline');
 
+// personasShown: AI in this room shows its Personas tab (040-AC7).
+const personasShown = () => $('ai').open && !$('panel-personas').hidden;
+// skillsAsked: #manage/skills asked for the room skills, which the Personas tab scrolls to (040-AC2).
+let skillsAsked = false;
+
 // renderPersonas refreshes the open sheets: the list of one-line rows (009-AC1), updated in place
 // so a focused row keeps its focus, and the open persona's sheet.
 function renderPersonas() {
   renderPersonaSheet();
-  if (!$('personas').open) return;
+  if (!personasShown()) return;
   renderRoomSkills();
   const list = $('persona-list');
   const kept = new Map([...list.children].map((li) => [li.dataset.id, li]));
@@ -4220,6 +4253,15 @@ function renderPersonas() {
     li.remove();
   }
   rows.forEach((li, i) => { if (list.children[i] !== li) list.insertBefore(li, list.children[i] || null); });
+  scrollToSkills();
+}
+
+// scrollToSkills scrolls the Personas tab to the room skills #manage/skills asked for, once the
+// personas are known: the skills would move down after the scroll.
+function scrollToSkills() {
+  if (!skillsAsked || !agentSeen || !personasShown()) return;
+  skillsAsked = false;
+  $('room-skills').scrollIntoView({ block: 'start' });
 }
 
 // sheetRoute reads #personas/<id>/<tab>; null on any other hash. An unknown tab is Identity.
@@ -4289,7 +4331,7 @@ let sheetReturn = '';
 let sheetReturnStamp = null;
 
 // followPersona opens, moves or closes the persona sheet as the hash says (009-AC2). Room settings
-// follows #manage on its own (admin/room-admin.js).
+// follows #manage on its own (admin/room-admin.js); the AI sheet stays open under it (followAI).
 function followPersona(e) {
   const d = $('persona-sheet');
   if (!sheetRoute()) {
@@ -4312,7 +4354,7 @@ function followPersona(e) {
 addEventListener('hashchange', followPersona);
 // Closed by Escape, a click outside or ✕: the deep link goes too, without a history entry.
 $('persona-sheet').addEventListener('close', () => {
-  // The close event is queued: a Back then Forward may have reopened the sheet meanwhile.
+  // The close event comes a task late: a Back followed meanwhile may have opened the sheet again.
   if ($('persona-sheet').open) return;
   if ($('persona-menu').matches(':popover-open')) $('persona-menu').hidePopover();
   // Opened from the overview or Help, it goes back there (042-AC7); from AI in this room › Personas, there.
@@ -4324,6 +4366,10 @@ $('persona-sheet').addEventListener('close', () => {
     } else history.replaceState(null, '', location.pathname + location.search);
   }
   sheetReturn = '';
+  const id = $('persona-body').firstElementChild?.dataset.id;
+  // Back on the Personas tab, by Escape, ✕ or Back: the focus goes to that persona's row, or to Add
+  // a persona once the persona went (040-AC8, 035-AC17).
+  if (personasShown()) ($('persona-list').querySelector(`li[data-id="${id}"] > .persona-row`) || $('persona-add')).focus();
 });
 $('persona-sheet-close').addEventListener('click', () => $('persona-sheet').close());
 $('persona-menu').addEventListener('beforetoggle', (e) => { if (e.newState === 'open') fillPersonaMenu(); });
@@ -4546,6 +4592,15 @@ let aiShown = '';
 
 // followAI opens, switches or closes the sheet as the hash says: #ai and #ai/<tab> are its deep links (039-AC1, 040-AC1).
 function followAI() {
+  // A persona's sheet opened from this one stacks over it (040-AC8): followPersona has run first.
+  if (sheetRoute() && $('ai').open && /^#ai(\/|$)/.test(sheetReturn)) return;
+  // #manage/skills opens the Personas tab on the room skills, replacing its entry (040-AC2).
+  // replaceState fires no hashchange: this call goes on with the new hash.
+  if (location.hash === '#manage/skills') {
+    skillsAsked = true;
+    // history.state carries the return to the overview or Help (042-AC7).
+    history.replaceState(history.state, '', '#ai/personas');
+  }
   const asked = aiTab(location.hash);
   // An ended room opens no sheet, and the hash would only linger (040-AC2).
   if (asked && ended) history.replaceState(null, '', location.pathname + location.search);
@@ -4558,11 +4613,22 @@ function followAI() {
     want = mine[0][0];
     history.replaceState(history.state, '', '#ai/' + want);
   }
-  if (want && !$('ai').open) $('ai').showModal();
-  else if (!want && $('ai').open) $('ai').close();
+  if (want !== 'personas') skillsAsked = false;
+  // The picker opened from the Personas tab goes with it, its opener with it.
+  if (want !== 'personas' && $('persona-picker').open && $('ai').contains(pickOpener)) {
+    pickOpener = null;
+    $('persona-picker').close();
+  }
+  if (want && !$('ai').open) {
+    // Each opening on Personas reads the library and the skills afresh (showAITab).
+    $('panel-personas').hidden = true;
+    $('ai').showModal();
+  } else if (!want && $('ai').open) $('ai').close();
   if (want) {
     aiShown = location.hash;
     showAITab(mine, want);
+    // Already on the Personas tab, #manage/skills scrolls it now, not on the next redraw.
+    scrollToSkills();
   }
   tellAITab(want);
   renderAI();
@@ -4588,9 +4654,18 @@ function showAITab(mine, t) {
     if (a.id === 'tab-' + t) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   }
-  // Status's own links switch the tab: the focus they held goes to the tab shown, not to the page.
-  const lost = t !== 'status' && $('panel-status').contains(document.activeElement);
-  $('panel-status').hidden = t !== 'status';
+  // A panel's own links, or Back, switch the tab: the focus they held goes to the tab shown, not to the page.
+  const panels = [['status', $('panel-status')], ['personas', $('panel-personas')]];
+  const lost = panels.some(([id, p]) => id !== t && p.contains(document.activeElement));
+  // Shown afresh, the Personas tab reads the library and the skills (040-AC7).
+  const fresh = t === 'personas' && $('panel-personas').hidden;
+  for (const [id, p] of panels) p.hidden = id !== t;
+  if (fresh) {
+    personasStatus('');
+    renderPersonas();
+    loadTemplates().catch(console.error);
+    loadSkills().catch(console.error);
+  }
   window.grillShowTab(nav);
   if (lost) {
     const to = nav.querySelector('#tab-' + t);
@@ -4872,23 +4947,6 @@ async function loadTemplates() {
   if ($('persona-picker').open) renderPicker();
 }
 
-// openPersonas opens the Personas sheet (005-AC40): the list, the room's limits and skills.
-function openPersonas() {
-  personasStatus('');
-  if (!$('personas').open) $('personas').showModal();
-  renderPersonas();
-  loadTemplates().catch(console.error);
-  loadSkills().catch(console.error);
-}
-// AI in this room › Personas (admin/room-admin.js) hands over to the Personas sheet, which opens alone.
-window.grillOpenPersonas = () => {
-  // The Personas sheet replaces the AI sheet: its close must not go back to the overview (042-AC7).
-  history.replaceState(null, '', location.pathname + location.search);
-  $('ai').close();
-  openPersonas();
-};
-$('personas-close').addEventListener('click', () => $('personas').close());
-
 // The persona library picker (035-AC14): Yours, Shared with everyone, Built-in, and what the chosen one does.
 const pickSections = [['Yours', (t) => t.section === 'personal' && t.mine, () => (hasProfile ? 'No personas of yours yet. Save one from a persona\'s ⋯ in a room.'
   : 'Saving personas of your own needs a profile.')],
@@ -4979,7 +5037,7 @@ function renderPreview() {
   }));
 }
 
-// openPicker opens the library picker from "+" or the Personas sheet; closing gives the focus back.
+// openPicker opens the library picker from "+" or the Personas tab; closing gives the focus back.
 function openPicker() {
   pickOpener = document.activeElement;
   $('persona-pick').reset();
@@ -5025,13 +5083,13 @@ $('persona-pick').addEventListener('submit', (e) => {
     // The pill comes with the stream; the words go where the add was asked from.
     const said = addedWords(t, p);
     personasStatus(said);
-    if (!$('personas').open) toast(said);
+    if (!personasShown()) toast(said);
   }).catch((err) => {
     $('persona-pick-status').textContent = err.message;
     // Closed meanwhile: the words go where a success would have gone.
     if (!$('persona-picker').open) {
       personasStatus(err.message, true);
-      if (!$('personas').open) toast(err.message);
+      if (!personasShown()) toast(err.message);
     }
     // A persona gone from the library, or a room filled meanwhile: read the library again, a gone row with it.
     if (err.status === 404 || err.status === 409) loadTemplates().catch(console.error);

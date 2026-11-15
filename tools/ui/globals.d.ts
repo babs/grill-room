@@ -25,8 +25,6 @@ interface Window {
   grillReadersNote?: (p: { id: number; name: string }) => Promise<string>;
   // admin/room-admin.js: opens the creation sheet of a proposal's card (023-AC17).
   grillCreateProposal?: (m: { id: number; body: string; html?: string; proposal: { id: number; name: string; status: string; trigger?: number } }) => void;
-  // room.js: closes AI in this room and opens the Personas sheet (040, AI › Personas).
-  grillOpenPersonas?: () => void;
   // room.js: the AI sheet's shown tab, '' when closed; "grill:ai-tab" follows each change (040-AC6).
   grillAITab?: string;
 }

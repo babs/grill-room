@@ -377,7 +377,7 @@ test('AI in this room: "What\'s missing?" links', async ({ browser, request, bas
     // Inside a sheet the sheet's opener gets the focus back: the room menu's button.
     await missing(bob, caps.locator('li[data-plugin="opt"]'), bob.locator('#room-open'));
     await expect(bob.locator('#persona-sheet')).toBeHidden();
-    await expect(bob.locator('#personas')).toBeHidden();
+    await expect(bob.locator('#ai')).toBeHidden();
   } finally {
     host();
   }

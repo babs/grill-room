@@ -598,7 +598,7 @@ test('wide sheets paint the card surface', async ({ browser, request }) => {
     await alice.emulateMedia({ colorScheme: scheme });
     const surface = await token(alice, '--surface');
     await personaSheet(alice, persona);
-    for (const id of ['#personas', '#persona-sheet']) expect(await alice.locator(id).evaluate((e) => getComputedStyle(e).backgroundColor), `${id} ${scheme}`).toBe(surface);
+    for (const id of ['#ai', '#persona-sheet']) expect(await alice.locator(id).evaluate((e) => getComputedStyle(e).backgroundColor), `${id} ${scheme}`).toBe(surface);
     await closePersonas(alice);
     await alice.goto(alice.url().split('#')[0] + '#manage/general');
     expect(await alice.locator('#manage').evaluate((e) => getComputedStyle(e).backgroundColor), `#manage ${scheme}`).toBe(surface);

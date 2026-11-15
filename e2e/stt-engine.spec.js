@@ -20,7 +20,7 @@ test('glossary tab and model credit follow the workers', async ({ browser, reque
   await expect(bob.locator('#glossary-used')).toHaveText('3 / ~70 terms used');
   await bob.locator('#stt-glossary').getByLabel('Words to recognise').fill('Kubernetes, Helm');
   await bob.locator('#stt-glossary').getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(bob.locator('#ai .said[role="status"]')).toHaveText('Saved: it applies from the next utterance.');
+  await expect(bob.locator('#ai-settings .said[role="status"]')).toHaveText('Saved: it applies from the next utterance.');
   // The credit sits in the audio menu, which needs audio: check its state, not its pixels.
   await expect(bob.locator('#stt-credit')).toHaveAttribute('hidden', '');
 

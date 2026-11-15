@@ -366,12 +366,21 @@ export async function menuItem(page, name, which = 'room') {
   await menu.getByRole(['My rooms and profile', 'Open documents in a new window', 'Open chat in a new window', 'Personas', 'AI in this room'].includes(name) ? 'link' : 'button', { name, exact: true }).click();
 }
 
-// openPersonas opens the Personas sheet: the room menu's Personas opens AI in this room › Personas,
-// whose button opens the sheet (040 phase 1).
+// skillsAtTop says whether the sheet scrolled to put the room skills at its top: its scroll box
+// moved, and the section starts within its first 80 px, or the box went as far as it goes (040-AC2).
+export const skillsAtTop = (page) => page.locator('#room-skills').evaluate((e) => {
+  let box = e.parentElement;
+  while (box && !(/auto|scroll/.test(getComputedStyle(box).overflowY) && box.scrollHeight > box.clientHeight)) box = box.parentElement;
+  if (!box) return 'no scroll box';
+  const gap = e.getBoundingClientRect().top - box.getBoundingClientRect().top;
+  const end = box.scrollTop >= box.scrollHeight - box.clientHeight - 1;
+  return box.scrollTop > 0 && gap >= 0 && (gap < 80 || end) ? 'at top' : `scrollTop ${box.scrollTop}, ${Math.round(gap)} px down`;
+});
+
+// openPersonas opens AI in this room › Personas from the room menu's Personas (040-AC7).
 export async function openPersonas(page) {
   await menuItem(page, 'Personas');
-  await page.locator('#ai').getByRole('button', { name: 'Open the Personas sheet' }).click();
-  await expect(page.locator('#personas')).toBeVisible();
+  await expect(page.locator('#panel-personas')).toBeVisible();
 }
 
 // messageAction runs Edit or Delete on a line through its actions button (005-AC35).
@@ -414,7 +423,7 @@ export const personaRow = (page, name) => page.locator('#persona-list .persona-r
 // personaSheet opens name's sheet from its row in the Personas list, on tab (009-AC2), and returns
 // the sheet; the list stays open under it.
 export async function personaSheet(page, name, tab = 'Identity') {
-  if (!(await page.locator('#personas').isVisible())) await openPersonas(page);
+  if (!(await page.locator('#panel-personas').isVisible())) await openPersonas(page);
   await personaRow(page, name).click();
   const sheet = page.locator('#persona-sheet');
   await expect(sheet.locator('#persona-sheet-title')).toHaveText(new RegExp(` ${name}$`));
@@ -441,11 +450,15 @@ export async function personaAction(page, name) {
   await page.locator('#persona-menu').getByRole('button', { name, exact: true }).click();
 }
 
-// closePersonas closes the persona sheet, when open, then the Personas list.
+// closePersonas closes the persona sheet, when open, then AI in this room under it. Each close
+// event, a task late, sets the hash: the next step waits for it.
 export async function closePersonas(page) {
-  for (const id of ['#persona-sheet', '#personas']) {
+  for (const [id, gone] of [['#persona-sheet', /^#personas\//], ['#ai', /^#ai(\/|$)/]]) {
     const d = page.locator(id);
-    if (await d.isVisible()) await d.getByRole('button', { name: 'Close' }).first().click();
+    if (!(await d.isVisible())) continue;
+    await d.getByRole('button', { name: 'Close' }).first().click();
+    await expect(d).toBeHidden();
+    await expect.poll(() => page.evaluate(() => location.hash)).not.toMatch(gone);
   }
 }
 
@@ -486,10 +499,10 @@ export async function newRoomEditor(page) {
   await page.getByRole('button', { name: 'Use this starter' }).click();
 }
 
-// addFromLibrary adds title, a library persona of section, with the picker the Personas sheet's
-// Add a persona opens (035-AC14); the Personas sheet stays open.
+// addFromLibrary adds title, a library persona of section, with the picker the Personas tab's
+// Add a persona opens (035-AC14); the Personas tab stays open.
 export async function addFromLibrary(page, title, section = 'Built-in') {
-  const panel = page.locator('#personas');
+  const panel = page.locator('#panel-personas');
   if (!(await panel.isVisible())) await openPersonas(page);
   await panel.getByRole('button', { name: 'Add a persona', exact: true }).click();
   const picker = page.locator('#persona-picker');
@@ -513,7 +526,7 @@ export async function addSecretary(page, fields = {}) {
     // 009-AC1: the row says the trigger in words.
     await expect(personaRow(page, 'Secretary').locator('.pr-meta')).toHaveText(`sonnet · effort medium · every ${fields.everyN} answers`);
   }
-  return page.locator('#personas');
+  return page.locator('#ai');
 }
 
 // commentOnDocument saves a whole-document note on the open document (005-AC37 calls them notes).

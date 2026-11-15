@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, appointAdmin, menuItem, fakeDaemon } from './helpers.js';
+import { roomWith, appointAdmin, menuItem, fakeDaemon, skillsAtTop, uniq, openPersonas, personaRow, personaAction, patchPersona, agentState, confirmSheet, skillZip, unfoldTabs } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const settingsTabs = [['general', 'General'], ['admins', 'Members'], ['invites', 'Invites'], ['links', 'Links'], ['documents', 'Deleted documents'], ['export', 'Export']];
@@ -46,11 +46,13 @@ test('room admin: two sheets, the old links land on their new place', async ({ b
   });
   const moved = [['personas', 'personas'], ['plugins', 'plugins'], ['network', 'network'], ['glossary', 'glossary'], ['voices', 'voices'], ['skills', 'personas']];
   for (const [old, tab] of moved) {
+    // Short enough that the room skills start below the fold unless the sheet scrolls to them.
+    if (old === 'skills') await alice.setViewportSize({ width: 1280, height: 420 });
     const added = await go(alice, '#manage/' + old);
     await shows(alice, 'ai', tab, '#ai/' + tab);
     expect(await added(), `#manage/${old}: replaced`).toBe(1);
     // #manage/skills opens AI › Personas on the room skills.
-    if (old === 'skills') await expect(alice.locator('#ai-skills')).toBeInViewport();
+    if (old === 'skills') await expect.poll(() => skillsAtTop(alice)).toBe('at top');
     await closeSheet(alice, 'ai');
   }
   expect(await alice.evaluate(() => window.manageOpened), 'Room settings opened for a moved tab').toBe(0);
@@ -345,4 +347,348 @@ test('a Status link hands the focus to the tab it shows', async ({ browser, requ
   } finally {
     host();
   }
+});
+
+// 040-AC7: the Personas tab is the whole Personas sheet, one list of personas and one of room
+// skills in the page. A plain member copies a skill in and sees no Remove; a room admin removes it
+// there, after the same confirm as Room settings › Skills had. A list redrawn while that confirm is
+// open keeps the focus on the Remove pressed, then on Add a persona once the skill went.
+test('AI › Personas: one list, room skills with Remove for room admins', async ({ browser, request }) => {
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  await appointAdmin(alice, request, room.id);
+  for (const id of ['#persona-list', '#room-skill-list', '#persona-add', '#chain-form', '#parallel-turns', '#room-skill-copy']) {
+    await expect(alice.locator(id), id).toHaveCount(1);
+    await expect(alice.locator('#panel-personas ' + id), id).toHaveCount(1);
+  }
+  await expect(alice.locator('#personas, #manage-personas, #room-admin-skills')).toHaveCount(0);
+
+  const profile = await bob.context().newPage();
+  await profile.goto('/profile');
+  await unfoldTabs(profile.locator('#profile-tabs'));
+  await profile.locator('#tab-skills').click();
+  for (const name of ['bobs', 'bobt']) {
+    await profile.locator('#panel-skills').getByRole('button', { name: 'Add a skill' }).click();
+    await profile.locator('#skill-file').setInputFiles(skillZip(name, 'BOB-v1'));
+    await profile.locator('#skill-sheet').getByRole('button', { name: 'Add skill', exact: true }).click();
+    await expect(profile.locator('#skill-status')).toHaveText(`Added ${name} v1.`);
+  }
+  await profile.close();
+
+  await openPersonas(bob);
+  const copy = bob.locator('#room-skill-copy');
+  await copy.getByLabel('Copy one of your personal skills into the room').selectOption({ label: 'bobs v1' });
+  await copy.getByRole('button', { name: 'Copy' }).click();
+  await expect(bob.locator('#personas-status')).toHaveText('bobs v1 copied into the room.');
+  await expect(bob.locator('#room-skill-list li')).toHaveText(['bobs v1, copied by Bob']);
+  await expect(bob.locator('#room-skill-list button')).toHaveCount(0);
+
+  await openPersonas(alice);
+  const remove = alice.getByRole('button', { name: 'Remove the room skill bobs' });
+  await expect(alice.locator('#room-skill-list li')).toHaveText(['bobs v1, copied by Bob Remove']);
+  // Refused: the server's reason in the tab's status line, as an error, the skill kept.
+  await alice.route(`**/api/rooms/${room.id}/skills/*`, (r) => (r.request().method() === 'DELETE' ? r.fulfill({ status: 403, json: { error: 'room admins only' } }) : r.continue()));
+  await remove.click();
+  await confirmSheet(alice, 'Remove');
+  await expect(alice.locator('#personas-status')).toHaveText('room admins only');
+  await expect(alice.locator('#personas-status')).toHaveClass(/error/);
+  await expect(alice.locator('#room-skill-list li')).toHaveText(['bobs v1, copied by Bob Remove']);
+  await alice.unrouteAll();
+  // Demoted, then appointed again, with the tab open: Remove goes and comes back.
+  // Bob first: the room keeps at least one room admin.
+  const bobID = await bob.evaluate(() => window.grillRoom.me.id);
+  expect((await request.put(`/api/rooms/${room.id}/admins/${bobID}`, { headers: admin })).status()).toBe(204);
+  const me = await alice.evaluate(() => window.grillRoom.me.id);
+  expect((await request.delete(`/api/rooms/${room.id}/admins/${me}`, { headers: admin })).status()).toBe(204);
+  await expect(alice.locator('#room-skill-list button')).toHaveCount(0);
+  await expect(alice.locator('#room-skill-list li')).toHaveText(['bobs v1, copied by Bob']);
+  expect((await request.put(`/api/rooms/${room.id}/admins/${me}`, { headers: admin })).status()).toBe(204);
+  await expect(remove).toHaveCount(1);
+  await remove.click();
+  await expect(alice.locator('dialog.confirm #confirm-title')).toHaveText('Remove the room skill bobs?');
+  await expect(alice.locator('dialog.confirm #confirm-text')).toHaveText('Personas that have it on lose it.');
+  // Bob copies bobt meanwhile: Alice cancels, back on bobs' redrawn Remove.
+  await copy.getByLabel('Copy one of your personal skills into the room').selectOption({ label: 'bobt v1' });
+  await copy.getByRole('button', { name: 'Copy' }).click();
+  await expect(alice.locator('#room-skill-list li')).toHaveCount(2);
+  await alice.locator('dialog.confirm').getByRole('button', { name: 'Cancel' }).click();
+  await expect(remove).toBeFocused();
+  // Bob, a room admin now, removes bobt while Alice confirms bobs.
+  await remove.click();
+  await bob.getByRole('button', { name: 'Remove the room skill bobt' }).click();
+  await confirmSheet(bob, 'Remove');
+  await expect(alice.locator('#room-skill-list li')).toHaveText(['bobs v1, copied by Bob Remove']);
+  await confirmSheet(alice, 'Remove');
+  for (const page of [alice, bob]) await expect(page.locator('#room-skill-list li')).toHaveText(['None yet.']);
+  await expect(alice.locator('#personas-status')).toHaveText('Removed the room skill bobs.');
+  await expect(alice.locator('#personas-status')).not.toHaveClass(/error/);
+  await expect(alice.locator('#ai')).toBeVisible();
+  await expect(alice.locator('#persona-add')).toBeFocused();
+});
+
+// 040-AC8: a persona's sheet opened from AI › Personas, by its row or its ⋯ Edit, stacks over it;
+// closed by Escape, ✕ or Back it returns to #ai/personas, the focus on that persona's row. Back and
+// Forward move between the AI tabs and the persona sheet.
+test('AI › Personas: the persona sheet returns to its row', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize({ width: 1280, height: 800 });
+  const sheet = alice.locator('#persona-sheet');
+  await openPersonas(alice);
+  for (const how of ['Escape', 'close', 'back']) {
+    await personaRow(alice, 'Grill').click();
+    // The title stays from the last opening: the sheet itself says it opened.
+    await expect(sheet).toBeVisible();
+    await expect(sheet.locator('#persona-sheet-title')).toHaveText('🔥 Grill');
+    await expect(alice.locator('#ai'), how).toBeVisible();
+    await expect(alice.locator('dialog[open]')).toHaveCount(2);
+    if (how === 'Escape') await alice.keyboard.press('Escape');
+    else if (how === 'close') await sheet.getByRole('button', { name: 'Close' }).click();
+    else await alice.goBack();
+    await expect(sheet, how).toBeHidden();
+    await expect(alice.locator('#panel-personas'), how).toBeVisible();
+    await expect.poll(() => alice.evaluate(() => location.hash), how).toBe('#ai/personas');
+    await expect(personaRow(alice, 'Grill'), how).toBeFocused();
+  }
+  // From the row's ⋯ Edit, whose menu item is gone once the sheet closes.
+  await alice.locator('#persona-list').getByRole('button', { name: 'More actions for Grill' }).click();
+  await alice.getByRole('button', { name: 'Edit Grill', exact: true }).click();
+  await expect(sheet).toBeVisible();
+  await expect(sheet.locator('#persona-sheet-title')).toHaveText('🔥 Grill');
+  await alice.keyboard.press('Escape');
+  await expect(sheet).toBeHidden();
+  await expect(personaRow(alice, 'Grill')).toBeFocused();
+
+  // 040-AC6: closed from the Personas tab, the AI sheet gives the focus back to its opener, the room's name.
+  await alice.keyboard.press('Escape');
+  await expect(alice.locator('#ai')).toBeHidden();
+  await expect(alice.locator('#room-open')).toBeFocused();
+
+  // Back and Forward: Status, Personas, the persona sheet, and back down again.
+  await menuItem(alice, 'AI in this room');
+  await shows(alice, 'ai', 'status', '#ai');
+  await alice.locator('#ai').getByRole('link', { name: 'Personas', exact: true }).click();
+  await shows(alice, 'ai', 'personas', '#ai/personas');
+  await personaRow(alice, 'Grill').click();
+  await expect(sheet).toBeVisible();
+  await alice.goBack();
+  await expect(sheet).toBeHidden();
+  await shows(alice, 'ai', 'personas', '#ai/personas');
+  await alice.goBack();
+  await shows(alice, 'ai', 'status', '#ai');
+  await alice.goForward();
+  await shows(alice, 'ai', 'personas', '#ai/personas');
+  // Forward reopens it with the focus on a tab: closing still lands on the row.
+  await alice.locator('#ai #tab-personas').focus();
+  await alice.goForward();
+  await expect(sheet).toBeVisible();
+  await expect(sheet.locator('#persona-sheet-title')).toHaveText('🔥 Grill');
+  await expect(alice.locator('#ai')).toBeVisible();
+  await alice.keyboard.press('Escape');
+  await expect(sheet).toBeHidden();
+  await shows(alice, 'ai', 'personas', '#ai/personas');
+  await expect(personaRow(alice, 'Grill')).toBeFocused();
+});
+
+// 040-AC8 035-AC17: the picker cancelled gives the focus back to Add a persona; a persona removed
+// while its row holds the focus, by another session or from its own sheet, hands it to Add a
+// persona. A live change from another session redraws the list, the focus kept. 040-AC7: the tab
+// opened again reads the library afresh.
+test('AI › Personas: picker, removal and a live change keep the focus', async ({ browser, request }) => {
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  await openPersonas(alice);
+  const add = alice.locator('#persona-add');
+  for (const how of ['Cancel', 'Escape']) {
+    await add.click();
+    await expect(alice.locator('#persona-picker')).toBeVisible();
+    if (how === 'Cancel') await alice.locator('#persona-picker').getByRole('button', { name: 'Cancel' }).click();
+    else await alice.keyboard.press('Escape');
+    await expect(alice.locator('#persona-picker'), how).toBeHidden();
+    await expect(alice.locator('#ai'), how).toBeVisible();
+    await expect(add, how).toBeFocused();
+  }
+
+  // A library persona published while the sheet was closed: the tab opened again reads it, before
+  // the picker's own read.
+  await alice.keyboard.press('Escape');
+  await expect(alice.locator('#ai')).toBeHidden();
+  const title = 'Fresh ' + uniq();
+  const published = await alice.request.post(`/api/rooms/${room.id}/templates`, {
+    data: { title, name: 'Fresh', badge: '🌱', colour: '#2f855a', text: 'Fresh eyes.', model: 'sonnet', effort: 'medium' },
+  });
+  expect(published.status()).toBe(201);
+  await openPersonas(alice);
+  await expect.poll(() => alice.evaluate((t) => templates.some((x) => x.title === t), title)).toBe(true);
+  await add.click();
+  await expect(alice.locator('#persona-picker').getByRole('group', { name: 'Yours' }).getByRole('radio', { name: new RegExp(`^${title}, v1`) })).toHaveCount(1);
+  await alice.locator('#persona-picker').getByRole('button', { name: 'Cancel' }).click();
+  await expect(add).toBeFocused();
+
+  // Bob adds a persona and renames Grill: the list follows, the focus stays on Grill's row. The
+  // picker's close event, a task late, gives the focus back to Add a persona first.
+  await alice.evaluate(() => new Promise((done) => setTimeout(done)));
+  await personaRow(alice, 'Grill').focus();
+  const tpls = await bob.evaluate((id) => fetch(`/api/rooms/${id}/templates`).then((r) => r.json()), room.id);
+  const sec = tpls.find((t) => t.name === 'Secretary');
+  expect(await bob.evaluate(([id, t]) => fetch(`/api/rooms/${id}/personas`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ template_id: t }) }).then((r) => r.status), [room.id, sec.id])).toBe(201);
+  const grill = (await agentState(bob, room.id)).personas.find((p) => p.name === 'Grill');
+  expect(await patchPersona(bob, room.id, grill.id, { name: 'Griller' })).toBe(200);
+  await expect(alice.locator('#persona-list .pr-name')).toHaveText(['Griller', 'Secretary']);
+  await expect(personaRow(alice, 'Griller')).toBeFocused();
+
+  // Removed by Bob while its row holds the focus.
+  expect(await bob.evaluate(([id, p]) => fetch(`/api/rooms/${id}/personas/${p}`, { method: 'DELETE' }).then((r) => r.status), [room.id, grill.id])).toBe(204);
+  await expect(alice.locator('#persona-list .pr-name')).toHaveText(['Secretary']);
+  await expect(add).toBeFocused();
+
+  // Removed from its own sheet's ⋯.
+  await personaRow(alice, 'Secretary').click();
+  await expect(alice.locator('#persona-sheet')).toBeVisible();
+  await personaAction(alice, 'Remove Secretary');
+  await confirmSheet(alice, 'Remove');
+  await expect(alice.locator('#persona-sheet')).toBeHidden();
+  await expect(alice.locator('#persona-list .persona-row')).toHaveCount(0);
+  await expect(add).toBeFocused();
+  await expect.poll(() => alice.evaluate(() => location.hash)).toBe('#ai/personas');
+});
+
+// 040-AC8: on a phone AI in this room and the persona sheet over it fill the screen.
+test('AI › Personas: full screen on a phone', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const phone = { width: 390, height: 844 };
+  await alice.setViewportSize(phone);
+  await openPersonas(alice);
+  const fills = (sel) => alice.locator(sel).evaluate((e) => {
+    const r = e.getBoundingClientRect();
+    return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height), e.scrollWidth <= e.clientWidth];
+  });
+  expect(await fills('#ai')).toEqual([0, 0, phone.width, phone.height, true]);
+  await personaRow(alice, 'Grill').click();
+  await expect(alice.locator('#persona-sheet')).toBeVisible();
+  expect(await fills('#persona-sheet')).toEqual([0, 0, phone.width, phone.height, true]);
+  await alice.keyboard.press('Escape');
+  await expect(personaRow(alice, 'Grill')).toBeFocused();
+});
+
+// 040-AC8: Back while the picker is open over AI › Personas takes the picker with the tab: to
+// another tab, or out of the sheet.
+test('AI › Personas: Back closes the picker with the tab', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const picker = alice.locator('#persona-picker');
+  await menuItem(alice, 'AI in this room');
+  await shows(alice, 'ai', 'status', '#ai');
+  await alice.locator('#ai').getByRole('link', { name: 'Personas', exact: true }).click();
+  await shows(alice, 'ai', 'personas', '#ai/personas');
+  await alice.locator('#persona-add').click();
+  await expect(picker).toBeVisible();
+  await alice.goBack();
+  await shows(alice, 'ai', 'status', '#ai');
+  await expect(picker).toBeHidden();
+  await expect(alice.locator('dialog[open]')).toHaveCount(1);
+
+  await alice.goForward();
+  await shows(alice, 'ai', 'personas', '#ai/personas');
+  await alice.locator('#persona-add').click();
+  await expect(picker).toBeVisible();
+  await alice.goBack();
+  await alice.goBack();
+  await expect.poll(() => alice.evaluate(() => location.hash)).toBe('');
+  await expect(picker).toBeHidden();
+  await expect(alice.locator('#ai')).toBeHidden();
+  await expect(alice.locator('dialog[open]')).toHaveCount(0);
+});
+
+// 040-AC2: #manage/skills followed while AI › Personas already shows scrolls it at once, and the ask
+// does not outlive the visit: a later redraw, or the next visit, leaves the scroll alone.
+test('AI › Personas: #manage/skills scrolls once, on its visit', async ({ browser, request }) => {
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  await alice.setViewportSize({ width: 1280, height: 420 });
+  // The tab's own reads done first: their redraw would scroll for a missing one.
+  await Promise.all([alice.waitForResponse((r) => r.url().endsWith(`/api/rooms/${room.id}/agent`)), openPersonas(alice)]);
+  await alice.evaluate(() => new Promise((done) => setTimeout(done, 200)));
+  const top = () => alice.locator('#ai').evaluate((d) => d.scrollTop);
+  expect(await top()).toBe(0);
+  await go(alice, '#manage/skills');
+  await expect.poll(() => alice.evaluate(() => location.hash)).toBe('#ai/personas');
+  await expect.poll(() => skillsAtTop(alice), { timeout: 1000 }).toBe('at top');
+  expect(await top()).toBeGreaterThan(0);
+  await alice.locator('#ai').evaluate((d) => { d.scrollTop = 0; });
+  const grill = (await agentState(bob, room.id)).personas[0];
+  expect(await patchPersona(bob, room.id, grill.id, { name: 'Griller' })).toBe(200);
+  await expect(personaRow(alice, 'Griller')).toHaveCount(1);
+  expect(await top()).toBe(0);
+
+  // Asked before the personas are known, then left for another tab: the next visit starts at the top.
+  let release = () => {};
+  const held = new Promise((done) => { release = done; });
+  await alice.route((u) => u.pathname === `/api/rooms/${room.id}/events`, async (r) => {
+    await held;
+    await r.continue();
+  });
+  const url = alice.url().split('#')[0];
+  await alice.goto('about:blank');
+  await alice.goto(url + '#manage/skills');
+  await shows(alice, 'ai', 'personas', '#ai/personas');
+  await go(alice, '#ai/plugins');
+  await shows(alice, 'ai', 'plugins', '#ai/plugins');
+  release();
+  await expect.poll(() => alice.evaluate(() => agentSeen)).toBe(true);
+  await go(alice, '#ai/personas');
+  await shows(alice, 'ai', 'personas', '#ai/personas');
+  await expect(personaRow(alice, 'Griller')).toHaveCount(1);
+  expect(await top()).toBe(0);
+});
+
+// 040-AC8: a persona sheet reached by Back from an AI tab, then closed, stays in the room on that
+// tab: from a sheet the persona bar opened, and from a deep link the page loaded on.
+test('AI › Personas: a persona sheet reached by Back closes onto the AI tab', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await appointAdmin(alice, request, room.id);
+  const url = alice.url().split('#')[0];
+  const grill = (await agentState(alice, room.id)).personas[0].id;
+  const sheet = alice.locator('#persona-sheet');
+  for (const how of ['pushed', 'deep link']) {
+    if (how === 'pushed') await go(alice, `#personas/${grill}/capabilities`);
+    else {
+      await alice.goto('about:blank');
+      await alice.goto(`${url}#personas/${grill}/capabilities`);
+    }
+    await expect(sheet, how).toBeVisible();
+    await sheet.getByRole('link', { name: 'AI in this room › Plugins' }).click();
+    await shows(alice, 'ai', 'plugins', '#ai/plugins');
+    await expect(sheet, how).toBeHidden();
+    await alice.goBack();
+    await expect(sheet, how).toBeVisible();
+    await expect(alice.locator('#ai'), how).toBeVisible();
+    await alice.keyboard.press('Escape');
+    await expect(sheet, how).toBeHidden();
+    await shows(alice, 'ai', 'plugins', '#ai/plugins');
+    expect(alice.url(), how).toBe(url + '#ai/plugins');
+    await closeSheet(alice, 'ai');
+  }
+});
+
+// 040-AC8: the persona sheet's close event comes a task late; a Back that opened the sheet again
+// meanwhile keeps it open, on its own hash.
+test('AI › Personas: a late close event leaves a reopened persona sheet alone', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const grill = (await agentState(alice, room.id)).personas[0].id;
+  await openPersonas(alice);
+  await personaRow(alice, 'Grill').click();
+  await expect(alice.locator('#persona-sheet')).toBeVisible();
+  const state = await alice.evaluate(async (hash) => {
+    const d = document.getElementById('persona-sheet');
+    /** @type {Event | null} */
+    let held = null;
+    // Held back on its way: the page's listeners see it only once the sheet opened again.
+    addEventListener('close', (e) => { if (e.target === d && !held) { held = e; e.stopImmediatePropagation(); } }, { capture: true });
+    location.hash = '#ai/personas';
+    await new Promise((r) => setTimeout(r, 100));
+    location.hash = hash;
+    await new Promise((r) => setTimeout(r, 100));
+    d.dispatchEvent(new Event('close'));
+    await new Promise((r) => setTimeout(r, 100));
+    return [!!held, d.open, location.hash];
+  }, `#personas/${grill}/identity`);
+  expect(state).toEqual([true, true, `#personas/${grill}/identity`]);
+  await expect(alice.locator('#ai')).toBeVisible();
 });

@@ -544,7 +544,7 @@ test('participant names never break mid-word', async ({ browser, request }) => {
   expect(clipped).toBe(true);
   await expect(name).toHaveCSS('text-overflow', 'ellipsis');
   await openPersonas(alice);
-  await expect(alice.locator('#personas')).toBeVisible();
+  await expect(alice.locator('#ai')).toBeVisible();
 });
 
 // 008-AC12: the new controls at 1440 px share the one control height, the handles show the focus

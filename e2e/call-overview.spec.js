@@ -354,28 +354,22 @@ test('call overview: links out and back', async ({ browser, request }) => {
   await expect(sheet(alice)).toBeVisible();
   await expect(voicesLink).toBeFocused();
 
-  // AI in this room › Personas › a persona: its close returns to AI in this room, whose close returns here.
+  // AI in this room › Personas › a persona, over the AI sheet: its close returns to AI in this room,
+  // whose close returns here.
   await voicesLink.click();
   await aiTab(alice, 'Personas');
   await expect(alice.locator('#ai #tab-personas')).toHaveAttribute('aria-current', 'page');
-  await alice.locator('#manage-personas a').first().click();
+  await alice.locator('#persona-list .persona-row').first().click();
   await expect(alice.locator('#persona-sheet')).toBeVisible();
+  await expect(alice.locator('#ai')).toBeVisible();
   await alice.keyboard.press('Escape');
   await expect(alice.locator('#ai')).toBeVisible();
   await expect(alice).toHaveURL(/#ai\/personas$/);
   await alice.keyboard.press('Escape');
   await expect(sheet(alice)).toBeVisible();
   await expect(voicesLink).toBeFocused();
-
-  // AI in this room hands over to the Personas sheet: that one closes to the room, not here.
-  await voicesLink.click();
-  await aiTab(alice, 'Personas');
-  await alice.locator('#ai').getByRole('button', { name: 'Open the Personas sheet' }).click();
-  await expect(alice.locator('#personas')).toBeVisible();
-  await expect(alice).not.toHaveURL(/#/);
+  // Opened afresh from the room menu: its close at the end hands the focus back to the menu's button.
   await alice.keyboard.press('Escape');
-  await expect(alice.locator('#personas')).toBeHidden();
-  await expect.poll(() => alice.evaluate(() => [location.hash, history.state])).toEqual(['', null]);
   await expect(sheet(alice)).toBeHidden();
   await openFrom(alice);
 
@@ -452,8 +446,10 @@ test('call overview: links out and back', async ({ browser, request }) => {
   await expect(alice.locator('#voice-join')).toBeFocused();
 
   // A reload on a stamped entry keeps the way back through each hand-off of history.state: the
-  // moved-tab redirect, and the fallback to a tab the viewer has, in AI in this room and Room settings.
-  for (const [page, hash, target, to] of [[alice, '#manage/glossary', '#ai', /#ai\/glossary$/], [bob, '#ai/voices', '#ai', /#ai\/status$/],
+  // moved-tab redirects (room-admin.js's, and room.js's for the skills), and the fallback to a tab the
+  // viewer has, in AI in this room and Room settings.
+  for (const [page, hash, target, to] of [[alice, '#manage/glossary', '#ai', /#ai\/glossary$/], [alice, '#manage/skills', '#ai', /#ai\/personas$/],
+    [bob, '#ai/voices', '#ai', /#ai\/status$/],
     [bob, '#manage/general', '#manage', /#manage\/invites$/]]) {
     await openFrom(page);
     await page.evaluate((h) => history.pushState({ origin: '#call-overview', steps: 1 }, '', h), hash);

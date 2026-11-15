@@ -177,9 +177,10 @@ test('persona sheet: one Save for every tab', async ({ browser, request }) => {
 // room.html #personas and room.js personaForm and skillsBlock, read before 009 replaced them: the
 // sheet's element ids, each persona form's field names, and its buttons and select by accessible
 // name. The agent state is played to the page so the host's and the update-only controls show.
+// 040-AC7: the sheet is AI in this room › Personas, whose ✕ is the AI sheet's.
 test('persona sheet: every 005 control is reachable', async ({ browser, request }) => {
   const old005 = {
-    ids: ['personas-close', 'personas-status', 'persona-list', 'chain-form', 'chain-budget', 'parallel-turns',
+    ids: ['personas-status', 'persona-list', 'chain-form', 'chain-budget', 'parallel-turns',
       'persona-add', 'room-skills', 'room-skill-list', 'room-skill-copy', 'room-skill-source'],
     fields: ['name', 'badge', 'colour', 'model', 'effort', 'text', 'trigger', 'every', 'autocompact', 'self_call'],
     sheetButtons: ['Save', 'Turn on the chosen skill for Grill', 'Turn off skill stamp for Grill', 'Update skill stamp of Grill to version 2'],
@@ -204,7 +205,7 @@ test('persona sheet: every 005 control is reachable', async ({ browser, request 
   await alice.reload();
 
   await openPersonas(alice);
-  const list = alice.locator('#personas');
+  const list = alice.locator('#panel-personas');
   for (const id of old005.ids) await expect(list.locator('#' + id), id).toHaveCount(1);
   await expect(list.locator('#room-skill-copy')).toBeVisible();
   // 009-AC1: online and idle reads "ready".
@@ -229,7 +230,7 @@ test('persona sheet: every 005 control is reachable', async ({ browser, request 
 });
 
 // 009-AC2: the sheet owns one history entry, whatever tabs were opened: Back after closing stays
-// closed. Opened from AI in this room › Personas, closing goes back there.
+// closed. Opened from AI in this room › Personas, closing goes back there (040-AC8).
 test('persona sheet: history and the way back to AI in this room', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await openPersonas(alice);
@@ -237,7 +238,7 @@ test('persona sheet: history and the way back to AI in this room', async ({ brow
   await sheet.getByRole('link', { name: 'Triggers', exact: true }).click();
   await expect(alice).toHaveURL(/#personas\/\d+\/triggers$/);
   await sheet.getByRole('button', { name: 'Close' }).click();
-  await expect(alice).not.toHaveURL(/#/);
+  await expect(alice).toHaveURL(/#ai\/personas$/);
   await alice.goBack();
   await expect(alice.locator('#persona-sheet')).toBeHidden();
 
@@ -245,13 +246,14 @@ test('persona sheet: history and the way back to AI in this room', async ({ brow
   expect((await request.put(`/api/rooms/${room.id}/admins/${me}`, { headers: { Authorization: `Bearer ${adminToken}` } })).status()).toBe(204);
   await alice.reload();
   await alice.evaluate(() => { location.hash = '#ai/personas'; });
-  await alice.locator('#manage-personas').getByRole('link', { name: '🔥 Grill' }).click();
-  await expect(alice.locator('#ai')).toBeHidden();
+  await personaRow(alice, 'Grill').click();
+  // 040-AC8: the AI sheet stays open under it.
+  await expect(alice.locator('#ai')).toBeVisible();
   await expect(sheet.locator('#persona-sheet-title')).toHaveText('🔥 Grill');
   await sheet.getByRole('button', { name: 'Close' }).click();
   await expect(alice.locator('#ai')).toBeVisible();
   await expect(alice).toHaveURL(/#ai\/personas$/);
-  await expect(alice.locator('#manage-personas')).toBeVisible();
+  await expect(alice.locator('#persona-list')).toBeVisible();
 });
 
 // 032-AC1 032-AC6: the Timekeeper from the library comes every 5 minutes, as the time keeper,

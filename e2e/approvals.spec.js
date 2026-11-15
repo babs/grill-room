@@ -8,7 +8,7 @@ const lastAgent = (page) => page.locator('#messages li.msg.agent').last();
 // options, and with them a choice made before it.
 async function openPanel(page) {
   await Promise.all([page.waitForResponse((r) => r.url().endsWith('/templates')), openPersonas(page)]);
-  return page.locator('#personas');
+  return page.locator('#ai');
 }
 
 // edit sets model fields of a persona in its sheet's Model tab and saves (009-AC2); the sheet stays
@@ -82,7 +82,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     // Refused: the Secretary keeps running at the cap, and Bob reads why.
     await openPanel(bob);
     await addFromLibrary(bob, 'Secretary');
-    await expect(bob.locator('#personas .persona-row')).toHaveCount(2);
+    await expect(bob.locator('#ai .persona-row')).toHaveCount(2);
     await close(bob);
     ({ status } = await edit(bob, 'Secretary', { Model: 'opus' }));
     await expect(status).toHaveText('Secretary saved. It applies from its next turn.');

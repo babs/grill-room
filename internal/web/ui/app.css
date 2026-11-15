@@ -388,10 +388,10 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); }
 .persona-skills li:not(.empty) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); padding: var(--sp-1) 0; overflow-wrap: anywhere; }
 .persona-skills .skill-add { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 .persona-skills .skill-add select { flex: 1; min-width: 10rem; width: auto; }
-/* Room settings and the AI in this room tabs (admin/room-admin.js); Status has no status line. */
-:is(#manage, #ai) .said { color: var(--danger); }
+/* Room settings and the AI in this room tabs (admin/room-admin.js); the Personas tab's line takes the danger token on an error only. */
+:is(#manage, #ai-settings) .said { color: var(--danger); }
 /* No room taken above the tabs until there is something to say. */
-:is(#manage, #ai) .said:empty { min-height: 0; margin: 0; }
+:is(#manage, #ai-settings) .said:empty { min-height: 0; margin: 0; }
 /* Room plugins (admin/plugins.js): the list, the add sheet and the approval sheet. */
 .persona-plugins li { flex-direction: column; align-items: stretch; gap: 0; }
 .persona-plugins li > label { color: var(--text); }
@@ -927,7 +927,7 @@ button.doc { display: block; overflow: hidden; text-overflow: ellipsis; white-sp
 .persona-lib-badge { flex: none; width: 2rem; text-align: center; font-size: var(--fs-lg); }
 .persona-lib-name { align-self: flex-start; max-width: 100%; height: auto; min-width: 44px; min-height: 44px; padding: 0; border: 0; background: none; color: var(--primary-text); font-weight: 600; text-align: left; overflow-wrap: anywhere; }
 .persona-lib-name:hover { text-decoration: underline; }
-#personas .said:empty, #persona-lib-status:empty { display: none; }
+#personas .said:empty, #personas-status:empty, #persona-lib-status:empty { display: none; }
 .persona-lib-read h3 { margin: var(--sp-4) 0 var(--sp-2); font-size: var(--fs-md); }
 .persona-lib-facts { gap: var(--sp-2) var(--sp-4); }
 .persona-lib-swatch { display: inline-block; width: 1em; height: 1em; vertical-align: -0.15em; border: 1px solid var(--border-strong); border-radius: var(--r-sm); }

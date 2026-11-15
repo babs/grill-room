@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { roomWith, appointAdmin, fakeDaemon, agentState, openStrip, personaSheet, closePersonas, confirmSheet, noOverflow, smallTargets, uniq } from './helpers.js';
+import { roomWith, appointAdmin, fakeDaemon, skillsAtTop, agentState, openStrip, personaSheet, closePersonas, confirmSheet, noOverflow, smallTargets, uniq } from './helpers.js';
 import { gitPort } from './playwright.config.js';
 
 const phone = { width: 390, height: 844 };
@@ -438,8 +438,8 @@ test('plugins: saved in a starter, pending in a room made from it', async ({ bro
   }
 });
 
-// 038-AC4: empty Capabilities link to where skills and plugins are added, and an empty room
-// skills list (AI in this room › Personas, 040-AC9) opens the Personas sheet.
+// 038-AC4: empty Capabilities link to where skills and plugins are added; an empty room skills
+// list (AI in this room › Personas, 040-AC7) says so.
 test('empty capabilities and room skills link to their place', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await appointAdmin(alice, request, room.id);
@@ -452,17 +452,15 @@ test('empty capabilities and room skills link to their place', async ({ browser,
   await caps.getByRole('link', { name: 'AI in this room › Plugins' }).click();
   await expect(alice).toHaveURL(/#ai\/plugins$/);
   await expect(alice.locator('#panel-plugins')).toBeVisible();
-  // A fresh page: #manage/skills lands on AI › Personas, whose room skills list sends to the Personas sheet.
-  await alice.goto(alice.url().split('#')[0] + '#manage/skills');
-  await alice.reload();
-  // The room first: the sheet is hidden before the page has read anything.
+  // A fresh page: #manage/skills lands on AI › Personas, scrolled to the room skills, which a short
+  // viewport keeps below the fold otherwise.
+  await alice.setViewportSize({ width: 1280, height: 420 });
+  const url = alice.url().split('#')[0];
+  await alice.goto('about:blank');
+  await alice.goto(url + '#manage/skills');
+  // The room first: the page reads it before it opens and scrolls the tab.
   await expect(alice.locator('#me')).not.toBeEmpty();
   await expect(alice).toHaveURL(/#ai\/personas$/);
-  await expect(alice.locator('#personas')).toBeHidden();
-  const toSheet = alice.locator('#ai-skills').getByRole('button', { name: 'the Personas sheet' });
-  // It reads as a link inside the sentence, not on a row of its own: inline computes inline-block for a button.
-  expect(await toSheet.evaluate((b) => getComputedStyle(b).display)).toMatch(/^inline/);
-  await toSheet.click();
-  await expect(alice.locator('#personas')).toBeVisible();
-  await expect(alice.locator('#panel-personas')).toBeHidden();
+  await expect.poll(() => skillsAtTop(alice)).toBe('at top');
+  await expect(alice.locator('#room-skill-list li')).toHaveText(['None yet.']);
 });

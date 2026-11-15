@@ -115,3 +115,6 @@ AI › Personas is the whole Personas sheet, room skills included, so Room setti
 - Phase 1 keeps the old Personas and Skills lists, Remove included, as an interim AI › Personas tab until phase 2. Because every commit keeps the `skills` suite green.
 - A bar folds as soon as it overflows by more than half a pixel, so the whole-pixel scroll of a narrowed bar goes. Because AC5 folds at any width and a scrolled bar hides tabs.
 - AC5's "XL text size" is 028's XL plus a 20 px root font. Because 028's XL scales the chat and transcription only, not the sheets' bars.
+- A persona's sheet and the picker open over AI in this room, which stays open under them, and closing the sheet replaces its hash with the tab it came from. Because the old Personas sheet worked that way, and going back through history instead leaves the room when the sheet was reached by Back.
+- `#manage/skills` is redirected by room.js, the other moved tabs by room-admin.js. Because only room.js knows when the Personas tab is drawn, which the scroll to Room skills waits for.
+- 042's hand-over to the Personas sheet goes: a persona's sheet opened from AI in this room › Personas stacks over it, so closing it returns there and then to the overview or Help through 042-AC7's stamp.

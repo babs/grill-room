@@ -271,7 +271,7 @@ for (const name of ['iPhone 15', 'Pixel 7']) {
     };
 
     await openPersonas(page);
-    const panel = page.locator('#personas');
+    const panel = page.locator('#ai');
     await addFromLibrary(page, 'Secretary');
     await expect(panel.locator('.persona-row')).toHaveCount(2);
     await inside(panel);

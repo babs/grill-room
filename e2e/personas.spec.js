@@ -14,7 +14,7 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
   await expect(alice.locator('button.persona')).toHaveCount(1);
   await expect(alice.locator('button.persona[data-name="Grill"]')).toContainText('🔥');
 
-  const panel = alice.locator('#personas');
+  const panel = alice.locator('#ai');
   await openPersonas(alice);
   await expect(panel.locator('.persona-row')).toHaveCount(1);
   await addFromLibrary(alice, 'Secretary');

@@ -1,5 +1,5 @@
 // The room's Room settings sheet (004-AC8, 004-AC19, 005-AC15) and the AI in this room tabs but
-// Status (040-AC6): Preact, htm and signals, like /admin. room.js, vanilla, hands over the room, the
+// Status and Personas (040-AC6): Preact, htm and signals, like /admin. room.js, vanilla, hands over the room, the
 // agent state and the transcription state it loads as window.grillRoom, window.grillAgent and
 // window.grillSTT, each followed by an event. Each tab is a deep link, #manage/<tab> or #ai/<tab>;
 // room.js opens and closes the AI sheet.
@@ -15,9 +15,8 @@ import { PluginsTab, mountReview } from './plugins.js';
  * @typedef {{id: number, name: string, admin: boolean}} Participant
  * @typedef {{quiet_ms: number, resume_s: number, queue_s: number, words: number}} Speech
  * @typedef {{room: {id: string, name: string, speech?: Speech}, me: Participant, participants: Participant[], tts?: boolean, voice?: boolean}} RoomData
- * @typedef {{id: number, name: string, version: number, author: string, pending?: boolean}} RoomSkill
  * @typedef {{id: number, name: string, badge: string, model: string, effort: string, pending?: boolean}} Persona
- * @typedef {{room_skills?: RoomSkill[], personas?: Persona[], host_participant_id?: number, you_host?: boolean, egress_admins_allow?: boolean,
+ * @typedef {{personas?: Persona[], host_participant_id?: number, you_host?: boolean, egress_admins_allow?: boolean,
  *   connectors?: {name: string, actions?: boolean}[]}} AgentState
  * @typedef {{glossary: string, prompt: string, used: number, total: number, capacity: number}} Glossary
  * @typedef {{glossary: boolean, available?: boolean, listening?: boolean}} STTState
@@ -53,28 +52,26 @@ const tabOf = (hash) => (hash === '#manage' ? 'general' : hash === '#links' ? 'l
 const tab = signal(tabOf(location.hash));
 // aiTab is the tab the AI sheet shows, as room.js says, '' when closed; this module mounts all but Status.
 const aiTab = signal(w.grillAITab || '');
-// skillsAsked: #manage/skills asked for the room skills, which AI › Personas scrolls to.
-let skillsAsked = false;
 // opening counts the AI sheet's openings: each starts its tab afresh, an error of the last one gone.
 let opening = 0;
 addEventListener('grill:ai-tab', (e) => {
   const t = /** @type {CustomEvent<string>} */ (e).detail;
   if (t && !aiTab.value) opening++;
   aiTab.value = t;
-  // Another tab, a close or a sheet that opened nothing: the scroll is no longer asked for.
-  if (aiTab.value !== 'personas') skillsAsked = false;
 });
 const dialog = /** @type {HTMLDialogElement} */ (document.getElementById('manage'));
 // shownHash is the hash the open sheet shows: its close drops that one, not a link followed since.
 let shownHash = '';
 const follow = () => {
   const m = moved.exec(location.hash);
+  // room.js takes #manage/skills itself: it scrolls the Personas tab to the room skills.
   if (m) {
-    skillsAsked = m[1] === 'skills';
-    // location.replace drops history.state: it carries the return to the overview or Help (042-AC7).
-    const s = history.state;
-    location.replace('#ai/' + (skillsAsked ? 'personas' : m[1]));
-    if (s) history.replaceState(s, '');
+    if (m[1] !== 'skills') {
+      // location.replace drops history.state: it carries the return to the overview or Help (042-AC7).
+      const s = history.state;
+      location.replace('#ai/' + m[1]);
+      if (s) history.replaceState(s, '');
+    }
     return;
   }
   tab.value = tabOf(location.hash);
@@ -125,14 +122,14 @@ function Manage({ data, tab, tabs }) {
 }
 
 /**
- * AISettings is the open AI in this room tab other than Status (040-AC6), in the sheet room.js
- * opens. Every member reads the room's plugins (009-AC5) and its websites (014) and edits the
+ * AISettings is the open AI in this room tab other than Status and Personas, which are room.js's
+ * (040-AC6), in the sheet room.js opens. Every member reads the room's plugins (009-AC5) and its websites (014) and edits the
  * glossary; Call voices is a room admin's.
  */
 function AISettings() {
   const data = roomData.value;
   const t = aiTab.value;
-  if (!data || !['personas', 'plugins', 'network', 'glossary', 'voices'].includes(t)) return null;
+  if (!data || !['plugins', 'network', 'glossary', 'voices'].includes(t)) return null;
   return html`<${AITab} key=${opening + '/' + t} data=${data} t=${t}/>`;
 }
 
@@ -147,44 +144,11 @@ function AITab({ data, t }) {
   const show = (err) => setSaid(/** @type {Error} */ (err).message);
   return html`${said && html`<p class="said" role="alert">${said}</p>`}
     <div class="tab-panel" id=${'panel-' + t}>
-      ${t === 'personas' && html`<${PersonasTab} data=${data} base=${base} show=${show}/>`}
       ${t === 'plugins' && html`<${PluginsTab} base=${base} admin=${!!data.me.admin} host=${approves(data)} personas=${agentState.value?.personas || []}/>`}
       ${t === 'network' && html`<${NetworkTab} base=${base} host=${isHost(data)} show=${show}/>`}
       ${t === 'glossary' && (sttState.value?.glossary ? html`<${STTGlossary} data=${data}/>` : glossaryNone(data))}
       ${t === 'voices' && (data.tts ? html`<${CallVoices} data=${data} base=${base} show=${show}/>` : unavailable())}
     </div>`;
-}
-
-/**
- * PersonasTab lists the room's personas, each opening its sheet, and the room skills, which a room
- * admin removes; the Personas sheet adds and edits them.
- * @param {{data: RoomData, base: string, show: (err: unknown) => void}} props
- */
-function PersonasTab({ data, base, show }) {
-  const ref = useRef(/** @type {HTMLElement | null} */ (null));
-  const skills = agentState.value?.room_skills || [];
-  const personas = agentState.value?.personas || [];
-  // Once the agent state has drawn the list above them: the skills would move down after the scroll.
-  useEffect(() => {
-    if (!skillsAsked || !agentState.value) return;
-    skillsAsked = false;
-    ref.current?.scrollIntoView({ block: 'start' });
-  });
-  /** @param {RoomSkill} k */
-  const removeSkill = (k) => {
-    window.grillConfirm(`Remove the room skill ${k.name}?`, 'Personas that have it on lose it.', 'Remove')
-      .then((yes) => { if (yes) fetchJSON('DELETE', `${base}/skills/${k.id}`).catch(show); });
-  };
-  const open = () => window.grillOpenPersonas?.();
-  return html`<p class="hint">Every member adds and edits the room's personas in the Personas sheet. A persona's name opens its own sheet.</p>
-    <ul id="manage-personas">${personas.map((p) => html`<li key=${p.id}><span><span class="badge persona-badge">${p.badge}</span> <a href=${'#personas/' + p.id + '/identity'}
-      aria-label=${p.badge + ' ' + p.name}>${p.name}</a> <span class="hint">${p.model} · effort ${p.effort}${p.pending ? ' · waits for the AI host' : ''}</span></span></li>`)}</ul>
-    <button type="button" class="btn-primary" onClick=${open}>Open the Personas sheet</button>
-    <section ref=${ref} id="ai-skills" aria-labelledby="ai-skills-title"><h3 id="ai-skills-title">Room skills</h3>
-      ${skills.length ? html`<ul id="room-admin-skills">${skills.map((k) => html`<li key=${k.id}>${k.name} v${k.version}, copied by ${k.author}
-          ${data.me.admin && html`${' '}<button type="button" class="btn-secondary" onClick=${() => removeSkill(k)} aria-label=${'Remove the room skill ' + k.name}>Remove</button>`}</li>`)}</ul>`
-      : html`<p class="empty" id="room-admin-skills-empty">None yet. Members copy their personal skills in from <button type="button" class="text-link" onClick=${open}>the Personas sheet</button>.</p>`}
-    </section>`;
 }
 
 // A setting whose engine this server lacks keeps its place and says so (038-AC12).

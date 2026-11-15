@@ -256,7 +256,7 @@ test('a room skill survives its author leaving', async ({ browser, request, base
   const copy = bob.locator('#room-skill-copy');
   await expect(copy.getByLabel('Copy one of your personal skills into the room').locator('option')).toHaveText(['bobs v1']);
   await copy.getByRole('button', { name: 'Copy' }).scrollIntoViewIfNeeded();
-  expect(await bob.locator('#personas').evaluate((d) => d.scrollWidth <= d.clientWidth)).toBe(true);
+  expect(await bob.locator('#ai').evaluate((d) => d.scrollWidth <= d.clientWidth)).toBe(true);
   await copy.getByRole('button', { name: 'Copy' }).click();
   await expect(bob.locator('#personas-status')).toHaveText('bobs v1 copied into the room.');
   await expect(bob.locator('#room-skill-list li')).toHaveText(['bobs v1, copied by Bob']);

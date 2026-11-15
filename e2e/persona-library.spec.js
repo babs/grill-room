@@ -237,7 +237,7 @@ test('persona library: add a library persona with its skill and plugin', async (
   }
 });
 
-// 035-AC15: at 12 personas the picker's Add and the Personas sheet's Add a persona are aria-disabled,
+// 035-AC15: at 12 personas the picker's Add and the Personas tab's Add a persona are aria-disabled,
 // focusable and drawn disabled, with "A room holds 12 personas at most." in words beside each; "+"
 // stays live, the reason in its description, and opens the picker that explains. The server refuses
 // a 13th in the same words. One fewer and both work again, and a double press on Add adds one.
@@ -285,7 +285,7 @@ test('persona library: a room of 12 personas', async ({ browser, request }, test
   await expect(plus).toBeFocused();
 
   await openPersonas(alice);
-  const sheetAdd = alice.locator('#personas').getByRole('button', { name: 'Add a persona', exact: true });
+  const sheetAdd = alice.locator('#ai').getByRole('button', { name: 'Add a persona', exact: true });
   await expect(sheetAdd).toHaveAttribute('aria-disabled', 'true');
   await expect(alice.locator('#personas-full')).toBeVisible();
   await expect(alice.locator('#personas-full')).toHaveText(why);
@@ -299,7 +299,7 @@ test('persona library: a room of 12 personas', async ({ browser, request }, test
   await expect(sheetAdd).toHaveAttribute('aria-disabled', 'false');
   await expect(alice.locator('#personas-full')).toBeHidden();
   await expect(plus).toHaveAccessibleDescription('');
-  await alice.locator('#personas').getByRole('button', { name: 'Close' }).click();
+  await alice.locator('#ai').getByRole('button', { name: 'Close' }).click();
 
   // The picker's Add reads enabled again; pressed twice while its request runs, it adds one.
   await plus.click();
@@ -320,13 +320,13 @@ test('persona library: a room of 12 personas', async ({ browser, request }, test
   expect(posts).toBe(1);
 });
 
-// 035-AC17: the Personas sheet lists the personas as rows with a ⋯ (Edit, Save to my personas,
+// 035-AC17: AI in this room › Personas lists the personas as rows with a ⋯ (Edit, Save to my personas,
 // Remove); "Add a persona" is its one primary button, before the auto-turn limit and room skills.
 // At 390 and 1440 px.
-test('persona library: the Personas sheet rows', async ({ browser, request }, testInfo) => {
+test('persona library: the Personas tab rows', async ({ browser, request }, testInfo) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice' + uniq()]);
   await openPersonas(alice);
-  const panel = alice.locator('#personas');
+  const panel = alice.locator('#ai');
   const add = panel.getByRole('button', { name: 'Add a persona', exact: true });
   await expect(add).toHaveClass(/btn-primary/);
   // The one primary: a form's submit is primary unless marked otherwise (kit).
@@ -428,14 +428,14 @@ test('persona library: the Personas sheet rows', async ({ browser, request }, te
 
 // 035-AC14: a failed add says why in the picker and reads the library again, so a persona deleted
 // meanwhile leaves the list and the choice; one that fails once the picker is closed says so in the
-// Personas sheet's status line, or in a toast when that sheet is closed too.
+// Personas tab's status line, or in a toast when AI in this room is closed too.
 test('persona library: the picker after a failed add', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice' + uniq()]);
   const grill = (await agentState(alice, room.id)).personas[0].id;
   const saved = await call(alice, 'POST', `/api/rooms/${room.id}/personas/${grill}/library`);
   expect(saved.status).toBe(201);
   await openPersonas(alice);
-  await alice.locator('#personas').getByRole('button', { name: 'Add a persona', exact: true }).click();
+  await alice.locator('#ai').getByRole('button', { name: 'Add a persona', exact: true }).click();
   const picker = alice.locator('#persona-picker');
   const yours = picker.getByRole('group', { name: 'Yours' });
   await yours.getByRole('radio', { name: 'Grill, v1' }).check();
@@ -461,8 +461,8 @@ test('persona library: the picker after a failed add', async ({ browser, request
   await expect(alice.locator('#personas-status')).toHaveClass(/error/);
   await expect(alice.locator('#toasts .toast')).toHaveCount(0);
 
-  // From "+", the Personas sheet closed: in a toast.
-  await alice.locator('#personas').getByRole('button', { name: 'Close' }).click();
+  // From "+", AI in this room closed: in a toast.
+  await alice.locator('#ai').getByRole('button', { name: 'Close' }).click();
   await alice.locator('#persona-new').click();
   await secretary.check();
   await add.click();
