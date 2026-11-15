@@ -94,10 +94,11 @@ test('a page back from the background resumes the stream and reloads the room', 
   await setVisibility(alice, 'hidden');
 
   // The stream delivers the line to the page, which no longer draws it.
-  const delivered = alice.evaluate(() => new Promise((ok) => events.addEventListener('message', (e) => { if (e.data.includes('sent while away')) ok(); })));
+  // The listener is in place before the line is sent: a line that came first would never resolve it.
+  await alice.evaluate(() => { window.awayLine = new Promise((ok) => events.addEventListener('message', (e) => { if (e.data.includes('sent while away')) ok(); })); });
   const bob = await joinAPI(request, room.id, 'Bob');
   await post(request, room.id, bob, 'sent while away');
-  await delivered;
+  await alice.evaluate(() => window.awayLine);
   await expect(alice.locator('#messages')).not.toContainText('sent while away');
 
   const resumed = alice.waitForRequest((r) => /\/events\?since=\d+&tab=\w+$/.test(r.url()));
@@ -538,5 +539,7 @@ test('the phone gives the messages the screen', async ({ request, browser }) => 
   await expect(alice.locator('#messages')).toContainText('Bob joined');
   await expect(alice.locator('#voice-join')).toBeVisible();
   await expect(alice.locator('#chat-filter')).toBeHidden();
-  expect((await rect(alice, '#messages')).height).toBeGreaterThanOrEqual(633);
+  // 039-AC10's checklist shares the empty chat's area with the messages: the reading area is both.
+  const reading = await alice.evaluate(() => ['messages', 'chat-ready'].reduce((h, id) => h + document.getElementById(id).getBoundingClientRect().height, 0));
+  expect(reading).toBeGreaterThanOrEqual(633);
 });

@@ -102,6 +102,7 @@
   <button type="button" id="manage-open" data-icon="settings" hidden>Room settings</button>
   <a id="links-open" href="#manage/links" data-icon="clip" hidden><span id="links-label"></span></a>
   <button type="button" id="personas-open" data-icon="personas">Personas</button>
+  <a id="ai-open" href="#ai" data-icon="info">AI in this room</a>
   <a id="docs-window-menu" data-icon="external">Open documents in a new window</a>
   <a id="chat-window-menu" data-icon="external">Open chat in a new window</a>
   <button type="button" id="host-open" data-icon="host" hidden>Run the AI on my computer</button>
@@ -231,6 +232,18 @@
     <button type="button" id="manage-close" class="btn-icon btn-ghost" aria-label="Close" data-icon="close"></button>
   </div>
   <div id="room-admin"></div>
+</dialog>
+<!-- What the personas need to answer, and who acts on it (039). -->
+<dialog id="ai" class="sheet wide full" aria-labelledby="ai-title">
+  <div class="sheet-head">
+    <h2 id="ai-title">AI in this room</h2>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
+  </div>
+  <ul id="ai-rows" class="list-rows" aria-label="What the AI needs"></ul>
+  <section aria-labelledby="ai-choices-title">
+    <h3 id="ai-choices-title">The AI host's choices</h3>
+    <ul id="ai-choices" class="ai-choices"></ul>
+  </section>
 </dialog>
 <dialog id="starter-save-sheet" class="sheet wide full" aria-labelledby="starter-save-title"></dialog>
 <!-- Room plugins (admin/plugins.js, 009-AC5 to 009-AC15): the add sheet and the approval sheet. -->
@@ -510,6 +523,11 @@
     <p id="filter-hidden" class="hint" hidden><span id="filter-hidden-text"></span> <button type="button" id="filter-show-all" class="text-link">Show all</button></p>
     <ol id="messages" aria-labelledby="chat-title"></ol>
     <p id="filter-empty" class="empty"></p>
+    <!-- The empty room's checklist (039-AC10): what the personas still need, with who acts. -->
+    <section id="chat-ready" aria-labelledby="chat-ready-title" hidden>
+      <h3 id="chat-ready-title">Before the personas can answer</h3>
+      <ul id="chat-ready-rows" class="list-rows"></ul>
+    </section>
     <div id="chat-empty" class="empty" hidden>
       <p>Invite people to start.</p>
       <button type="button" id="chat-invite" class="btn-primary">Copy invite link</button>

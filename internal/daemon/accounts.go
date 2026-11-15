@@ -695,7 +695,7 @@ func (a *Accounts) Access(ctx context.Context, instance string, roomAccount map[
 		addr, err := a.listen(ctx, ap)
 		if err != nil {
 			a.o.Log.Warn("account_proxy_unavailable", zap.String("account", name), zap.Error(err))
-			out.Proxies[room] = Proxy{Error: "Claude access is not ready on the host's machine: Docker is not ready"}
+			out.Proxies[room] = Proxy{Error: proxyDockerReason}
 			continue
 		}
 		px := Proxy{Addr: addr, Bearer: a.bearer(instance, ap)}

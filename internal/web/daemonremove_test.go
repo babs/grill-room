@@ -51,7 +51,7 @@ func TestRemoveDaemon(t *testing.T) {
 		t.Fatalf("turn after remove: %+v %v", got, err)
 	}
 	gone := e.waitAgent(t, r.room, alice.p.Token, func(st agentState) bool { return len(st.Daemons) == 0 })
-	if gone.Online || gone.HostID != alice.p.Participant.ID || gone.Reason != "The AI host removed this room from their computer." {
+	if gone.Online || gone.HostID != alice.p.Participant.ID || gone.Reason != "The AI host removed this room from their computer." || gone.ReasonCode != "removed" { // 039-AC2
 		t.Fatalf("room after remove: %+v", gone)
 	}
 

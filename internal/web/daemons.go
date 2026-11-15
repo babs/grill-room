@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"slices"
 	"time"
 
 	"go.uber.org/zap"
@@ -30,9 +31,11 @@ const (
 type liveDaemon struct {
 	ParticipantID int64 `json:"participant_id"`
 	CanHost       bool  `json:"can_host"`
-	// Reason says why the daemon cannot host (Docker missing, credentials unreadable).
-	Reason  string `json:"reason,omitempty"`
-	Version string `json:"version,omitempty"`
+	// Reason says why the daemon cannot host (Docker missing, credentials unreadable); ReasonCode
+	// names it for the room's words, "" for a reason the room shows as sent (039-AC3).
+	Reason     string `json:"reason,omitempty"`
+	ReasonCode string `json:"reason_code,omitempty"`
+	Version    string `json:"version,omitempty"`
 	// Egress says the daemon applies website approvals from the room (014-AC9).
 	Egress bool `json:"egress,omitempty"`
 	// Connectors are the claude.ai connectors its host turned on for the room (014-AC19).
@@ -42,6 +45,9 @@ type liveDaemon struct {
 	// since is when the current run of connections started: the earliest eligible one hosts.
 	since time.Time
 }
+
+// reasonCodes are the daemon's readiness codes the room words (039-AC3).
+var reasonCodes = []string{"docker", "account", "image_pending", "image_failed"}
 
 // daemonLease is how long a daemon connection counts without a renewal: a pod gone without
 // closing its streams leaves rows that lapse. Each heartbeat renews it.
@@ -63,7 +69,7 @@ func (s *Server) liveDaemons(room string) []liveDaemon {
 		if len(conns) == 0 {
 			conns = nil
 		}
-		out[i] = liveDaemon{ParticipantID: d.ParticipantID, CanHost: d.CanHost, Reason: d.Reason, Version: d.Version, Egress: d.Egress,
+		out[i] = liveDaemon{ParticipantID: d.ParticipantID, CanHost: d.CanHost, Reason: d.Reason, ReasonCode: d.ReasonCode, Version: d.Version, Egress: d.Egress,
 			Connectors: conns, room: d.RoomID, id: d.ID, since: d.Since}
 	}
 	return out
@@ -235,10 +241,11 @@ func (s *Server) daemonFor(ctx context.Context, hash, room string) (*store.Daemo
 // daemonStatus is the daemon's heartbeat: whether it can host right now, and why not.
 func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
 	var req struct {
-		CanHost bool   `json:"can_host"`
-		Reason  string `json:"reason"`
-		Version string `json:"version"`
-		Egress  bool   `json:"egress"`
+		CanHost    bool   `json:"can_host"`
+		Reason     string `json:"reason"`
+		ReasonCode string `json:"reason_code"`
+		Version    string `json:"version"`
+		Egress     bool   `json:"egress"`
 		// Connectors comes from a daemon of 014 on; a missing one keeps none.
 		Connectors []roomConnector `json:"connectors"`
 		store.DaemonSettings
@@ -260,7 +267,12 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 		b, _ := json.Marshal(c)
 		conns = string(b)
 	}
-	changed, err := s.bus.Store.SetDaemonStatus(r.Context(), d.ID, store.DaemonStatus{CanHost: req.CanHost, Reason: reason, Version: version, Egress: req.Egress, Connectors: conns})
+	// A code the room has no words for is dropped: the reason then shows as sent (039-AC3).
+	code := req.ReasonCode
+	if !slices.Contains(reasonCodes, code) {
+		code = ""
+	}
+	changed, err := s.bus.Store.SetDaemonStatus(r.Context(), d.ID, store.DaemonStatus{CanHost: req.CanHost, ReasonCode: code, Reason: reason, Version: version, Egress: req.Egress, Connectors: conns})
 	if err != nil {
 		s.serverError(w, "daemon_status_failed", err)
 		return

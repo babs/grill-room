@@ -107,10 +107,11 @@ function end(text) {
   // No stream will send the history: no "Loading…" under the banner.
   if (!replayed) $('filter-empty').hidden = true;
   $('chat-empty').hidden = true;
+  $('chat-ready').hidden = true;
   $('upload-open').hidden = true;
   for (const el of document.querySelectorAll('.dropping')) el.classList.remove('dropping');
   document.body.classList.remove('drag-files');
-  for (const id of ['manage-open', 'invite-open', 'personas-open', 'links-open', 'leave-open', 'leave-why', 'room-proposed-in']) $(id).hidden = true;
+  for (const id of ['manage-open', 'invite-open', 'personas-open', 'ai-open', 'links-open', 'leave-open', 'leave-why', 'room-proposed-in']) $(id).hidden = true;
   $('room-open').disabled = true;
   delete $('room-open').dataset.tip;
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
@@ -194,6 +195,7 @@ async function loadRoom() {
   // An appointment or a step-down changes who turns plugins on (Capabilities).
   renderPersonaSheet();
   renderParticipants();
+  renderAI();
   showEmpty();
   // The room admin panel (admin/room-admin.js) renders from the same answer.
   window.grillRoom = data;
@@ -598,6 +600,10 @@ if ('serviceWorker' in navigator) {
 
 function addMessage(m) {
   countUnread(m);
+  if (!spoken && m.kind !== 'system') {
+    spoken = true;
+    renderReady();
+  }
   if (m.kind === 'voice') markVoiced();
   // A live line of a hidden kind counts on its segment; history and your own lines do not (020-AC6).
   if (filterHides(m.kind) && isLive(m) && String(m.participant_id) !== myID) {
@@ -669,7 +675,7 @@ function blockedActions(m) {
     : meAdmin && agent.egress_admins_allow ? [['room', 'Allow for this room']] : [];
   if (!scopes.length) {
     // Whoever cannot allow it learns who can, the same person on another seat included.
-    box.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: whoAllows() }));
+    box.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: whoAllows() }), ' ', missingLink());
     return box;
   }
   const why = agent.egress_host || '';
@@ -690,6 +696,7 @@ function blockedActions(m) {
   }
   const note = why || (b.error ? 'Not allowed: ' + b.error : '');
   if (note) box.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: note }));
+  box.append(' ', missingLink());
   return box;
 }
 
@@ -1084,9 +1091,9 @@ function agentError(text) {
   if (!r.width || r.left < z.left - 0.5 || r.right > z.right + 0.5) showNotice(text);
 }
 
-function explain(title, text, ask = false) {
+function explain(title, text, ask = false, missing = false) {
   $('why-title').textContent = title;
-  $('why-text').textContent = text;
+  $('why-text').replaceChildren(text, ...(missing ? [' ', missingLink()] : []));
   $('why-ask').hidden = !ask;
   // The hand-off's fallback replaces the reason already shown: its hidden button held the focus.
   if ($('why').open) $('why').querySelector('[type=submit]').focus();
@@ -1496,12 +1503,13 @@ function copyField(input) {
   navigator.clipboard.writeText(input.value).then(() => toast('Copied'), () => input.select());
 }
 
-// askToRun copies the hand-off message (038-AC3).
-function askToRun() {
-  const text = 'Can you run the AI for our grill-room room? Open ' + $('host-room-link').value + ', then click the room\'s name › Run the AI on my computer.';
+// copyMessage copies a message for someone else to act on (038-AC3, 039).
+function copyMessage(title, text) {
   // A refused clipboard shows the message to copy by hand.
-  (navigator.clipboard?.writeText(text) ?? Promise.reject()).then(() => toast('Message copied.'), () => explain('Ask someone to run it', text));
+  (navigator.clipboard?.writeText(text) ?? Promise.reject()).then(() => toast('Message copied.'), () => explain(title, text));
 }
+const askToRun = () => copyMessage('Ask someone to run it', 'Can you run the AI for our grill-room room? Open ' + $('host-room-link').value
+  + ', then click the room\'s name › Run the AI on my computer.');
 $('why-ask').addEventListener('click', askToRun);
 $('host-ask').addEventListener('click', askToRun);
 
@@ -2676,6 +2684,7 @@ function connect() {
     renderBlocked();
     document.querySelectorAll(lineSel + ' mark.mention-chip.persona').forEach(paintChip);
     renderParticipants();
+    renderAI();
     window.grillAgent = agent;
     window.dispatchEvent(new CustomEvent('grill:agent', { detail: agent }));
   });
@@ -2765,6 +2774,41 @@ function personaState(p) {
 // noOneRuns is when the room has no AI host at all, not one whose app is away.
 const noOneRuns = () => !agent.online && !participants.some((x) => x.id === agent.host_participant_id);
 
+// cannotAnswer: the reason shown is one the AI sheet explains (039-AC9); only "already waits for its turn" is not,
+// so the queue check is taken out and whatever whyNot says before it decides.
+const cannotAnswer = (p, st = personaState(p)) => !!whyNot(p, st.cls === 'queued' ? { ...st, cls: '' } : st);
+
+// missingLine is the id of the chat line whose link opened the AI sheet: the line's redraw replaces it.
+let missingLine = '';
+
+// missingLink opens the AI sheet from wherever a persona cannot answer (039-AC9).
+function missingLink() {
+  const a = Object.assign(document.createElement('a'), { href: '#ai', textContent: 'What\'s missing?' });
+  // Every open sheet and the card holding it go first: the AI sheet opens alone, not over a stack.
+  a.addEventListener('click', (e) => {
+    // A new tab or window opens the sheet there: this page keeps its own.
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return;
+    // An ended room opens no sheet (followAI): the hash would only linger.
+    if (ended) {
+      e.preventDefault();
+      return;
+    }
+    // Closing the AI sheet gives the focus back to focusBefore: the card and the strip item go or
+    // redraw, so a control that outlives them; a chat line's link itself (missingLine falls back).
+    // Inside a sheet, the sheet's opener stays.
+    if (!a.closest('dialog')) {
+      const line = !a.closest('#persona-card, #approvals') && a.closest('#messages > li[data-id]');
+      missingLine = line ? line.dataset.id : '';
+      focusBefore = a.closest('#persona-card') ? document.querySelector('.persona-pill[data-id="' + personaCardFor + '"] button.persona')
+        : a.closest('#approvals') ? $('approvals') : line ? a : $('body');
+    }
+    for (const d of document.querySelectorAll('dialog[open]')) d.close();
+    const pop = a.closest('[popover]');
+    if (pop?.matches(':popover-open')) pop.hidePopover();
+  });
+  return a;
+}
+
 // whyNot says why a pill does nothing on a press, or '' when it asks (005-AC35): a title tooltip
 // never shows on touch, so a press opens the reason instead.
 function whyNot(p, st) {
@@ -2851,7 +2895,7 @@ function askPersona(id) {
   const p = personaByID(id);
   if (!p) return;
   const why = whyNot(p, personaState(p));
-  if (why) return explain(p.badge + ' ' + p.name, why, noOneRuns());
+  if (why) return explain(p.badge + ' ' + p.name, why, noOneRuns(), cannotAnswer(p));
   pressPersona(id, false);
 }
 
@@ -2960,6 +3004,8 @@ function renderPersonaCard() {
     handOff.addEventListener('click', askToRun);
     foot.append(handOff);
   }
+  // An id: the card's redraw gives the focus back by id.
+  if (cannotAnswer(p, st)) foot.append(Object.assign(missingLink(), { id: 'persona-card-missing' }));
   parts.push(foot);
   card.replaceChildren(...parts);
   if (focused) $(focused)?.focus();
@@ -3245,6 +3291,7 @@ function blockedItems() {
     }
     const note = why || (b.error ? 'Not allowed: ' + b.error : '');
     if (note) li.append(' ', Object.assign(document.createElement('span'), { className: 'hint', textContent: note }));
+    li.append(' ', missingLink());
     return li;
   });
 }
@@ -3737,6 +3784,7 @@ async function loadPlugins() {
   staleSheet();
   renderApprovals();
   renderPersonaSheet();
+  renderAI();
 }
 
 // pluginCost is a version's token cost per answer from its inspection, null while unknown.
@@ -3791,6 +3839,7 @@ function pluginsBlock(p) {
     meta.push(run && !pl.needs_setup ? (cost === null ? 'cost unknown' : tokens(cost) + ' per answer') : pl.why || 'does not load');
     if (on && run && run !== pl.versions[pl.versions.length - 1]) meta.push('a newer version waits');
     li.append(name, span('hint', meta.join(' · ')));
+    if (!run || pl.needs_setup) li.append(' ', missingLink());
     list.append(li);
   }
   box.append(legend);
@@ -4103,6 +4152,248 @@ actionMenu($('persona-menu'), $('persona-more'));
 function openPersonaSheet(id) {
   location.hash = '#personas/' + id + '/identity';
 }
+
+// "AI in this room" (039): what the personas need to answer and who acts on it. aiRows is data, so
+// the empty room can show the same rows (039-AC10).
+const aiIcons = { ready: 'check', waiting: 'bubble', blocked: 'alert' };
+
+// hostAppConnected: the host's app is there, able to host or not; the agent state drops its row on disconnect.
+const hostAppConnected = (host) => agent.online || (!!host && agent.daemons.some((d) => d.participant_id === host.id));
+
+// focusLost catches a focus a closed sheet could not give back, its opener redrawn away: the focus
+// then stays in the closed sheet, or on the page. It goes to the sheet still open under it, else the
+// composer. Not in the page's shared close handler: the proposal sheet reads where the focus sits after a close.
+function focusLost(e) {
+  const a = document.activeElement;
+  const to = document.querySelector('dialog:modal .close') || $('body');
+  if ((a === document.body || e.target.contains(a)) && to.checkVisibility()) to.focus();
+}
+
+// sameAction finds a redrawn row's action by its row and label.
+const sameAction = (list, row, label) => [...list.querySelectorAll(`[data-row="${row}"] :is(a, button)`)].find((b) => b.textContent === label);
+
+function aiRows() {
+  const host = participants.find((x) => x.id === agent.host_participant_id);
+  const me = approves();
+  const name = host ? host.name : 'the AI host';
+  const who = me ? 'you' : host ? host.name + ' (AI host)' : 'anyone in the room';
+  const their = me ? 'your' : name + '\'s';
+  const run = { label: 'Run the AI on my computer', run: (ev) => {
+    // Its row redraws on every agent event while the sheet is open: back to the same action, else focusLost.
+    const b = ev.currentTarget, list = b.closest('ul'), row = b.closest('.ai-row').dataset.row;
+    $('host-agent').addEventListener('close', (e) => {
+      const same = b.isConnected ? b : sameAction(list, row, b.textContent);
+      if (same?.checkVisibility()) same.focus();
+      else focusLost(e);
+    }, { once: true });
+    $('host-agent').showModal();
+  } };
+  // As the menu's #host-app-open (renderAgent): no loopback page in the docs window or on a phone.
+  const appHere = !docsMode && !mobileOS;
+  const openApp = { label: 'Open my AI host app', href: $('host-app-open').href };
+  const elsewhere = 'Open your AI host app on the computer that runs it.';
+  const tell = (text) => ({ label: 'Copy a message to ' + name, run: () => copyMessage('Copy a message to ' + name, text) });
+  const link = $('host-room-link').value;
+  const connected = hostAppConnected(host);
+  const rows = [];
+  if (noOneRuns()) {
+    rows.push({ id: 'host', state: 'blocked', lines: ['No one runs the AI for this room.'], who: 'anyone in the room',
+      actions: [run, { label: 'Ask someone to run it', run: askToRun }] });
+  } else if (connected) {
+    rows.push({ id: 'host', state: 'ready', lines: [me ? 'You run the AI on your computer.' : name + ' runs the AI on their computer.'] });
+  } else if (agent.reason_code === 'removed') {
+    rows.push({ id: 'host', state: 'blocked', lines: me ? ['You removed this room from your AI host app.', ...(appHere ? [] : [elsewhere])]
+      : [name + ' removed this room from their AI host app.'], who: who + ', or anyone to take over',
+      actions: [...(!me ? [tell('Can you add ' + roomName + ' back to your AI host app? Paste ' + link + ' under Rooms › Add a room.')] : appHere ? [openApp] : []), run] });
+  } else {
+    rows.push({ id: 'host', state: 'blocked', lines: [(me ? 'Your' : name + '\'s') + ' AI host app is not connected.', ...(me && !appHere ? [elsewhere] : [])], who,
+      actions: !me ? [tell('Your AI host app is not connected to ' + roomName + '. Can you open it so the personas can answer?')] : appHere ? [openApp] : [] });
+  }
+  // 039-AC3: only while the host's app is connected and cannot host.
+  if (connected && !agent.online) {
+    const on = their + ' computer.';
+    const [state, line] = { docker: ['blocked', 'Docker is not running on ' + on], account: ['blocked', (me ? 'Your' : name + '\'s') + ' AI host app has no Claude account it can use.'],
+      image_pending: ['waiting', 'The sandbox is still getting ready on ' + on], image_failed: ['blocked', 'The sandbox could not be prepared on ' + on] }[agent.reason_code]
+      || ['blocked', agent.reason || (me ? 'Your' : name + '\'s') + ' AI host app cannot host right now.'];
+    // The app is known to be on this computer only when one of my apps is the connected one.
+    const here = appHere && agent.daemons.some((d) => String(d.participant_id) === myID);
+    rows.push({ id: 'can-host', state, lines: [line, ...(me && !here ? [elsewhere] : [])], who, actions: me && here ? [openApp] : [] });
+  }
+  rows.push(canPress() ? { id: 'ask', state: 'ready', lines: ['You can ask the personas.'] }
+    // Another seat of the host's profile: only the host seat may tick it (asHost), as whoAllows says.
+    : me ? { id: 'ask', state: 'blocked', lines: ['You run the AI as ' + name + ': open the room as ' + name + ' and tick "Can ask the AI" next to your name in People.'], who }
+    : !host ? { id: 'ask', state: 'blocked', lines: ['Whoever runs the AI decides who can ask the personas.'], who }
+      : { id: 'ask', state: 'blocked', lines: [host.name + ' decides who can ask the personas. You can still mention them in a message.'], who,
+        actions: [tell('Can you tick "Can ask the AI" next to my name in ' + roomName + '?')] });
+  // Every kind the strip lists, counted for every viewer; the strip itself shows each viewer only what they may act on.
+  const counts = [['Persona changes and new personas', (agent.changes || []).length],
+    ['Room skills', (agent.room_skills || []).filter((k) => k.pending).length],
+    ['Plugin versions', plugins.filter((pl) => pl.versions.at(-1)?.state === 'pending').length],
+    ['Personas asking above the cap', (agent.cap_requests || []).length],
+    ['Websites a turn was refused', (agent.blocked_requests || []).length]].filter(([, n]) => n).map(([k, n]) => k + ': ' + n);
+  rows.push(!counts.length ? { id: 'waiting', state: 'ready', lines: ['Nothing waits for the AI host.'] }
+    : { id: 'waiting', state: 'waiting', lines: ['Waiting for ' + (me ? 'you' : name) + ':', ...counts], who,
+      actions: me ? [{ label: 'Open the approvals', run: showApprovals }]
+        : host ? [tell('Can you look at what waits for your approval in ' + roomName + '? ' + counts.join(', ') + '.')] : [] });
+  for (const pl of plugins.filter((x) => x.why)) {
+    // Host setup, the host's approval or the host's check: the host acts (009-AC13, 009-AC24).
+    const waits = !pl.needs_setup && ['inspecting', 'pending'].includes(pl.versions.at(-1)?.state);
+    const hosts = pl.needs_setup || waits;
+    rows.push({ id: 'plugin-' + pl.id, state: waits ? 'waiting' : 'blocked', lines: [pl.name + ': ' + pl.why + '.'], who: hosts ? who : 'a room admin',
+      actions: !hosts ? (meAdmin ? [{ label: 'Open Plugins', href: '#manage/plugins' }] : [])
+        : host && !me ? [tell('The plugin ' + pl.name + ' in ' + roomName + ' does not load: ' + pl.why + '. Can you look at it?')] : [] });
+  }
+  return rows;
+}
+
+// aiRow draws one row of aiRows as a kit list row.
+function aiRow(r) {
+  const li = document.createElement('li');
+  li.className = 'list-row ai-row';
+  li.dataset.row = r.id;
+  li.dataset.state = r.state;
+  const icon = span('ai-state ' + r.state, '');
+  // The icon is aria-hidden: the state is read out as a word.
+  icon.append(grillIcon(aiIcons[r.state]), span('sr-only', { ready: 'Ready: ', waiting: 'Waiting: ', blocked: 'Blocked: ' }[r.state]));
+  const main = document.createElement('div');
+  main.className = 'main';
+  const line = (cls, text) => Object.assign(document.createElement('div'), { className: cls, textContent: text });
+  main.append(line('name', r.lines[0]), ...r.lines.slice(1).map((t) => line('meta', t)), ...(r.who ? [line('meta ai-who', 'Who: ' + r.who)] : []));
+  li.append(icon, main);
+  if (r.actions?.length) {
+    const acts = document.createElement('div');
+    acts.className = 'actions';
+    acts.append(...r.actions.map((a) => {
+      if (a.href) {
+        const el = Object.assign(document.createElement('a'), { className: 'btn btn-secondary', href: a.href, textContent: a.label });
+        if (!a.href.startsWith('#')) Object.assign(el, { target: '_blank', rel: 'noopener noreferrer' });
+        return el;
+      }
+      const b = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-secondary', textContent: a.label });
+      b.addEventListener('click', a.run);
+      return b;
+    }));
+    li.append(acts);
+  }
+  return li;
+}
+
+// aiChoices mirrors the AI host's decisions, read-only (039-AC7, 039-AC8).
+function aiChoices() {
+  const li = (...parts) => {
+    const el = document.createElement('li');
+    el.append(...parts);
+    return el;
+  };
+  const c = agent.cap;
+  if (!c) return [li('No AI host yet: these choices appear once someone runs the AI.')];
+  const host = participants.find((x) => x.id === agent.host_participant_id);
+  const me = approves();
+  const name = host ? host.name : 'the AI host';
+  const cap = [c.max_model && 'models up to ' + c.max_model, c.max_effort && 'effort up to ' + c.max_effort].filter(Boolean).join(', ');
+  const conns = (agent.connectors || []).map((x) => x.name);
+  return [
+    li(cap ? cap[0].toUpperCase() + cap.slice(1) : 'No cap on models'),
+    li('New personas and changes: ' + (c.approve_all ? 'wait for ' + (me ? 'your' : name + '\'s') + ' approval' : 'apply at once')),
+    // Only an app that can host vouches for an empty list.
+    li(conns.length ? 'Connectors: ' + conns.join(', ') : agent.online ? 'No connectors'
+      : 'Connectors: shown once ' + (me ? 'your' : name + '\'s') + ' AI host app ' + (hostAppConnected(host) ? 'can host' : 'connects')),
+    li('Websites: see ', Object.assign(document.createElement('a'), { href: '#manage/network', textContent: 'Room settings › Websites and connectors' })),
+    li(me ? 'Only you change these, in your AI host app.' : 'Only ' + name + ' changes these, in their AI host app.'),
+  ];
+}
+
+// renderAI redraws the open sheet from the latest agent state, plugins and people (039-AC11).
+function renderAI() {
+  renderReady();
+  if (!$('ai').open) return;
+  drawRows($('ai-rows'), agentSeen ? aiRows().map(aiRow) : [Object.assign(document.createElement('li'), { className: 'empty', textContent: 'Loading…' })]);
+  $('ai-choices').replaceChildren(...(agentSeen ? aiChoices() : []));
+}
+
+// drawRows replaces a list's rows; a redraw keeps the focus on the action that had it.
+function drawRows(list, rows) {
+  const a = document.activeElement;
+  const had = list.contains(a) ? [a.closest('.ai-row')?.dataset.row, a.textContent] : null;
+  list.replaceChildren(...rows);
+  if (!had) return;
+  const same = sameAction(list, had[0], had[1]);
+  // Its row gone, the focus lands somewhere useful, not on the page: the sheet's close, else the composer.
+  (same || list.closest('dialog')?.querySelector('.close') || $('body')).focus();
+}
+
+// spoken: the room has a message other than a system line; the checklist then goes for good.
+let spoken = false;
+
+// renderReady shows an empty room with personas what the AI still needs (039-AC10): the
+// who-runs-it, can-host and can-ask rows not ready, until they are or the first message comes.
+function renderReady() {
+  const rows = !spoken && !ended && !docsMode && replayed && agentSeen && agent.personas.length
+    ? aiRows().filter((r) => ['host', 'can-host', 'ask'].includes(r.id) && r.state !== 'ready') : [];
+  $('chat-ready').hidden = !rows.length;
+  drawRows($('chat-ready-rows'), rows.map(aiRow));
+}
+
+// showApprovals hands the host over to the approval strip (039-AC5).
+function showApprovals() {
+  if ($('approvals').classList.contains('extra')) {
+    stripOpen = true;
+    updateStrip();
+  }
+  // The page's close handler gives the focus back to focusBefore, not to a chat line's link.
+  focusBefore = $('approvals');
+  missingLine = '';
+  $('ai').close();
+}
+
+// followAI opens or closes the sheet as the hash says: #ai is its deep link (039-AC1).
+function followAI() {
+  const want = !ended && location.hash === '#ai';
+  if (want && !$('ai').open) $('ai').showModal();
+  else if (!want && $('ai').open) $('ai').close();
+  renderAI();
+}
+addEventListener('hashchange', followAI);
+followAI();
+// Closed by Escape, a click outside or ✕: the deep link goes too, without a history entry.
+$('ai').addEventListener('close', (e) => {
+  if (location.hash === '#ai') history.replaceState(null, '', location.pathname + location.search);
+  // After the page's focus return: a chat line redraws with the room's state, while the sheet is
+  // open or soon after it closed, and its new link takes the focus for a few seconds, unless the
+  // user has put it somewhere else or acted. An opener gone otherwise hands it to the composer.
+  const id = missingLine;
+  missingLine = '';
+  if (!id) {
+    focusLost(e);
+    return;
+  }
+  let ours = document.activeElement;
+  const follow = () => {
+    const l = /** @type {HTMLElement | null} */ (document.querySelector(`#messages > li[data-id="${id}"] a[href="#ai"]`));
+    const now = document.activeElement;
+    if (!l || l === now) return;
+    if (now && now !== document.body && now !== ours && now.isConnected) {
+      stop();
+      return;
+    }
+    l.focus();
+    ours = l;
+  };
+  const watch = new MutationObserver(follow);
+  const stop = () => {
+    watch.disconnect();
+    removeEventListener('pointerdown', stop, true);
+    removeEventListener('keydown', stop, true);
+  };
+  watch.observe($('messages'), { childList: true, subtree: true });
+  // The user's first click or key ends the follow: what they reach next stays theirs.
+  addEventListener('pointerdown', stop, true);
+  addEventListener('keydown', stop, true);
+  setTimeout(stop, 5000);
+  follow();
+  // A line redrawn without its link, or gone, leaves nothing to follow.
+  focusLost(e);
+});
 
 async function loadTemplates() {
   const res = await netFetch(api + '/templates');

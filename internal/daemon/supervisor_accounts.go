@@ -38,6 +38,10 @@ func (s *Supervisor) access(in Instance) Access {
 // pausedReason is what a paused room shows, word for word from 003b-AC5.
 const pausedReason = "paused on the host's machine"
 
+// proxyDockerReason is a room's access while its account proxy cannot start: Docker, not the
+// account, is what the host fixes (039-AC3).
+const proxyDockerReason = "Claude access is not ready on the host's machine: Docker is not ready"
+
 // pushAccess sends w its access when it changed. One push at a time per worker, in order.
 func (s *Supervisor) pushAccess(w *worker) {
 	if s.o.Accounts == nil {
