@@ -174,7 +174,7 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     await expect(panel.locator('#invites-all .list-row', { hasText: 'Your shareable link' })).toHaveCount(1);
     await expect(panel.locator('#invites-all .list-row:not(.head)').first()).toContainText('Alice');
     await fits(alice);
-    await tab(panel, 'Admins');
+    await tab(panel, 'Members and admins');
     await panel.getByRole('button', { name: 'Make Bob a room admin' }).click();
     await expect(panel.locator('#room-admins > li', { hasText: 'Bob' }).locator('.badge.role')).toHaveText('admin');
     await expect(carol.locator('#messages')).toContainText('Alice made Bob a room admin.');
@@ -182,7 +182,7 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     // Bob, now an admin, removes Alice; she loses her panel.
     await expect(bob.locator('#manage-open')).not.toHaveAttribute('hidden');
     const bobPanel = await openManage(bob);
-    await tab(bobPanel, 'Admins');
+    await tab(bobPanel, 'Members and admins');
     await bobPanel.getByRole('button', { name: 'Remove Alice from the room admins' }).click();
     await expect(alice.locator('#manage #room-panel')).toHaveCount(0);
     await bobPanel.getByRole('button', { name: 'Step down as a room admin' }).click();
@@ -294,7 +294,7 @@ test('a room skill survives its author leaving', async ({ browser, request, base
 for (const vp of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'phone', ...phone }]) {
   // 016-AC6 016-AC8 016-AC11 016-AC12 016-AC13 016-AC14: a room admin removes Bob with a block from
   // People › ⋯; Bob's page ends, his line reads "(removed)", his rejoin is refused. Unblocked from
-  // Room settings › Invites, he rejoins and the mark goes. A room admin's row offers no removal,
+  // Room settings › Members and admins (038-AC9), he rejoins and the mark goes. A room admin's row offers no removal,
   // and a room admin cannot leave; Carol leaves, and the room leaves her profile.
   test(`remove, block, unblock and leave, ${vp.name}`, async ({ browser, request }) => {
     const { room, pages: [alice, bob, carol] } = await roomWith(browser, request, ['Alice', 'Bob', 'Carol']);
@@ -328,7 +328,7 @@ for (const vp of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'phone'
     await bob.getByRole('button', { name: 'Join the room' }).click();
     await expect(bob.locator('#status')).toHaveText('A room admin blocked you from rejoining this room.');
 
-    await alice.goto(`/r/${room.id}#manage/invites`);
+    await alice.goto(`/r/${room.id}#manage/admins`);
     const blocked = alice.locator('#manage #blocked');
     await expect(blocked.locator('.list-row:not(.head)')).toHaveCount(1);
     await expect(blocked).toContainText('Bob');
@@ -346,7 +346,8 @@ for (const vp of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'phone'
     await peopleOf(alice);
     const own = await personMenu(alice, 'Alice');
     await expect(own.getByRole('button', { name: 'Leave room…' })).toHaveAttribute('aria-disabled', 'true');
-    await expect(own.getByRole('button', { name: 'Leave room…' })).toHaveAttribute('data-tip', 'Step down as room admin first');
+    // Alice is the room's only admin: the last admin's reason (038-AC10).
+    await expect(own.getByRole('button', { name: 'Leave room…' })).toHaveAttribute('data-tip', 'Make someone else room admin, then step down.');
     await alice.keyboard.press('Escape');
 
     await carol.locator('#body').fill('a line from carol');

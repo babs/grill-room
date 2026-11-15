@@ -82,3 +82,52 @@ test('a seat without a profile keeps its pick in the browser', async ({ browser,
   expect(await chat(alice)).toBe('18.75px');
   expect(puts).toEqual([]);
 });
+
+// 038-AC14: /profile › Account lists the room's text sizes, the same steps, editable there; a pick
+// in the room shows on /profile after a reload, and one on /profile in the room after a reload.
+test('text size on /profile and in the room', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await playEvents(alice, room.id, lines);
+  const prof = await alice.context().newPage();
+  await prof.goto('/profile#account');
+  const group = (area) => prof.locator('#text-size').getByRole('group', { name: area });
+  for (const area of ['Chat', 'Transcription']) {
+    await expect(group(area).getByRole('radio')).toHaveCount(4);
+    await expect(group(area).locator('label')).toHaveText(['S', 'M', 'L', 'XL']);
+    await expect(group(area).getByLabel('M', { exact: true })).toBeChecked();
+  }
+  const saved = () => prof.evaluate(() => fetch('/api/profile').then((r) => r.json()).then((r) => r.profile.text_sizes));
+
+  await pick(alice, 'Chat', 'L');
+  await expect.poll(saved).toEqual({ chat: 'l' });
+  await prof.reload();
+  await expect(group('Chat').getByLabel('L', { exact: true })).toBeChecked();
+  await expect(group('Transcription').getByLabel('M', { exact: true })).toBeChecked();
+
+  await group('Transcription').getByLabel('XL', { exact: true }).check();
+  await expect.poll(saved).toEqual({ chat: 'l', transcript: 'xl' });
+  // Another browser of the profile: the pick came from the server, not this one's copy.
+  const other = await browser.newContext();
+  await other.addCookies(await alice.context().cookies());
+  const away = await openRoom(other, alice.url(), room.id);
+  await expect.poll(() => pane(away)).toBe('17.5px');
+  expect(await chat(away)).toBe('16.875px');
+  await playEvents(alice, room.id, lines);
+  expect(await pane(alice)).toBe('17.5px');
+});
+
+// 038-AC14: a pick in a room while /profile is open is kept by the next pick on /profile, which
+// sends the whole map.
+test('a room pick survives the next pick on an open /profile', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await playEvents(alice, room.id, lines);
+  const prof = await alice.context().newPage();
+  await prof.goto('/profile#account');
+  const group = (area) => prof.locator('#text-size').getByRole('group', { name: area });
+  await expect(group('Chat').getByLabel('M', { exact: true })).toBeChecked();
+  await pick(alice, 'Chat', 'L');
+  await expect(group('Chat').getByLabel('L', { exact: true })).toBeChecked();
+  await group('Transcription').getByLabel('XL', { exact: true }).check();
+  await expect.poll(() => prof.evaluate(() => fetch('/api/profile').then((r) => r.json()).then((r) => r.profile.text_sizes)))
+    .toEqual({ chat: 'l', transcript: 'xl' });
+});

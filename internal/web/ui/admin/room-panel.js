@@ -175,7 +175,7 @@ export function TabBar({ tabs, active, href, label, cls, header }) {
 }
 
 /** The tabs of a room's management that both pages share; each page adds its own. */
-export const roomTabs = { general: 'General', invites: 'Invites', admins: 'Admins', export: 'Export' };
+export const roomTabs = { general: 'General', invites: 'Invites', admins: 'Members and admins', export: 'Export' };
 
 /**
  * RoomPanel manages one room in tabs (005-AC15, 005-AC16). General shows the room's volume against
@@ -303,18 +303,18 @@ export function Invites({ base, api, show, byName, me, cut = false }) {
         <div class="actions">${!i.revoked_at && html`<${RowMenu} id=${'invite-menu-' + i.id} label=${'More actions on link ' + i.id}
           items=${[['Revoke…', () => ask(i), 'danger', 'Revoke link ' + i.id]]}/>`}</div></li>`)}</ul></div>`
       : html`<p class="empty" id="invites-empty">No invite links yet. New invite link makes one to share.</p>`)}
-    ${preview && html`<${RevokeSheet} key=${preview.id} preview=${preview} base=${base} api=${api} cut=${cut} done=${() => { setPreview(null); load(); }}/>`}
-    ${cut && html`<${Blocked} base=${base} api=${api} show=${show}/>`}`;
+    ${preview && html`<${RevokeSheet} key=${preview.id} preview=${preview} base=${base} api=${api} cut=${cut} done=${() => { setPreview(null); load(); }}/>`}`;
 }
 
 /**
- * Blocked lists the profiles a room admin blocked from rejoining, with Unblock (016-AC14).
- * @param {{base: string, api: Api, show: (err: unknown) => void}} props
+ * Blocked lists the profiles a room admin blocked from rejoining, with Unblock (016-AC14), under
+ * the member list (038-AC9). people is that list: a removal with a block changes it.
+ * @param {{base: string, api: Api, show: (err: unknown) => void, people: unknown}} props
  */
-function Blocked({ base, api, show }) {
+export function Blocked({ base, api, show, people }) {
   const [blocks, setBlocks] = useState(/** @type {Block[] | null} */ (null));
   const load = () => api('GET', base + '/blocks').then(setBlocks).catch(show);
-  useEffect(() => { load(); }, [base]);
+  useEffect(() => { load(); }, [base, people]);
   /** @param {Block} b */
   const unblock = (b) => api('DELETE', `${base}/blocks/${b.profile_id}`).then(() => { toast(b.name + ' unblocked'); load(); }).catch(show);
   if (!blocks || !blocks.length) return null;

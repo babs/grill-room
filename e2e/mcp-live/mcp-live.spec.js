@@ -29,7 +29,7 @@ test('Claude Code sets up a room through /mcp', async ({ browser, request }) => 
   await page.goto('/profile#tokens');
   await page.locator('#token-list .empty').getByRole('button', { name: 'New token' }).click();
   await page.getByLabel('Name').fill('claude live');
-  await page.getByLabel('Full: what your profile can do').check();
+  await page.getByLabel('Full: it can also create rooms').check();
   await page.getByRole('button', { name: 'Create token' }).click();
   const command = await page.locator('#token-mcp .value').getAttribute('data-value');
   const token = await page.locator('#token-value .value').getAttribute('data-value');

@@ -4837,7 +4837,7 @@ function showSTT(st) {
   sttEngines = st.engines || [];
   showCredit();
   sttGlossary = !!st.glossary;
-  // The Room settings sheet (admin/room-admin.js) shows its glossary tab from the same state, and
+  // The Room settings sheet (admin/room-admin.js) fills its glossary tab from the same state, and
   // stt/device.js offers device transcription from it, the credit included (010-AC8).
   window.grillSTT = { glossary: sttGlossary, available: !!st.available, device: st.device || null };
   window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
@@ -4986,81 +4986,36 @@ window.addEventListener('pagehide', () => { if (events) beat(true); });
 for (const ev of ['focus', 'blur']) window.addEventListener(ev, () => { if (events) beat(); });
 document.addEventListener('visibilitychange', () => { if (events) beat(); });
 
-// Web Push (005-AC24): one browser subscription, registered for each room where the participant
-// turns notifications on. Turning them off here leaves the other rooms' alone.
-const pushKey = 'grill-room-push:' + roomID;
-const pushable = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
-const homeScreen = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+// Web Push (005-AC24), shared with /profile in push.js. Turning notifications off here leaves the
+// other rooms' alone.
+const { pushable } = window.grillPush;
+const pushKey = window.grillPush.key(roomID);
 
 function pushStatus(text) {
   $('push-status').textContent = text;
 }
 
-// pushOn: turned on here, and the browser still allows notifications; revoked in its settings, the
-// toggle offers to turn them on again.
-const pushOn = () => localStorage.getItem(pushKey) === '1' && pushable && Notification.permission === 'granted';
-
-// pushRooms records in Cache Storage the rooms with notifications on and their "every line"
-// choice: the service worker renews the subscription for each (sw.js resubscribe).
-async function pushRooms(edit) {
-  const cache = await caches.open('grill-room-push');
-  const saved = await cache.match('/rooms');
-  const rooms = saved ? await saved.json() : {};
-  edit(rooms);
-  await cache.put('/rooms', Response.json(rooms));
-}
+const pushOn = () => window.grillPush.on(roomID);
 
 function renderPush() {
   const on = pushOn();
-  $('push-hint').hidden = !(ios && !homeScreen) && pushable;
-  $('push-hint').textContent = ios && !homeScreen
-    ? 'On iPhone and iPad, notifications work once the room is on the home screen: Share, Add to Home Screen, then open it from there.'
-    : 'This browser does not support notifications.';
+  $('push-hint').hidden = !window.grillPush.hint;
+  $('push-hint').textContent = window.grillPush.hint;
   $('push-toggle').hidden = !pushable;
   $('push-toggle').textContent = on ? 'Turn off notifications' : 'Turn on notifications';
   $('push-all-label').hidden = !pushable || !on;
   $('push-all').checked = localStorage.getItem(pushKey + ':all') === '1';
 }
 
-async function pushSubscription(create) {
-  const reg = await navigator.serviceWorker.register('/sw.js');
-  await navigator.serviceWorker.ready;
-  const sub = await reg.pushManager.getSubscription();
-  if (!create) return sub;
-  const res = await netFetch(api + '/push');
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  const key = Uint8Array.from(atob((await res.json()).key.replaceAll('-', '+').replaceAll('_', '/')), (c) => c.charCodeAt(0));
-  const held = sub && sub.options.applicationServerKey;
-  if (sub && held && key.join() !== new Uint8Array(held).join()) {
-    // Made with another VAPID key, as after the instance's key changed: push services refuse it.
-    await sendJSON('DELETE', api + '/push', { subscription: { endpoint: sub.endpoint } });
-    await sub.unsubscribe();
-    const fresh = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-    // The other rooms turned on in this browser held the old one too.
-    reg.active.postMessage({ resubscribe: fresh.toJSON() });
-    return fresh;
-  }
-  return sub || reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-}
+const savePush = () => window.grillPush.save(roomID, sendJSON);
 
-async function savePush() {
-  const sub = await pushSubscription(true);
-  const all = $('push-all').checked;
-  const done = await sendJSON('PUT', api + '/push', { subscription: sub.toJSON(), all_messages: all });
-  if (!done) return;
-  localStorage.setItem(pushKey, '1');
-  await pushRooms((rooms) => { rooms[roomID] = all; });
-}
-
-const pushDenied = 'The browser did not allow notifications: allow them in its site settings, then try again.';
+const pushDenied = window.grillPush.denied;
 // The explainer comes before the browser's permission request (008-AC10), and once, unprompted, after the
 // first message of a page load (008-AC11). Dismissing it snoozes the offer for 14 days in this
 // browser; the Notifications sheet still reaches it.
-const pushSnoozeKey = 'grill-room-push-snooze';
-const pushSnooze = 14 * 24 * 3600e3;
 let pushAccepted = false;
 let pushOffered = false;
-const snoozePush = () => localStorage.setItem(pushSnoozeKey, String(Date.now() + pushSnooze));
+const { snooze: snoozePush, snoozeKey: pushSnoozeKey } = window.grillPush;
 
 // pushReport says how turning on went: in the Notifications sheet, and in a toast when the
 // explainer came unprompted.
@@ -5078,13 +5033,8 @@ function turnOnPush() {
 $('push-toggle').addEventListener('click', () => {
   pushStatus('');
   if (pushOn()) {
-    (async () => {
-      const sub = await pushSubscription(false);
-      if (sub) await sendJSON('DELETE', api + '/push', { subscription: { endpoint: sub.endpoint } });
-      localStorage.removeItem(pushKey);
-      await pushRooms((rooms) => { delete rooms[roomID]; });
-      pushStatus('Notifications off for this room.');
-    })().catch((err) => pushStatus('Notifications: ' + err.message)).finally(renderPush);
+    window.grillPush.off(roomID, sendJSON).then(() => pushStatus('Notifications off for this room.'))
+      .catch((err) => pushStatus('Notifications: ' + err.message)).finally(renderPush);
   } else if (Notification.permission === 'granted') {
     // Allowed already, from another room: nothing to ask.
     turnOnPush();
@@ -5117,7 +5067,7 @@ $('push-explain').addEventListener('close', () => {
 function offerPush() {
   if (pushOffered) return;
   pushOffered = true;
-  if (!pushable || docsMode || chatMode || (ios && !homeScreen) || Notification.permission !== 'default') return;
+  if (window.grillPush.hint || docsMode || chatMode || Notification.permission !== 'default') return;
   if (localStorage.getItem(pushKey) === '1' || Date.now() < Number(localStorage.getItem(pushSnoozeKey) || 0)) return;
   if (!document.querySelector('dialog[open]')) $('push-explain').showModal();
 }

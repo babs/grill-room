@@ -9,6 +9,22 @@ if (shots) mkdirSync(shots, { recursive: true });
 const shot = (page, name) => (shots ? page.screenshot({ path: `${shots}/${name}.png` }) : null);
 const sizes = { desktop: { width: 1440, height: 900 }, phone: { width: 390, height: 844 } };
 
+// 038-AC13: the tab and its heading name Claude Code; each scope says what it lets Claude Code do.
+test('API tokens and Claude Code: the scopes say what they allow', async ({ browser, request }) => {
+  const { pages: [pat] } = await roomWith(browser, request, ['Scopes']);
+  const page = await pat.context().newPage();
+  await page.setViewportSize(sizes.phone);
+  await page.goto('/profile#tokens');
+  await expect(page.locator('#tab-tokens')).toHaveText(/^API tokens and Claude Code/);
+  await expect(page.locator('#panel-tokens h2')).toHaveText('API tokens and Claude Code');
+  await page.locator('#token-list .empty').getByRole('button', { name: 'New token' }).click();
+  const scopes = page.locator('#token-sheet .token-scope label');
+  await expect(scopes).toHaveText(['Read only: Claude Code can read your rooms, documents and transcripts.',
+    'Full: it can also create rooms, add personas, link rooms and change settings.']);
+  await expect(page.locator('#token-sheet').getByLabel('Read only: Claude Code can read')).toBeChecked();
+  expect(await noOverflow(page)).toEqual([]);
+});
+
 // 012-AC1 012-AC2 012-AC8 012-AC9: create a token, see it once with its Copy, watch its first use
 // show in its row, revoke it from the row's ⋯ and see the next request refused.
 for (const [vp, size] of Object.entries(sizes)) {
@@ -26,9 +42,10 @@ for (const [vp, size] of Object.entries(sizes)) {
     await expect(sheet).toBeVisible();
     await sheet.getByLabel('Name').fill(`ci ${vp}`);
     await sheet.getByLabel('Expires').selectOption('30');
-    await sheet.getByLabel('Full: what your profile can do').check();
+    await sheet.getByLabel('Full: it can also create rooms').check();
     await sheet.getByRole('button', { name: 'Create token' }).click();
-    await expect(sheet).toContainText("You won't see this token again.");
+    // 038-AC13
+    await expect(sheet).toContainText('This command shows once. Lost it? Make a new token and revoke this one.');
     const value = sheet.locator('#token-value .value');
     const token = await value.getAttribute('data-value');
     expect(token).toMatch(/^grt_[A-Z2-7]{26}$/);

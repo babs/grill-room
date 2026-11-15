@@ -6,7 +6,7 @@ import { render } from 'preact';
 import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
-import { RoomPanel, AdminRows, TabBar, Invites, RowMenu, fetchJSON, roomTabs, icon, ago } from './room-panel.js';
+import { RoomPanel, AdminRows, Blocked, TabBar, Invites, RowMenu, fetchJSON, roomTabs, icon, ago } from './room-panel.js';
 import { Editor } from './starters.js';
 import { PluginsTab, mountReview } from './plugins.js';
 
@@ -37,7 +37,7 @@ addEventListener('grill:links', (e) => { roomLinks.value = /** @type {CustomEven
 const reloadLinks = () => w.grillShowLinks?.();
 
 const allTabs = [...Object.entries(roomTabs).slice(0, 3), ['links', 'Links'], ['personas', 'Personas'], ['skills', 'Skills'], ['plugins', 'Plugins'],
-  ['network', 'Websites and connectors'], ['documents', 'Documents'], ['export', roomTabs.export], ['glossary', 'Words to recognise'],
+  ['network', 'Websites and connectors'], ['documents', 'Deleted documents'], ['export', roomTabs.export], ['glossary', 'Words to recognise'],
   ['voices', 'Call voices']];
 // The tabs a plain member gets; a room admin gets them all. Every member reads the room's plugins
 // (009-AC5), its websites (014), its links (023-AC1) and manages their own invites (011-AC27).
@@ -97,7 +97,8 @@ function Manage({ data, tab, tabs }) {
         <p class="hint">The server's audit log records what room admins do here.</p>`}>
       ${tab === 'admins' && html`
         <p class="hint">Room admins rename the room and its participants, manage every invite, appoint other admins and delete the room. The room keeps at least one.</p>
-        <${AdminRows} people=${data.participants} base=${base} api=${fetchJSON} show=${show} done=${() => setSaid('')} me=${data.me.id}/>`}
+        <${AdminRows} people=${data.participants} base=${base} api=${fetchJSON} show=${show} done=${() => setSaid('')} me=${data.me.id}/>
+        <${Blocked} base=${base} api=${fetchJSON} show=${show} people=${data.participants}/>`}
       ${tab === 'personas' && html`
         <p class="hint">Every member adds and edits the room's personas in the Personas sheet. A persona's name opens its own sheet.</p>
         <ul id="manage-personas">${personas.map((p) => html`<li key=${p.id}><span><span class="badge persona-badge">${p.badge}</span> <a href=${'#personas/' + p.id + '/identity'}

@@ -129,3 +129,6 @@ None.
 - AC10: both reasons end with the "Step down" link to `#manage/admins`. The avatar menu and the People ⋯ entry give the same reason, counted per profile as the server counts room admins.
 - AC11: N counts the lines the shown filter hides in the chat list, not the unread counts, which reset once seen.
 - AC12: covers the settings, editable places; the persona card and the picker, read only, still leave the call out without a voice engine. Words to recognise says "Loading…" until the room's voice-to-text state comes and "Voice-to-text is off" (007) while the workers are down; "Not available on this server" is for a server where no live worker reads a glossary: none, parakeet, or whisper without `APP_GLOSSARY_PROMPT`.
+- AC9: part A's tab fold shipped (`grillShowTab`); "Members and admins" folds /admin's room tab bar on a phone, as any long bar does.
+- AC13: each scope's text is its radio's label. "This command shows once…" replaces the old copy-it-now line.
+- AC14: Notifications on `/profile` lists the profile's rooms, each on or off in this browser, through a copy of the room's explainer that names the room, and the room's push code (one shared script). The "Also every other line" choice stays in the room's sheet. A text size picked on `/profile` also updates this browser's copy, so an open room follows at once.
