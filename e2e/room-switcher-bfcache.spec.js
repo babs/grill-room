@@ -48,7 +48,7 @@ test('Back to /profile from the cache shows fresh counts', async ({ browser, req
   const bob = await join('Bob');
   await bob.evaluate((id) => fetch(`/api/rooms/${id}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"body":"news"}' }), room.id);
   await alice.reload();
-  const badge = alice.locator('#rooms .card .badge');
+  const badge = alice.locator('#rooms .card .badge.unread');
   await expect(badge).toHaveText('1');
   await alice.evaluate(() => { window.kept = 1; });
   const read = alice.waitForResponse((r) => r.request().method() === 'PUT' && r.url().endsWith('/read'));

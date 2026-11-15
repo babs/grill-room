@@ -15,7 +15,10 @@ let emailEnabled = false;
 // The name the profile chose in a room (005-AC1), else the one it last joined with.
 /** @param {{name?: string, rooms: {name: string}[]}} p */
 const nameOf = (p) => p.name || (p.rooms[0] || {}).name || '';
+// roomsSeq counts full renders: a rooms refresh that started before one is out of date.
+let roomsSeq = 0;
 function render({ email_enabled: enabled, profile, magic_link_ttl_s: linkTTL, internal }) {
+  roomsSeq++;
   ttl = linkTTL || 0;
   // A guest signed out has no way back to its profile without an email: only internals get it.
   $('sign-out-item').hidden = !internal;
@@ -105,11 +108,12 @@ async function reloadRooms() {
     do {
       roomsAgain = false;
       if (!shown) return;
+      const seq = roomsSeq;
       try {
         const res = await fetch('/api/profile', { signal: AbortSignal.timeout(10000) });
         const p = res.ok ? (await res.json()).profile : null;
         // Another profile signed in elsewhere: its rooms would show under this one's name.
-        if (p && p.id === shown.id) renderRooms(p, nameOf(p));
+        if (p && p.id === shown.id && seq === roomsSeq) renderRooms(p, nameOf(p));
       } catch (err) {
         console.error(err);
       }

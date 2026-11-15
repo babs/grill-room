@@ -1566,9 +1566,9 @@ const noEmail = () => own.email_enabled && !!own.profile && !own.profile.email;
 // ownLoaded is the latest loadOwn, settled.
 let ownLoaded = Promise.resolve();
 // ownState is how the last read ended, for the switcher: 'loading' until one answers, 'ok' or
-// 'failed' (041-AC3); ownAt is when the last one succeeded.
+// 'failed' (041-AC3); ownOnce once one has succeeded.
 let ownState = 'loading';
-let ownAt = 0;
+let ownOnce = false;
 let ownBusy = false;
 let ownAgain = false;
 // One request at a time (041-AC3); a call meanwhile runs one more read after it, so a return to
@@ -1606,7 +1606,7 @@ async function loadOwn() {
     }
     own = await res.json();
     ownState = 'ok';
-    ownAt = Date.now();
+    ownOnce = true;
   } finally {
     ownSeen = true;
     renderHelp();
@@ -1628,7 +1628,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) relo
 // (041-AC1). No switcher in an ended room nor in the docs and chat windows (041-AC6).
 const switchMenu = $('room-switch');
 function showSwitch() {
-  $('switch-open').hidden = ended || docsMode || chatMode || !(own.profile || (hasProfile && !ownAt));
+  $('switch-open').hidden = ended || docsMode || chatMode || !(own.profile || (hasProfile && !ownOnce));
   if (!switchMenu.matches(':popover-open')) return;
   if (!$('switch-open').hidden) return renderSwitch();
   // The focus would drop to the page: what held it at opening sits in a closed menu.
@@ -2727,9 +2727,11 @@ let readEligible = 0;
 let readSent = 0;
 let readSentAt = 0;
 let readTimer = 0;
-// checkVisibility: on a phone the Docs and People tabs hide the chat. A modal sheet covers it.
+// checkVisibility: on a phone the Docs and People tabs hide the chat. A modal sheet, or another
+// element full screen, covers it.
 const chatRead = () => !docsMode && !ended && hasProfile && isPinned(messages) && messages.checkVisibility()
-  && !document.querySelector('dialog:modal') && document.visibilityState === 'visible' && document.hasFocus();
+  && !document.querySelector('dialog:modal') && !(document.fullscreenElement && !document.fullscreenElement.contains(messages))
+  && document.visibilityState === 'visible' && document.hasFocus();
 function markRead() {
   if (lastID > readEligible && chatRead()) readEligible = lastID;
   if (readEligible <= readSent || readTimer) return;
@@ -2739,12 +2741,13 @@ function markRead() {
 function sendRead() {
   clearTimeout(readTimer);
   readTimer = 0;
-  if (readEligible <= readSent) return;
+  if (ended || readEligible <= readSent) return;
   const was = readSent;
   const through = readSent = readEligible;
   readSentAt = Date.now();
   fetch(api + '/read', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ through }), keepalive: true })
-    .then((res) => { if (!res.ok) throw new Error('HTTP ' + res.status); })
+    // A 4xx would answer the same again: only a network error, a 5xx, a 408 or a 429 is sent again.
+    .then((res) => { if (res.status >= 500 || res.status === 408 || res.status === 429) throw new Error('HTTP ' + res.status); })
     .catch(() => {
       if (readSent !== through) return;
       readSent = was;
@@ -2757,6 +2760,7 @@ window.addEventListener('focus', markRead);
 // A phone may hide the page for good without a pagehide.
 document.addEventListener('visibilitychange', () => (document.hidden ? sendRead() : markRead()));
 window.addEventListener('pagehide', sendRead);
+document.addEventListener('fullscreenchange', markRead);
 // close does not bubble: caught on its way down.
 document.addEventListener('close', markRead, true);
 
