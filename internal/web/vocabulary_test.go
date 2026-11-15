@@ -546,7 +546,7 @@ func TestHelpWords(t *testing.T) {
 		"Room: A place where people and personas talk, with its chat, documents and call.",
 		"Persona: An AI with a name, a prompt and a model, who answers in the room when asked or on its own.",
 		"AI host: The person whose computer runs the personas.",
-		"AI host app: The app the AI host runs for it.",
+		"AI host app: The app the AI host runs on their computer for the personas.",
 		"Call: The room's audio, and its cameras and screens.",
 		"Voice-to-text: What writes the call down as lines in the chat.",
 		"Note: A comment pinned to a part of a document.",

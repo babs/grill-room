@@ -4469,12 +4469,16 @@ function youRows(data) {
   // A ready engine holds the voice only while its pipeline runs on the device: a fall back hands it to the server (010-AC17).
   const onDevice = engine === 'ready' && dev.pipeline.mode === 'device';
   const wait = 'Transcription is on, waiting: ';
+  // The audio bar's worker state: up on the server, in this room's audio, on my voice.
+  const st = window.grillSTT;
   const rows = [{ id: 'call', lines: ['In the call · ' + (muted ? 'muted' : 'mic on') + ' · ' + (deaf ? 'stopped hearing the call' : 'hearing the call')] },
     { id: 'stt', lines: [sttOff ? 'Your voice is not written down' : muted ? wait + 'your mic is muted'
       : sttMine || onDevice ? 'Your voice is written down now'
-      : engine === 'loading' || engine === 'testing' ? wait + 'the model is downloading'
+      : engine === 'loading' ? wait + 'the model is downloading'
+      : engine === 'testing' ? wait + 'this device is testing the model'
       // "This server"'s own test: off here only where it reads off.
-      : window.grillSTT && !window.grillSTT.available ? wait + 'voice-to-text is off' : wait + 'voice-to-text is starting'] }];
+      : !st ? 'Loading…' : !st.available ? wait + 'voice-to-text is off'
+      : !st.listening ? wait + 'voice-to-text is not in the call' : wait + 'voice-to-text is in the call but not writing down your voice'] }];
   // Only where 010 offers the choice: the audio menu shows its toggle.
   if (dev?.info.offered) rows.push({ id: 'where', lines: ['Voice-to-text runs ' + (onDevice ? 'on this device' : 'on the server')] });
   return rows;
@@ -4483,8 +4487,9 @@ function youRows(data) {
 function roomRows(data) {
   const sp = data.room.speech;
   const st = window.grillSTT;
-  // No worker reads the glossary: the reason its tab gives (admin/room-admin.js glossaryNone).
-  const none = !data.voice ? absent : !st ? 'Loading…' : !st.available ? 'Voice-to-text is off' : !st.glossary ? absent : '';
+  // No worker reads the glossary: the reason its tab gives (admin/room-admin.js glossaryNone). The
+  // count needs no worker: it shows until the state says otherwise.
+  const none = !data.voice ? absent : !st ? '' : !st.available ? 'Voice-to-text is off' : !st.glossary ? absent : '';
   const rows = [none ? { id: 'glossary', lines: ['Words to recognise', none] }
     : { id: 'glossary', lines: ['Words to recognise', glossaryWords === null ? 'Loading…' : glossaryWords === false ? 'Could not load the words.'
       : glossaryWords + (glossaryWords === 1 ? ' word' : ' words')], who: 'any member', actions: [ovLink('glossary', 'Open Words to recognise', '#manage/glossary')] }];
@@ -5390,7 +5395,7 @@ function showSTT(st) {
   sttGlossary = !!st.glossary;
   // The Room settings sheet (admin/room-admin.js) fills its glossary tab from the same state, and
   // stt/device.js offers device transcription from it, the credit included (010-AC8).
-  window.grillSTT = { glossary: sttGlossary, available: !!st.available, device: st.device || null };
+  window.grillSTT = { glossary: sttGlossary, available: !!st.available, listening: !!st.listening, device: st.device || null };
   window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
   renderOverview();
 }

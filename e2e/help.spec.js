@@ -44,6 +44,10 @@ test('Help: a plain member, live through the host\'s changes', async ({ browser,
   await openHelp(bob);
   await expect(sheet(bob).getByRole('heading', { name: 'What you can do here' })).toBeVisible();
   await expect(sheet(bob).getByRole('heading', { name: 'Words' })).toBeVisible();
+  // The list names itself by its heading; only Words, a <dl>, keeps a landmark for it.
+  await expect(sheet(bob).getByRole('region')).toHaveCount(1);
+  await expect(sheet(bob).getByRole('region', { name: 'Words' })).toBeVisible();
+  await expect(sheet(bob).getByRole('list', { name: 'What you can do here' })).toBeVisible();
   expect(await can(bob)).toEqual([['member', lines.member], ['ask', whoever], ['host', lines.noHost, 'What\'s missing?', '#ai']]);
   expect(await sheet(bob).locator('#help-words dt').allTextContents()).toEqual(words);
   await expect(sheet(bob).locator('#help-words dd').first()).toHaveText('A place where people and personas talk, with its chat, documents and call.');
