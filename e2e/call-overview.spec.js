@@ -387,7 +387,12 @@ test('call overview: links out and back', async ({ browser, request }) => {
   // A Save that jumps to the tab of an invalid field keeps the way back.
   await grillLink.click();
   const ps = alice.locator('#persona-sheet');
-  await ps.getByLabel('Name').fill('');
+  // The form may redraw once its skills read lands, before anything is typed: a fill on the
+  // replaced field would be lost, so fill until the sheet counts the change.
+  await expect(async () => {
+    await ps.getByLabel('Name').fill('');
+    await expect(ps.getByRole('button', { name: 'Save', exact: true })).toBeEnabled({ timeout: 500 });
+  }).toPass();
   await ps.getByRole('link', { name: 'Model', exact: true }).click();
   await ps.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(alice).toHaveURL(new RegExp(`#personas/${grill.id}/identity$`));
