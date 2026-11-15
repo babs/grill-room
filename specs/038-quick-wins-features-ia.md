@@ -1,6 +1,6 @@
 # 038 — Quick wins: dead ends, wording, places
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-14
 **Context**: UX audit part B, quick wins Q1, Q3-Q5, Q8-Q17 (Q2, Q6 and Q7 are in 035). Part A's quick wins (layout and accessibility) ship apart; this spec does not touch the Personas sheet (035) or the announcement and layout specs (036, 037). Builds on 005 (room menu), 006 (starters), 009 (skills, plugins), 011 (invites, admins), 012 (API tokens), 020 (chat filter), 023 (links, proposals), 028 (text size).
@@ -48,39 +48,39 @@ Small changes, each in place, with no new screen:
 
 ### AI host
 
-- [ ] **AC1** The AI host app's General setting reads "Hold new AI personas and changes for my approval". Ticking it toasts "New AI personas and changes wait for your approval"; unticking toasts "New AI personas and changes apply at once". A test pins the toast to the stored `approve_all` value.
-- [ ] **AC2** On a phone or tablet, meaning Android, iOS or iPadOS (an iPad that reports a Mac platform with touch points counts), the host sheet reads "Running the AI needs a computer with Docker." It offers no download and no "Open my AI host app", and shows the hand-off of AC3. The room menu hides "Open my AI host app" there.
-- [ ] **AC3** Wherever the room says no one runs the AI (offline pill tip, host sheet, ▶ on an offline pill), an "Ask someone to run it" action copies a message: "Can you run the AI for our grill-room room? Open <room link>, then click the room's name › Run the AI on my computer." The action answers "Message copied.".
+- [x] **AC1** The AI host app's General setting reads "Hold new AI personas and changes for my approval". Ticking it toasts "New AI personas and changes wait for your approval"; unticking toasts "New AI personas and changes apply at once". A test pins the toast to the stored `approve_all` value.
+- [x] **AC2** On a phone or tablet, meaning Android, iOS or iPadOS (an iPad that reports a Mac platform with touch points counts), the host sheet reads "Running the AI needs a computer with Docker." It offers no download and no "Open my AI host app", and shows the hand-off of AC3. The room menu hides "Open my AI host app" there.
+- [x] **AC3** Wherever the room says no one runs the AI (offline pill tip, host sheet, ▶ on an offline pill), an "Ask someone to run it" action copies a message: "Can you run the AI for our grill-room room? Open <room link>, then click the room's name › Run the AI on my computer." The action answers "Message copied.".
 
 ### Links that were text
 
-- [ ] **AC4** Empty Capabilities reads "Add a skill on your profile page" with "your profile page" linking to `/profile#skills`; its plugin hint links "Room settings › Plugins" to `#manage/plugins`. Empty Room settings › Skills links to the Personas sheet. The "Saved "<title>" to your starters" toast carries an "Open" link to `/profile#starters`.
-- [ ] **AC5** A starter row's ⋯ on `/profile` › Starters offers "Create a room from this" first. It opens the new-room sheet with that starter picked.
+- [x] **AC4** Empty Capabilities reads "Add a skill on your profile page" with "your profile page" linking to `/profile#skills`; its plugin hint links "Room settings › Plugins" to `#manage/plugins`. Empty Room settings › Skills links to the Personas sheet. The "Saved "<title>" to your starters" toast carries an "Open" link to `/profile#starters`.
+- [x] **AC5** A starter row's ⋯ on `/profile` › Starters offers "Create a room from this" first. It opens the new-room sheet with that starter picked.
 
 ### Proposals and links
 
-- [ ] **AC6** After Create on a proposal card, the sheet shows "Room <name> created" with "Open the room" and "Stay here". The card then links to the room, as today.
-- [ ] **AC7** Every member of a room created from a proposal sees "Proposed in <room>" in the room menu, linked when they are a member of that room and plain text otherwise. It no longer appears only in Room settings › General.
-- [ ] **AC8** The room menu always shows "Linked rooms": with links, "Linked rooms (N)" as today; with none, room admins see "Link a room…" (opens `#manage/links`) and plain members see nothing. "Link a room" with no other room to link reads "You are a room admin of no other room. Create one first." with a link to `/profile#rooms`.
+- [x] **AC6** After Create on a proposal card, the sheet shows "Room <name> created" with "Open the room" and "Stay here". The card then links to the room, as today.
+- [x] **AC7** Every member of a room created from a proposal sees "Proposed in <room>" in the room menu, linked when they are a member of that room and plain text otherwise. It no longer appears only in Room settings › General.
+- [x] **AC8** The room menu always shows "Linked rooms": with links, "Linked rooms (N)" as today; with none, room admins see "Link a room…" (opens `#manage/links`) and plain members see nothing. "Link a room" with no other room to link reads "You are a room admin of no other room. Create one first." with a link to `/profile#rooms`.
 
 ### Membership
 
-- [ ] **AC9** Room settings tabs: "Admins" becomes "Members and admins", "Documents" becomes "Deleted documents". "Blocked from rejoining" moves from Invites to Members and admins, under the member list. `#manage/admins` and `#manage/documents` keep working.
-- [ ] **AC10** The avatar menu has "Leave room…". For a room admin it is disabled with the reason as visible text, "Step down as room admin first", and a "Step down" link to `#manage/admins`. For the last room admin the reason reads "Make someone else room admin, then step down." The People ⋯ entry stays.
+- [x] **AC9** Room settings tabs: "Admins" becomes "Members and admins", "Documents" becomes "Deleted documents". "Blocked from rejoining" moves from Invites to Members and admins, under the member list. `#manage/admins` and `#manage/documents` keep working.
+- [x] **AC10** The avatar menu has "Leave room…". For a room admin it is disabled with the reason as visible text, "Step down as room admin first", and a "Step down" link to `#manage/admins`. For the last room admin the reason reads "Make someone else room admin, then step down." The People ⋯ entry stays.
 
 ### Chat filter
 
-- [ ] **AC11** When the chat filter hides lines that exist (voice lines under Written, written under Voice), a one-line hint under the filter says "N voice lines hidden" with "Show all" (a view for this visit, 020's viewFilter). The hint goes once nothing is hidden.
-- [ ] **AC12** Room settings tabs and settings that depend on a server engine (Words to recognise, Call voices, a persona's voice) show "Not available on this server" in place of vanishing, at the place they would be.
+- [x] **AC11** When the chat filter hides lines that exist (voice lines under Written, written under Voice), a one-line hint under the filter says "N voice lines hidden" with "Show all" (a view for this visit, 020's viewFilter). The hint goes once nothing is hidden.
+- [x] **AC12** Room settings tabs and settings that depend on a server engine (Words to recognise, Call voices, a persona's voice) show "Not available on this server" in place of vanishing, at the place they would be.
 
 ### Profile
 
-- [ ] **AC13** `/profile` › "API tokens" becomes "API tokens and Claude Code". The New token form says what each scope allows: "Read only: Claude Code can read your rooms, documents and transcripts." and "Full: it can also create rooms, add personas, link rooms and change settings." The creation result says "This command shows once. Lost it? Make a new token and revoke this one."
-- [ ] **AC14** `/profile` › Account lists "Text size" (chat, Transcription, editable there, same values as the room's sheet) and "Notifications" (state per this browser, with the room's turn-on flow). A change on either side shows on the other after a reload.
+- [x] **AC13** `/profile` › "API tokens" becomes "API tokens and Claude Code". The New token form says what each scope allows: "Read only: Claude Code can read your rooms, documents and transcripts." and "Full: it can also create rooms, add personas, link rooms and change settings." The creation result says "This command shows once. Lost it? Make a new token and revoke this one."
+- [x] **AC14** `/profile` › Account lists "Text size" (chat, Transcription, editable there, same values as the room's sheet) and "Notifications" (state per this browser, with the room's turn-on flow). A change on either side shows on the other after a reload.
 
 ### Words
 
-- [ ] **AC15** One vocabulary, applied to visible text, `aria-label`s, tips, README and docs:
+- [x] **AC15** One vocabulary, applied to visible text, `aria-label`s, tips, README and docs:
 
   | Concept | Word | Replaces |
   |---|---|---|
@@ -91,7 +91,7 @@ Small changes, each in place, with no new screen:
   | Who sees a shared thing | Shared with everyone on this server | Everyone on this server, Shared with everyone (alone) |
 
   A grep test over `internal/web/ui`, `internal/daemon/ui`, README and `docs/` fails on any replaced word in visible text.
-- [ ] **AC16** README's room menu section names the room name as the menu, not "`⋯` menu". The AI host app's Activity hint says "for the days set on General".
+- [x] **AC16** README's room menu section names the room name as the menu, not "`⋯` menu". The AI host app's Activity hint says "for the days set on General".
 
 ## Phases
 
@@ -121,7 +121,7 @@ None.
 - The hand-off message carries the room link, not an invite. Because whoever runs the AI pairs through the room link and a member approves them (005), and a plain member may not make invites.
 - "Stop hearing the call", not "Deafen": the audit found "Mute the room" read as silencing everyone.
 - The longer tab names depend on part A's tab fold on overflow (A10) at 820 px. If A10 has not shipped, phase 2 waits for it.
-- AC2: the room link field and its Copy button hide on a phone with the "its page" section: the hand-off message carries the link. Diagnostics' "Open my AI host app" hides there too. Known limit: an Android tablet in Chrome's desktop mode sends a Linux user agent, on UA-CH too, and sees the computer sheet.
+- AC2: the room link field and its Copy button hide on a phone with the "Already have the app?" section: the hand-off message carries the link. Diagnostics' "Open my AI host app" hides there too. Known limit: an Android tablet in Chrome's desktop mode sends a Linux user agent, on UA-CH too, and sees the computer sheet.
 - AC3: the pill's tip is a plain tooltip and holds no button, so "Ask someone to run it" sits in the pill's card. The card and the ▶ dialog offer it only when the room has no AI host at all; a known host whose app is away is named, and members ask that host. The host sheet always offers it. A failed copy shows the message to copy by hand.
 - AC4: a toast holds one action, a button ("Undo") or a link ("Open").
 - AC5: "Create a room from this" opens the new-room sheet in that starter's editor (006-AC9); Back returns to the picker.
@@ -132,3 +132,9 @@ None.
 - AC9: part A's tab fold shipped (`grillShowTab`); "Members and admins" folds /admin's room tab bar on a phone, as any long bar does.
 - AC13: each scope's text is its radio's label. "This command shows once…" replaces the old copy-it-now line.
 - AC14: Notifications on `/profile` lists the profile's rooms, each on or off in this browser, through a copy of the room's explainer that names the room, and the room's push code (one shared script). The "Also every other line" choice stays in the room's sheet. A text size picked on `/profile` also updates this browser's copy, so an open room follows at once.
+- AC15: text the server writes stays: the chat line "Bob holds the agent(s)." and turn errors such as "the host's daemon disconnected" are stored history and pinned by server tests; README quotes the line as it is. Renaming them is a later change. The grep test covers the UI, README and docs.
+- AC15: "Share with everyone" (the action) stays; the section label reads "Shared with everyone on this server". Notes read "Add a note", "Add a note on the document", "Add a note on an element". Someone who stopped hearing the call shows as "stopped hearing the call". README's "Host daemon" section becomes "AI host app".
+- AC16: README names the room's menu "the room's menu (click the room's name in the header)" and writes "the room's name › …"; the viewer's, people's and AI host app menus keep `⋯`.
+- AC15: "the audio" meaning the call reads "the call" in UI text ("Not in the call"). The test has no rule for it: the same words name the audio menu in prose. A lone lowercase word in JS (`'deafened'`) reads as an identifier to the test, a pinned limit.
+- AC15: the call option reads "Keep my mic on while I stop hearing the call". Shipped specs that quoted a replaced word carry a "Superseded (038-AC15)" note.
+- AC15: the approval mode reads as AC1's label; "approves everything" and "approve-all" are among the test's replaced words. The `approve-all` id and the `approve_all` field stay.
