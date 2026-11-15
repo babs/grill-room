@@ -42,5 +42,6 @@
 | [037](037-room-layout.md) | A room that fits tablets and phones: side panel folds for a document, one-row composer, compact pills on their own row | shipped |
 | [038](038-quick-wins-features-ia.md) | Quick wins: dead ends, wording, places (UX audit B) | shipped |
 | [039](039-ai-readiness.md) | AI readiness: what the AI in this room needs, and from whom | shipped |
+| [040](040-room-and-ai-settings.md) | Room settings and AI in this room, membership in one place | approved |
 | [041](041-room-switcher.md) | Room switcher and unread counts | shipped |
 | [042](042-voice-sheet-and-help.md) | Call and voice-to-text overview, and help | shipped |
