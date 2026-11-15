@@ -148,7 +148,9 @@ test('Help: a profile without an email', async ({ browser, request }) => {
   await expect(add).toHaveAttribute('href', '/profile#email');
   await expect(add).not.toHaveAttribute('target', /.+/);
   await add.click();
-  await expect(bob).toHaveURL(/\/profile#email$/);
+  // /profile#email lands on the Account tab's email field, rewriting its own hash to #account.
+  await expect(bob).toHaveURL(/\/profile#account$/);
+  await expect(bob.locator('#bind-email')).toBeFocused();
   await bob.goBack();
   await expect(sheet(bob)).toBeVisible();
   await expect(add).toBeFocused();
