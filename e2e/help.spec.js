@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, fakeDaemon, appointAdmin, agentState, patchPersona, noOverflow, smallTargets } from './helpers.js';
+import { roomWith, fakeDaemon, appointAdmin, agentState, patchPersona, noOverflow, smallTargets, patchJSON } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const lines = {
@@ -136,11 +136,7 @@ test('Help: room admin, last room admin, and the way back', async ({ browser, re
 // the same tab; Back reopens Help with the focus on that row.
 test('Help: a profile without an email', async ({ browser, request }) => {
   const { pages: [bob] } = await roomWith(browser, request, ['Bob']);
-  await bob.route('**/api/profile', async (route) => {
-    if (route.request().method() !== 'GET') return route.fallback();
-    const res = await route.fetch();
-    await route.fulfill({ response: res, json: { ...(await res.json()), email_enabled: true } });
-  });
+  await patchJSON(bob, '**/api/profile', (json) => ({ ...json, email_enabled: true }));
   await bob.reload();
   await openHelp(bob);
   const add = row(bob, 'email').getByRole('link', { name: 'Add an email' });

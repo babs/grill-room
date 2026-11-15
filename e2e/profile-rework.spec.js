@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { test, expect } from './fixtures.js';
-import { roomWith, appointAdmin, smallTargets, noOverflow, skillZip, confirmSheet, unfoldTabs } from './helpers.js';
+import { roomWith, appointAdmin, smallTargets, noOverflow, skillZip, confirmSheet, unfoldTabs, patchJSON } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
@@ -27,13 +27,10 @@ const shot = (page, name) => (shots ? page.screenshot({ path: `${shots}/${name}.
 // email on. A new tab: the joining tab's recovery link would change the text.
 async function profilePage(page, patch = () => {}) {
   const tab = await page.context().newPage();
-  await tab.route('**/api/profile', async (route) => {
-    if (route.request().method() !== 'GET') return route.fallback();
-    const res = await route.fetch();
-    const body = await res.json();
+  await patchJSON(tab, '**/api/profile', (body) => {
     body.email_enabled = true;
     if (body.profile) patch(body.profile);
-    await route.fulfill({ response: res, json: body });
+    return body;
   });
   return tab;
 }
@@ -141,10 +138,7 @@ test('one primary per tab, empty states and the skill sheet', async ({ browser, 
   const { pages: [pat] } = await roomWith(browser, request, ['Pat']);
   const tab = await profilePage(pat);
   // The shared library is the server's, filled by other specs: here it is empty.
-  await tab.route('**/api/profile/starters', async (route) => {
-    const res = await route.fetch();
-    await route.fulfill({ response: res, json: (await res.json()).filter((st) => st.library !== 'instance') });
-  });
+  await patchJSON(tab, '**/api/profile/starters', (json) => json.filter((st) => st.library !== 'instance'));
   await tab.goto('/profile');
   const primary = { rooms: ['+ New room'], starters: [], personas: [], skills: ['Add a skill'], tokens: ['New token'], account: ['Send me a link'] };
   expect(Object.keys(primary)).toEqual(await tabsOf(tab));

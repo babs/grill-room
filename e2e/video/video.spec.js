@@ -302,7 +302,8 @@ test('screen share', async ({ browser, request }) => {
   // 030-AC6: a 160 × 90 tile gets a low layer, and keeps it once the bandwidth estimate has ramped
   // up: without adaptiveStream, the top layer (1280) arrives here within about 12 s.
   const camWidth = async () => (await remoteVideo(b)).find((v) => v.source === 'camera')?.width || 0;
-  await expect.poll(camWidth).toBeGreaterThan(0);
+  // The first frames may come on the top layer, before the SFU hears the tile's size.
+  await expect.poll(async () => { const w = await camWidth(); return w > 0 && w <= 640; }, { timeout: 10_000 }).toBe(true);
   for (let i = 0; i < 15; i++) {
     expect(await camWidth()).toBeLessThanOrEqual(640);
     await b.waitForTimeout(1000);

@@ -601,25 +601,31 @@ export const fakeLiveKit = `window.LivekitClient = (() => {
 })();
 `;
 
+// patchJSON answers the requests to url, on a page or a context, with the server's JSON answer
+// through patch, which returns the new body. An error answer passes through as it is. A reload
+// can drop the request, or dispose its answer mid-body: nobody waits for it then, and the test
+// goes on.
+export async function patchJSON(target, url, patch) {
+  await target.route(url, async (r) => {
+    let res;
+    try {
+      res = await r.fetch();
+    } catch {
+      await r.abort().catch(() => {});
+      return;
+    }
+    const json = await res.json().catch(() => null);
+    await r.fulfill(json && res.ok ? { response: res, json: patch(json) } : { response: res }).catch(() => {});
+  });
+}
+
 // fakeCall gives page's room a call: the LiveKit stand-in, a voice token, voice (and extra) in the
 // room answer, and a getUserMedia that window.denyMic turns into a refusal with denied's text.
 export async function fakeCall(page, roomID, extra = {}, denied = 'Permission denied') {
   const ctx = page.context();
   await ctx.route('**/static/vendor/livekit-client.umd.js', (r) => r.fulfill({ contentType: 'text/javascript', body: fakeLiveKit }));
   await ctx.route(`**/api/rooms/${roomID}/voice`, (r) => r.fulfill({ json: { url: 'ws://127.0.0.1:9', token: 't' } }));
-  await ctx.route(`**/api/rooms/${roomID}`, async (r) => {
-    let res;
-    try {
-      res = await r.fetch();
-    } catch {
-      // A reload dropped the request: nothing is waiting for it.
-      await r.abort().catch(() => {});
-      return;
-    }
-    // An error answer passes through as it is; a reload mid-body (Firefox disposes it) leaves no one to answer.
-    const json = await res.json().catch(() => null);
-    await r.fulfill(json && res.ok ? { response: res, json: { ...json, voice: true, ...extra } } : { response: res }).catch(() => {});
-  });
+  await patchJSON(ctx, `**/api/rooms/${roomID}`, (json) => ({ ...json, voice: true, ...extra }));
   await ctx.addInitScript((text) => {
     window.denyMic = false;
     navigator.mediaDevices.getUserMedia = async () => {

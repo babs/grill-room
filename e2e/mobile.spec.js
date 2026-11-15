@@ -2,7 +2,7 @@ import { devices } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import http from 'node:http';
 import { adminToken } from './playwright.config.js';
-import { roomWith, menuItem, personaRow, personaSheet, closePersonas, line, live, smallTargets, playEvents, messageAction, addFromLibrary } from './helpers.js';
+import { roomWith, menuItem, personaRow, personaSheet, closePersonas, line, live, smallTargets, playEvents, messageAction, addFromLibrary, patchJSON } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -308,10 +308,7 @@ const addPersonas = (page, id, n) => page.evaluate(async ([id, n]) => {
 }, [id, n]);
 // withVoice turns the room's voice on, as a server with LiveKit and the room's setting would.
 async function withVoice(page, roomID) {
-  await page.route(`**/api/rooms/${roomID}`, async (r) => {
-    const res = await r.fetch();
-    return r.fulfill({ response: res, json: { ...(await res.json()), voice: true } });
-  });
+  await patchJSON(page, `**/api/rooms/${roomID}`, (json) => ({ ...json, voice: true }));
   await page.evaluate(() => loadRoom());
 }
 

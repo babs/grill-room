@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures.js';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { roomWith, personaSheet, agentState, uniq, appointAdmin, fakeDaemon, skillZip, patchPersona, menuItem, personaRow, confirmSheet,
   noOverflow, smallTargets, openStrip } from './helpers.js';
@@ -15,7 +16,7 @@ const call = (page, method, path, body) => page.evaluate(async ([m, p, b]) => {
 // publishPlugin commits a one-plugin repo, babs, and publishes it bare where the e2e git server
 // (tools/e2egit) serves it; it returns its link.
 function publishPlugin(name) {
-  const work = mkdtempSync(join('test-results', 'repo-'));
+  const work = mkdtempSync(join(tmpdir(), 'grill-room-e2e-repo-'));
   mkdirSync(join(work, '.claude-plugin'));
   writeFileSync(join(work, '.claude-plugin/plugin.json'), '{"name":"babs","version":"1.0.0","description":"e2e fixture","author":{"name":"e2e"}}\n');
   mkdirSync(join(work, 'commands'));
@@ -24,6 +25,7 @@ function publishPlugin(name) {
     GIT_AUTHOR_EMAIL: 'e2e@example.invalid', GIT_COMMITTER_NAME: 'e2e', GIT_COMMITTER_EMAIL: 'e2e@example.invalid' };
   for (const args of [['init', '-q', '-b', 'main'], ['add', '-A'], ['commit', '-q', '-m', 'fixture']]) execFileSync('git', args, { cwd: work, env });
   execFileSync('git', ['clone', '-q', '--bare', work, resolve('test-results/git', name + '.git')], { env });
+  rmSync(work, { recursive: true });
   return `https://example.com:${gitPort}/${name}.git`;
 }
 

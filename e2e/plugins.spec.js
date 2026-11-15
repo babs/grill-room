@@ -1,8 +1,9 @@
 import { test, expect } from './fixtures.js';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { roomWith, startDaemon, pairDaemon, ask, skillZip, appointAdmin, agentState, personaSheet, closePersonas, approveEverything, uniq } from './helpers.js';
 import { gitPort, adminToken } from './playwright.config.js';
@@ -19,7 +20,7 @@ const pluginDir = '/home/agent/.grill-room/plugins/babs';
 // publishRepo commits files to a new repo and publishes it bare where the e2e git server
 // (tools/e2egit) serves it, and returns its link: the e2e server build reaches example.com there.
 function publishRepo(name) {
-  const work = mkdtempSync(join('test-results', 'repo-'));
+  const work = mkdtempSync(join(tmpdir(), 'grill-room-e2e-repo-'));
   for (const [p, c] of Object.entries(files)) {
     mkdirSync(join(work, p, '..'), { recursive: true });
     writeFileSync(join(work, p), c);
@@ -31,6 +32,7 @@ function publishRepo(name) {
   git('add', '-A');
   git('commit', '-q', '-m', 'fixture');
   execFileSync('git', ['clone', '-q', '--bare', work, resolve('test-results/git', name + '.git')], { env, stdio: 'pipe' });
+  rmSync(work, { recursive: true });
   return `https://example.com:${gitPort}/${name}.git`;
 }
 

@@ -26,8 +26,9 @@ test('the room page is isolated and its frames still load', async ({ browser, re
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   const failed = [];
   const docFiles = [];
-  // Firefox reports the event stream it drops on a page change as failed: not a COEP refusal.
-  alice.on('requestfailed', (r) => { if (!r.url().includes('/events?')) failed.push(r.url() + ' ' + r.failure()?.errorText); });
+  // Firefox reports the event stream it drops on a page change as failed: not a COEP refusal. Nor
+  // is a request of the browser's own PDF viewer (chrome-extension://) it cancels.
+  alice.on('requestfailed', (r) => { if (/^https?:/.test(r.url()) && !r.url().includes('/events?')) failed.push(r.url() + ' ' + r.failure()?.errorText); });
   alice.on('response', (r) => { if (r.url().includes('/static/doc/')) docFiles.push(r.status()); });
   expect(await alice.evaluate(() => crossOriginIsolated)).toBe(true);
 
