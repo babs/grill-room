@@ -1,6 +1,6 @@
 # 042 — Call and voice-to-text overview, and help
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-15
 **Context**: UX audit part B, directions S6 (voice sheet) and S7 (help); journeys 1, 9, 10. Builds on 005-AC23 (words to recognise, any member), 010 (voice-to-text on this device), 013 (call voices, persona voices, pronunciation), 038 (vocabulary, "Not available on this server"), 039 (`#ai` readiness, host and ask derivation), 040 (AI in this room tabs). Council review (Codex, Fable) on 2026-11-15.
@@ -31,23 +31,23 @@ The product has no help. Its core words are explained only where they first appe
 
 ### Call and voice-to-text
 
-- [ ] **AC1** "Call and voice-to-text…" sits in the Audio options menu (after its toggles) and in the room menu (after "Personas", before the window and AI host entries; 041's "Switch room…" stays last). Both open `#call-overview`, a dialog with that id, titled "Call and voice-to-text", full screen on a phone. It opens when the server has no audio too, with every row reading "Not available on this server". In an ended room, docs and chat windows it opens nothing and the hash goes, as `#ai` does.
-- [ ] **AC2** Section "You", state lines only, read from the same effective state the audio bar uses (it tells "on" from "writing now"):
+- [x] **AC1** "Call and voice-to-text…" sits in the Audio options menu (after its toggles) and in the room menu (after "Personas", before the window and AI host entries; 041's "Switch room…" stays last). Both open `#call-overview`, a dialog with that id, titled "Call and voice-to-text", full screen on a phone. It opens when the server has no audio too, with every row reading "Not available on this server". In an ended room, docs and chat windows it opens nothing and the hash goes, as `#ai` does.
+- [x] **AC2** Section "You", state lines only, read from the same effective state the audio bar uses (it tells "on" from "writing now"):
   - not in the call: one line, "Not in the call. Join it from the audio bar.", and nothing else in the section;
   - in the call: "In the call · mic on / muted · hearing the call / stopped hearing the call";
   - "Your voice is written down now" only while transcription is on, the mic on and voice-to-text running; "Transcription is on, waiting: <your mic is muted | voice-to-text is off | the model is downloading>" while it is on but not writing; "Your voice is not written down" while it is off;
   - "Voice-to-text runs on this device" or "on the server", only where 010 offers the choice.
   Each line follows the audio bar live.
-- [ ] **AC3** Section "This room": "Words to recognise: N words" (from the room's glossary) linking to AI in this room › Words to recognise, "Who: any member"; "Call voices: pause <quiet> s, resume <resume> s, queue <queue> s, up to <words> words", "Who: room admins", linking to › Call voices for room admins only (plain members have no such tab, 040-AC3); then one row per persona: "<badge> <name>: speaks in the call with <voice>, rate <rate>" or "stays silent in the call", linking to its sheet's Identity tab, "Who: whoever may edit the persona" (013-AC26).
-- [ ] **AC4** Section "This server": "Voice-to-text": "Available", "Loading…", "Voice-to-text is off" or "Not available on this server" (038-AC12's texts); "Persona voices": "Available" when the server has call voices, else "Not available on this server"; "Pronunciation: set by the server admin, on the server's admin page." No link to `/admin`.
-- [ ] **AC5** A row whose setting is absent stays and says why: "Not available on this server: the server admin turns it on." A row the viewer cannot change names who can ("Who: room admins").
-- [ ] **AC6** Rows follow the room, agent, voice-to-text and call events live: a join, a mute, a glossary edit, a persona's voice changed in another session update the row without polling.
-- [ ] **AC7** One return rule for every link out of the overview and Help (AC9): the link opens its target as a new history entry and closes the origin sheet; closing the target (Escape, ✕, outside, or Back) returns to the origin sheet's hash with the focus on the row that linked. Forward after that reopens the target. A target loaded directly has no origin and closes as it does today. A row gone meanwhile (a persona removed) hands the focus to the origin sheet's title. 040-AC8's return to `#ai/personas` applies when the persona sheet was opened from there. Closing the overview or Help returns the focus to its opener, or to "Join the call" when the opener is gone (leaving the call hides the Audio options button).
+- [x] **AC3** Section "This room": "Words to recognise: N words" (from the room's glossary) linking to AI in this room › Words to recognise, "Who: any member"; "Call voices: pause <quiet> s, resume <resume> s, queue <queue> s, up to <words> words", "Who: room admins", linking to › Call voices for room admins only (plain members have no such tab, 040-AC3); then one row per persona: "<badge> <name>: speaks in the call with <voice>, rate <rate>" or "stays silent in the call", linking to its sheet's Identity tab, "Who: whoever may edit the persona" (013-AC26).
+- [x] **AC4** Section "This server": "Voice-to-text": "Available", "Loading…", "Voice-to-text is off" or "Not available on this server" (038-AC12's texts); "Persona voices": "Available" when the server has call voices, else "Not available on this server"; "Pronunciation: set by the server admin, on the server's admin page." No link to `/admin`.
+- [x] **AC5** A row whose setting is absent stays and says why: "Not available on this server: the server admin turns it on." A row the viewer cannot change names who can ("Who: room admins").
+- [x] **AC6** Rows follow the room, agent, voice-to-text and call events live: a join, a mute, a glossary edit, a persona's voice changed in another session update the row without polling.
+- [x] **AC7** One return rule for every link out of the overview and Help (AC9): the link opens its target as a new history entry and closes the origin sheet; closing the target (Escape, ✕, outside, or Back) returns to the origin sheet's hash with the focus on the row that linked. Forward after that reopens the target. A target loaded directly has no origin and closes as it does today. A row gone meanwhile (a persona removed) hands the focus to the origin sheet's title. 040-AC8's return to `#ai/personas` applies when the persona sheet was opened from there. Closing the overview or Help returns the focus to its opener, or to "Join the call" when the opener is gone (leaving the call hides the Audio options button).
 
 ### Help
 
-- [ ] **AC8** "Help" sits in the avatar menu, before "My rooms and profile", and opens `#help`, a dialog titled "Help" with two sections, "What you can do here" and "Words". The avatar menu exists in every mode (`showMe`), so Help opens in docs and chat windows too. In an ended room `#help` opens nothing and the hash goes, as `#ai` does.
-- [ ] **AC9** "What you can do here" shows the lines that apply, in this order, and follows host transfers, ask permission and room admin changes live. The ask line is 039's own "ask" row text (`room.js`, readiness rows), not a copy:
+- [x] **AC8** "Help" sits in the avatar menu, before "My rooms and profile", and opens `#help`, a dialog titled "Help" with two sections, "What you can do here" and "Words". The avatar menu exists in every mode (`showMe`), so Help opens in docs and chat windows too. In an ended room `#help` opens nothing and the hash goes, as `#ai` does.
+- [x] **AC9** "What you can do here" shows the lines that apply, in this order, and follows host transfers, ask permission and room admin changes live. The ask line is 039's own "ask" row text (`room.js`, readiness rows), not a copy:
 
   | When | Line | Link |
   |---|---|---|
@@ -59,7 +59,7 @@ The product has no help. Its core words are explained only where they first appe
   | the profile has no email (`noEmail()`) | "Your profile has no email: add one to keep your rooms across devices." | `/profile#email` |
   | last room admin | "You are the last room admin: make someone else room admin before you leave." | Room settings › Members |
 
-- [ ] **AC10** "Words" lists these definitions, one line each, in this order:
+- [x] **AC10** "Words" lists these definitions, one line each, in this order:
   - **Room**: a place where people and personas talk, with its chat, documents and call.
   - **Persona**: an AI with a name, a prompt and a model, who answers in the room when asked or on its own.
   - **AI host**: the person whose computer runs the personas. **AI host app**: the app they run for it.
@@ -72,7 +72,7 @@ The product has no help. Its core words are explained only where they first appe
   - **Linked room**: another room whose chat and documents this room's personas can read.
   - **Room admin**: a member who manages the room, its members and invites.
   - **Server admin**: the person who runs this grill-room server.
-- [ ] **AC11** The help text is a `<dl>` inside the Help dialog in `room.html`, not a fetched file, with each term in `<dt>` and capitalised. 038's vocabulary test reads it; the DoD shows it red on a replaced word written there as a lone lowercase term.
+- [x] **AC11** The help text is a `<dl>` inside the Help dialog in `room.html`, not a fetched file, with each term in `<dt>` and capitalised. 038's vocabulary test reads it; the DoD shows it red on a replaced word written there as a lone lowercase term.
 
 ## Phases
 
@@ -107,5 +107,9 @@ None.
 - Persona rows show only when the server has persona voices; without them the Call voices row says why. Because one "Not available" line per persona repeats the same fact (implementation).
 - With transcription on, the mic on and no worker on the voice yet, the reason reads "voice-to-text is off"; while the device engine self-tests after its download, "the model is downloading". Because AC2 allows three reasons only (implementation).
 - Pronunciation reads "Not available on this server" without persona voices. Because it only shapes them (implementation).
+- Help's email link reads "Add an email", as the page's nudge, and stays in the tab; Back reopens Help on that row. Because it is a step of the same visit (implementation).
+- The last-admin link reads "Room settings › Members and admins", the tab's name until 040 renames it "Members". Because a link names the place as the page shows it (implementation).
+- An ended room hides Help's entry. Because `#help` opens nothing there (implementation).
+- A sheet reopened by a reload or a Back from another page waits for the room, agent and profile reads before it settles the focus on the row. Because the row is drawn from them (implementation).
 - Links read "Open Words to recognise", "Open Call voices", "Open <persona>", and go to `#manage/glossary` and `#manage/voices` until 040 lands. Because the labels then survive 040's renames (implementation).
 - AC7's return rides on `history.state`: the link stamps the entry it opens, the target's tabs carry the stamp, and closing goes back as many entries. Because Forward must reopen the target, which a `replaceState` close cannot give (implementation).

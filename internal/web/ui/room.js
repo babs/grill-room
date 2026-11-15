@@ -111,7 +111,7 @@ function end(text) {
   $('upload-open').hidden = true;
   for (const el of document.querySelectorAll('.dropping')) el.classList.remove('dropping');
   document.body.classList.remove('drag-files');
-  for (const id of ['manage-open', 'invite-open', 'personas-open', 'ai-open', 'overview-open', 'links-open', 'leave-open', 'leave-why', 'room-proposed-in']) $(id).hidden = true;
+  for (const id of ['manage-open', 'invite-open', 'personas-open', 'ai-open', 'overview-open', 'help-open', 'links-open', 'leave-open', 'leave-why', 'room-proposed-in']) $(id).hidden = true;
   $('room-open').disabled = true;
   delete $('room-open').dataset.tip;
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
@@ -203,6 +203,8 @@ async function loadRoom() {
   // A glossary edit writes a system line, which reloads the room (042-AC6).
   if ($('call-overview').open) loadGlossaryWords();
   renderOverview();
+  // Room admins come and go with the room's answer (042-AC9).
+  renderHelp();
   showLinks().catch(console.error);
   return true;
 }
@@ -259,9 +261,10 @@ function showMe() {
 
 // leaveBlocked is why the viewer may not leave, '' when they may: the server refuses a room admin,
 // and refuses the last one stepping down. Admin rights are the profile's: self marks its seats.
+const lastAdmin = () => meAdmin && !participants.some((p) => p.admin && !p.self);
 function leaveBlocked() {
   if (!meAdmin) return '';
-  return participants.some((p) => p.admin && !p.self) ? 'Step down as room admin first' : 'Make someone else room admin, then step down.';
+  return lastAdmin() ? 'Make someone else room admin, then step down.' : 'Step down as room admin first';
 }
 
 // showLeave offers Leave room in the avatar menu (038-AC10), its reason in words with a way to the
@@ -1559,10 +1562,17 @@ const noEmail = () => own.email_enabled && !!own.profile && !own.profile.email;
 // ownLoaded is the latest loadOwn, settled.
 let ownLoaded = Promise.resolve();
 const reloadOwn = () => { ownLoaded = loadOwn().catch(console.error); };
+// ownSeen: the first profile read answered, or failed: Help's email line waits for it (042-AC9).
+let ownSeen = false;
 async function loadOwn() {
-  const res = await netFetch('/api/profile');
-  if (!res.ok) return;
-  own = await res.json();
+  try {
+    const res = await netFetch('/api/profile');
+    if (!res.ok) return;
+    own = await res.json();
+  } finally {
+    ownSeen = true;
+    renderHelp();
+  }
   if (!$('me-anon').firstChild) {
     $('me-anon').dataset.tip = anonText;
     $('me-anon').setAttribute('aria-label', anonText);
@@ -3039,8 +3049,9 @@ async function loadVoices() {
 }
 
 function renderAgent() {
-  // Every agent state passes here, the stream's and loadSkills' (042-AC6).
+  // Every agent state passes here, the stream's and loadSkills' (042-AC6, 042-AC9).
   renderOverview();
+  renderHelp();
   hidePairingOnceConnected();
   // The app's page is on this computer only when one of my apps is connected (daemon-r2).
   $('host-app-open').hidden = docsMode || mobileOS || !agent.daemons.some((d) => String(d.participant_id) === myID);
@@ -4292,7 +4303,8 @@ function aiRow(r) {
     acts.append(...r.actions.map((a) => {
       if (a.href) {
         const el = Object.assign(document.createElement('a'), { className: 'btn btn-secondary', href: a.href, textContent: a.label });
-        if (!a.href.startsWith('#')) Object.assign(el, { target: '_blank', rel: 'noopener noreferrer' });
+        // Only another site's page opens a tab: Help's /profile link is a step of the same visit (042-AC7).
+        if (!/^(#|\/(?!\/))/.test(a.href)) Object.assign(el, { target: '_blank', rel: 'noopener noreferrer' });
         if (a.run) el.addEventListener('click', a.run);
         return el;
       }
@@ -4492,6 +4504,7 @@ function renderOverview() {
   const data = window.grillRoom;
   const loading = () => [Object.assign(document.createElement('li'), { className: 'empty', textContent: 'Loading…' })];
   for (const [id, rows] of [['ov-you', youRows], ['ov-room', roomRows], ['ov-server', serverRows]]) drawRows($(id), data ? rows(data).map(aiRow) : loading());
+  focusRow($('call-overview'), !!data && agentSeen);
 }
 window.addEventListener('grill:device-stt', renderOverview);
 
@@ -4514,7 +4527,8 @@ addEventListener('hashchange', (e) => {
 const ovLink = (row, label, href) => ({ label, href, run: (e) => {
   if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return;
   history.replaceState({ row }, '');
-  linkFrom = location.hash;
+  // A page link leaves: Back reloads this entry, the row with it.
+  if (href.startsWith('#')) linkFrom = location.hash;
 } });
 
 // sheetBack returns a target sheet to the overview or Help it was opened from; false when it was not.
@@ -4526,12 +4540,12 @@ function sheetBack() {
 }
 window.grillSheetBack = sheetBack;
 
-// followSheet opens or closes a read-only sheet as the hash says. An ended room and the docs and
-// chat windows open none: the hash goes. Back to it from a target, the focus goes to the row that
-// linked, or the title when the row went meanwhile.
-function followSheet(d, hash, render, opened) {
+// followSheet opens or closes a read-only sheet as the hash says. An ended room opens none, nor
+// the docs and chat windows unless everywhere: the hash goes. Back to it from a target, the focus
+// goes to the row that linked, or the title when the row went meanwhile.
+function followSheet(d, hash, render, opened, everywhere = false) {
   const want = location.hash === hash;
-  if (want && (ended || docsMode || chatMode)) {
+  if (want && (ended || (!everywhere && (docsMode || chatMode)))) {
     history.replaceState(null, '', location.pathname + location.search);
     if (d.open) d.close();
     return;
@@ -4539,15 +4553,33 @@ function followSheet(d, hash, render, opened) {
   if (want && !d.open) {
     delete d.dataset.left;
     d.showModal();
+    // Not data-row: the dialog itself would then match its rows' selector.
+    d.dataset.focusRow = history.state?.row || '';
+    openedFocus.set(d, document.activeElement);
     opened();
     render();
-    const row = history.state?.row;
-    if (row) (d.querySelector(`[data-row="${row}"] a`) || d.querySelector('h2')).focus();
   } else if (!want && d.open) {
     d.dataset.left = '1';
     d.close();
   }
 }
+// focusRow hands the focus to the row that linked out, once a sheet's rows are in: a reload or Back
+// from another page opens it before the room and the agent state load. Gone, the title takes it.
+// openedFocus is where the focus landed as a sheet opened: moved since, the user's choice stands.
+const openedFocus = new WeakMap();
+function focusRow(d, ready) {
+  const row = d.dataset.focusRow;
+  if (!row) return;
+  if (document.activeElement !== openedFocus.get(d)) {
+    delete d.dataset.focusRow;
+    return;
+  }
+  const a = d.querySelector(`[data-row="${row}"] a`);
+  if (!a && !ready) return;
+  delete d.dataset.focusRow;
+  (a || d.querySelector('h2')).focus();
+}
+
 // closeSheet clears the deep link without a history entry; the focus goes back to the opener, or to
 // "Join the call" when leaving the call took the Audio options button away.
 function closeSheet(e, hash) {
@@ -4574,6 +4606,33 @@ const followOverview = () => followSheet($('call-overview'), '#call-overview', r
 addEventListener('hashchange', followOverview);
 followOverview();
 $('call-overview').addEventListener('close', (e) => closeSheet(e, '#call-overview'));
+
+// Help (042-AC8, 042-AC9): what the viewer may do here, from the roles they hold now; the words
+// follow in room.html. The ask line is the AI sheet's own.
+function helpRows() {
+  const row = (id, line, link, href) => ({ id, lines: [line], actions: link ? [ovLink(id, link, href)] : [] });
+  return [row('member', 'You are in this room: you read, write, add documents and notes, and talk to the personas by @name.'),
+    row('ask', aiRows().find((r) => r.id === 'ask').lines[0]),
+    ...(noOneRuns() ? [row('host', 'No one runs the AI for this room yet.', 'What\'s missing?', '#ai')] : []),
+    ...(meAdmin ? [row('admin', 'You are a room admin: you rename the room, manage members and invites, and delete the room.', 'Room settings', '#manage')] : []),
+    ...(approves() ? [row('runs', 'You run the AI for this room: you approve its personas, skills and websites.', 'AI in this room', '#ai')] : []),
+    ...(noEmail() ? [row('email', 'Your profile has no email: add one to keep your rooms across devices.', 'Add an email', '/profile#email')] : []),
+    ...(lastAdmin() ? [row('last-admin', 'You are the last room admin: make someone else room admin before you leave.', 'Room settings › Members and admins', '#manage/admins')] : [])];
+}
+
+function renderHelp() {
+  if (!$('help').open) return;
+  const ready = !!window.grillRoom && agentSeen;
+  drawRows($('help-can'), ready ? helpRows().map(aiRow)
+    : [Object.assign(document.createElement('li'), { className: 'empty', textContent: 'Loading…' })]);
+  focusRow($('help'), ready && ownSeen);
+}
+
+// The avatar menu shows in every window, Help with it (042-AC8).
+const followHelp = () => followSheet($('help'), '#help', renderHelp, () => {}, true);
+addEventListener('hashchange', followHelp);
+followHelp();
+$('help').addEventListener('close', (e) => closeSheet(e, '#help'));
 
 async function loadTemplates() {
   const res = await netFetch(api + '/templates');

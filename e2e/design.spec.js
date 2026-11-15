@@ -269,7 +269,8 @@ test('header menus, wording and empty states', async ({ browser, request }) => {
 
   await alice.locator('#me').click();
   await expect(alice.locator('#me-menu').getByRole('button')).toHaveText(['Change my name', 'Notifications', 'Text size', 'Use on another device', 'Diagnostics', 'Leave room…']);
-  await expect(alice.locator('#me-menu').getByRole('link')).toHaveText('My rooms and profile');
+  // 042-AC8: Help, before "My rooms and profile".
+  await expect(alice.locator('#me-menu').getByRole('link')).toHaveText(['Help', 'My rooms and profile']);
   await shot(alice, 'after-desktop-user-menu');
   await alice.keyboard.press('Escape');
   await alice.locator('#room-open').click();
