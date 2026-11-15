@@ -205,8 +205,12 @@ test('a persona proposes a room; a member creates it from the card', async ({ br
     // The card first: a count of zero passes before the page has drawn it.
     await expect(card(bob).getByRole('button', { name: 'Create…' })).toBeVisible();
     await expect(card(bob).getByRole('button', { name: 'Dismiss' })).toHaveCount(0);
+    // A room reload leaves an unchanged card as it is: the keyboard stays on its button (023).
+    await card(bob).getByRole('button', { name: 'Create…' }).focus();
+    await bob.evaluate(() => loadRoom());
+    await expect(card(bob).getByRole('button', { name: 'Create…' })).toBeFocused();
     // The card's buttons keep their control height: a page-wide .link style once shrank them (038).
-    // The card redraws on each room reload: a single read can catch a button already replaced.
+    // The card still redraws once what it shows changes: a single read can catch a button replaced.
     await expect.poll(async () => (await card(bob).getByRole('button', { name: 'Create…' }).boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(36);
     await card(bob).getByRole('button', { name: 'Create…' }).click();
     let sheet = bob.locator('#proposal-sheet');

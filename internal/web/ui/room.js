@@ -726,6 +726,7 @@ function proposalCard(li, body, m, retry = true) {
   li.classList.add('proposal', p.status);
   if (p.status === 'created' && p.room && hasProfile) linkCreated(body, m, retry);
   if (p.status !== 'open') return;
+  li.dataset.card = cardKey(m);
   const box = document.createElement('span');
   box.className = 'proposal-actions';
   if (hasProfile) box.append(button('Create…', '', () => window.grillCreateProposal?.(m)), ' ');
@@ -753,8 +754,12 @@ function linkCreated(body, m, retry) {
   });
 }
 
-// renderProposals redraws the open cards after the room reloaded: an appointment changes who dismisses.
-// The fresh list it fetches holds every room by then: no retry for a card the viewer is not in.
+// cardKey is what an open card shows: its line, whether the viewer may create, dismiss.
+const cardKey = (m) => JSON.stringify([m, hasProfile, meAdmin, participants.some((x) => x.self && x.id === m.proposal.trigger)]);
+
+// renderProposals redraws the cards after the room reloaded: an appointment changes who dismisses.
+// The fresh list it fetches holds every room by then: no retry for a card the viewer is not in. An
+// open card that would show the same stays, and so does the focus on its buttons.
 let reloading = false;
 function renderProposals() {
   myRooms = null;
@@ -762,7 +767,7 @@ function renderProposals() {
   try {
     for (const m of proposalLines.values()) {
       const li = lineOf(m.id);
-      if (li) li.replaceWith(renderMessage(m));
+      if (li && !(m.proposal.status === 'open' && li.dataset.card === cardKey(m))) li.replaceWith(renderMessage(m));
     }
   } finally {
     reloading = false;
