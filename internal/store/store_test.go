@@ -65,7 +65,7 @@ func seed(t *testing.T, s *Store, room string) *Participant {
 	if _, err := s.CreateRoom(ctx, room, "Room "+room); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateInvite(ctx, room, "inv-"+room, 0); err != nil {
+	if _, err := s.CreateInvite(ctx, room, "inv-"+room, 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	p, _, err := s.Join(ctx, "inv-"+room, "Alice", "tok-"+room, JoinProfile{RecoveryHash: "rec-" + room, SessionHash: "sess-" + room})
@@ -507,7 +507,7 @@ func TestRevokedInviteInvalidatesItsParticipants(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	p := seed(t, s, "a")
-	inv2, err := s.CreateInvite(ctx, "a", "inv2", 0)
+	inv2, err := s.CreateInvite(ctx, "a", "inv2", 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +541,7 @@ func TestRevokedInviteInvalidatesItsParticipants(t *testing.T) {
 
 func TestCreateInviteUnknownRoom(t *testing.T) {
 	s := openTest(t)
-	if _, err := s.CreateInvite(context.Background(), "nope", "h", 0); !errors.Is(err, ErrNotFound) {
+	if _, err := s.CreateInvite(context.Background(), "nope", "h", 0, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("got %v, want ErrNotFound", err)
 	}
 }

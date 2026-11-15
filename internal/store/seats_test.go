@@ -3,9 +3,14 @@ package store
 import (
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -39,8 +44,8 @@ func TestEndedSeatOpensNothing(t *testing.T) {
 		_, e3 := s.APITokenParticipant(ctx, "api-a", "a", time.Now())
 		_, e4 := s.DaemonByToken(ctx, "dmn-a")
 		_, e5 := s.RoomParticipant(ctx, "a", p.ID)
-		_, e6 := s.CreateInvite(ctx, "a", "by-alice-"+fmt.Sprint(time.Now().UnixNano()), p.ID)
-		_, _, _, e7 := s.ShareInvite(ctx, "a", p.ID, "lnk", "lnk-h")
+		_, e6 := s.CreateInvite(ctx, "a", "by-alice-"+fmt.Sprint(time.Now().UnixNano()), p.ID, "")
+		_, _, _, e7 := s.ShareInvite(ctx, "a", p.ID, "", "lnk", "lnk-h")
 		return []error{e1, e2, e3, e4, e5, e6, e7}
 	}
 	for i, err := range open() {
@@ -72,25 +77,67 @@ func TestEndedSeatOpensNothing(t *testing.T) {
 	}
 }
 
-// 016-AC2: no store query reads seat validity off the invite any more. The access checks join
-// participants to invites only through a seat's removed_at; the joins left are the invite chain's.
+// 016-AC2: no store query reads seat validity off the invite any more: the access checks read a
+// seat's removed_at. Each SQL literal is read whole, wherever its lines break: one that holds a
+// seat's invite_id and reads invites or a revoked_at must be one of the named reads below, word
+// for word, none of them an access check.
 func TestNoAccessReadsTheInvite(t *testing.T) {
+	allowed := map[string]struct{ why, sql string }{
+		"inviteCut":   {"the revoke's invite chain (011-AC20)", `WITH RECURSIVE chain(id) AS ( SELECT id FROM invites WHERE id = ?1 AND room_id = ?2 UNION SELECT i.id FROM invites i JOIN participants p ON p.id = i.created_by JOIN chain c ON c.id = p.invite_id ), cut(id) AS (SELECT id FROM invites WHERE id IN (SELECT id FROM chain) AND revoked_at IS NULL)`},
+		"shareable":   {"a shareable link's in_room count (040-AC15)", `SELECT s.id, s.created_at, s.link, COALESCE(s.name, ''), (SELECT COUNT(*) FROM participants j WHERE j.invite_id = s.id AND j.removed_at IS NULL) FROM invites s JOIN participants p ON p.id = s.created_by WHERE s.room_id = ? AND s.created_by = ? AND s.link IS NOT NULL AND s.revoked_at IS NULL AND p.removed_at IS NULL`},
+		"invites":     {"the invite list's in_room count (040-AC15)", `SELECT i.id, i.room_id, i.created_at, COALESCE(i.created_by, 0), i.revoked_at, i.link IS NOT NULL, COALESCE(i.name, ''), (SELECT COUNT(*) FROM participants p WHERE p.invite_id = i.id AND p.removed_at IS NULL) FROM invites i WHERE i.room_id = ? AND (? = 0 OR i.id = ?) AND (? = 0 OR i.created_by = ?) ORDER BY i.id`},
+		"SeatInvites": {"the invite each seat joined through (040-AC10)", `SELECT p.id, p.invite_id, COALESCE((SELECT i.name FROM invites i WHERE i.id = p.invite_id), '') FROM participants p WHERE p.room_id = ? AND p.removed_at IS NULL ORDER BY p.id`},
+	}
+	readsInvite := regexp.MustCompile(`\binvites\b|\brevoked_at\b`)
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	used := map[string]bool{}
+	check := func(name string, n ast.Node) {
+		ast.Inspect(n, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			q, err := strconv.Unquote(lit.Value)
+			if err != nil || !strings.Contains(q, "invite_id") || !readsInvite.MatchString(q) {
+				return true
+			}
+			q = strings.Join(strings.Fields(q), " ")
+			if a, ok := allowed[name]; ok && a.sql == q {
+				used[name] = true
+				return true
+			}
+			t.Errorf("%s: %s reads a seat's invite: %s", fset.Position(lit.Pos()), name, q)
+			return true
+		})
 	}
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
-		b, err := os.ReadFile(f)
+		af, err := parser.ParseFile(fset, f, nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for i, line := range strings.Split(string(b), "\n") {
-			if strings.Contains(line, "JOIN invites") && strings.Contains(line, "invite_id") {
-				t.Errorf("%s:%d joins a seat to its invite: %s", f, i+1, strings.TrimSpace(line))
+		for _, d := range af.Decls {
+			switch d := d.(type) {
+			case *ast.FuncDecl:
+				check(d.Name.Name, d)
+			case *ast.GenDecl:
+				for _, sp := range d.Specs {
+					if v, ok := sp.(*ast.ValueSpec); ok {
+						check(v.Names[0].Name, v)
+					}
+				}
 			}
+		}
+	}
+	for name, a := range allowed {
+		if !used[name] {
+			t.Errorf("allowed read %s (%s) is gone or changed: update the list", name, a.why)
 		}
 	}
 }
@@ -103,14 +150,14 @@ func TestRevokeCut(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice := seed(t, s, "a")
-	if _, err := s.CreateInvite(ctx, "a", "inv-b", alice.ID); err != nil {
+	if _, err := s.CreateInvite(ctx, "a", "inv-b", alice.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	bob, _, err := s.Join(ctx, "inv-b", "Bob", "tok-b", JoinProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobInv, err := s.CreateInvite(ctx, "a", "inv-c", bob.ID)
+	bobInv, err := s.CreateInvite(ctx, "a", "inv-c", bob.ID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +256,7 @@ func TestExportImportEndedSeat(t *testing.T) {
 	if _, err := s.CreateRoom(ctx, "a", "Room a"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateInvite(ctx, "a", "inv-a", 0); err != nil {
+	if _, err := s.CreateInvite(ctx, "a", "inv-a", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	var bob *Participant

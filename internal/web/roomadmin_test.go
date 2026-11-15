@@ -326,6 +326,10 @@ func TestAuditedActionsFailWithTheAuditLog(t *testing.T) {
 		t.Fatalf("copy: %d %s", code, b)
 	}
 	rk := decodeJSON[store.Skill](t, b)
+	invs, err := e.st.Invites(t.Context(), room.ID, 0)
+	if err != nil || len(invs) == 0 {
+		t.Fatalf("invites: %+v %v", invs, err)
+	}
 	if _, err := e.sqlDB(t).ExecContext(t.Context(), `CREATE FUNCTION audit_down() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit down'; END $$;
 		CREATE TRIGGER audit_down BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION audit_down()`); err != nil {
 		t.Fatal(err)
@@ -341,6 +345,7 @@ func TestAuditedActionsFailWithTheAuditLog(t *testing.T) {
 		{"PATCH", path, map[string]string{"name": "Renamed"}},
 		{"PUT", fmt.Sprintf("%s/admins/%d", path, bobP.ID), nil},
 		{"POST", path + "/invites", nil},
+		{"PATCH", fmt.Sprintf("%s/invites/%d", path, invs[0].ID), map[string]string{"name": "Renamed"}},
 		{"DELETE", fmt.Sprintf("%s/skills/%d", path, rk.ID), nil},
 		{"DELETE", path, nil},
 		{"POST", "/api/profile/rooms", map[string]string{"name": "Another", "display_name": "Alice"}},
@@ -364,6 +369,9 @@ func TestAuditedActionsFailWithTheAuditLog(t *testing.T) {
 	after, err := e.st.RoomOverview(t.Context(), room.ID, 1)
 	if err != nil || after.Name != before.Name || after.QuotaBytes != 0 || after.Volume.RoomSkills != before.Volume.RoomSkills {
 		t.Fatalf("the room changed: %+v %v", after, err)
+	}
+	if inv, err := e.st.Invite(t.Context(), room.ID, invs[0].ID); err != nil || inv.Name != "" {
+		t.Fatalf("the invite was renamed: %+v %v", inv, err)
 	}
 	if _, b := alice.do(t, "GET", path, nil); decodeJSON[roomResp](t, b).Participants[1].Admin {
 		t.Fatal("bob became an admin")

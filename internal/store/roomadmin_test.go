@@ -255,7 +255,7 @@ func TestSetRoomAdmin(t *testing.T) {
 	me := &ps[0]
 	join := func(name string, prof JoinProfile) *Participant {
 		t.Helper()
-		if _, err := s.CreateInvite(ctx, "r", "inv-"+name, 0); err != nil {
+		if _, err := s.CreateInvite(ctx, "r", "inv-"+name, 0, ""); err != nil {
 			t.Fatal(err)
 		}
 		p, _, err := s.Join(ctx, "inv-"+name, name, "tok-"+name, prof)
@@ -426,7 +426,7 @@ func TestSuperAdminSetsRoomAdmin(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice := joinWithProfile(t, s, "r", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
-	if _, err := s.CreateInvite(ctx, "r", "inv-guest", 0); err != nil {
+	if _, err := s.CreateInvite(ctx, "r", "inv-guest", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	guest, _, err := s.Join(ctx, "inv-guest", "Guest", "tok-guest", JoinProfile{})
@@ -463,7 +463,7 @@ func TestRenameParticipant(t *testing.T) {
 	}
 	ps, _ := s.Participants(ctx, "r")
 	al := &ps[0]
-	if _, err := s.CreateInvite(ctx, "r", "inv-bob", 0); err != nil {
+	if _, err := s.CreateInvite(ctx, "r", "inv-bob", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	bob, _, err := s.Join(ctx, "inv-bob", "Bob", "tok-bob", JoinProfile{RecoveryHash: "rec-bob", SessionHash: "sess-bob"})

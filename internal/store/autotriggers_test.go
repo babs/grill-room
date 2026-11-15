@@ -70,7 +70,7 @@ func TestDueVoicePersonasCountsClosedParagraphs(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			room := "v" + strconv.Itoa(i)
 			alice := seed(t, s, room)
-			if _, err := s.CreateInvite(ctx, room, "inv-bob-"+room, 0); err != nil {
+			if _, err := s.CreateInvite(ctx, room, "inv-bob-"+room, 0, ""); err != nil {
 				t.Fatal(err)
 			}
 			bob, _, err := s.Join(ctx, "inv-bob-"+room, "Bob", "tok-bob-"+room, JoinProfile{})

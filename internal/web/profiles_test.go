@@ -703,7 +703,7 @@ func TestSendFailureLogHidesTheAddress(t *testing.T) {
 	e := &env{ts: ts, st: st, srv: srv}
 	d := e.device(t)
 	room, _ := st.CreateRoom(t.Context(), "r", "R")
-	if _, err := st.CreateInvite(t.Context(), room.ID, HashToken("inv"), 0); err != nil {
+	if _, err := st.CreateInvite(t.Context(), room.ID, HashToken("inv"), 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	if code, _ := d.do(t, "POST", "/api/join", map[string]string{"invite": "inv", "name": "Alice"}); code != http.StatusCreated {

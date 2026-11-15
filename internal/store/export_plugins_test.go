@@ -164,7 +164,7 @@ func TestExportImportPlugins(t *testing.T) {
 	}
 
 	// The new host approves without asking, yet an imported version waits for it once checked.
-	if _, err := s.CreateInvite(ctx, "copy", "inv-copy", 0); err != nil {
+	if _, err := s.CreateInvite(ctx, "copy", "inv-copy", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	hp, _, err := s.Join(ctx, "inv-copy", "Hana", "tok-copy", JoinProfile{})

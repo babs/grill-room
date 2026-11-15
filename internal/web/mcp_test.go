@@ -687,3 +687,32 @@ func TestMCPLibraryPersona(t *testing.T) {
 		}
 	}
 }
+
+// 040-AC15: list_invites gives each invite's name, and get_invite_link its shareable link's.
+func TestMCPInviteName(t *testing.T) {
+	m := newMCPEnv(t)
+	room := m.room.ID
+	if code, b := m.alice.do(t, "POST", "/api/rooms/"+room+"/invites", map[string]string{"name": "Board"}); code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, b)
+	}
+	named := 0
+	for _, it := range m.call(t, m.aliceRead, "list_invites", map[string]any{"room": room}).items(t) {
+		if strings.Contains(string(it), `"name":"Board"`) {
+			named++
+		}
+	}
+	if named != 1 {
+		t.Fatalf("list_invites: %d invites named Board", named)
+	}
+	link := m.call(t, m.aliceFull, "get_invite_link", map[string]any{"room": room})
+	var got shareResp
+	if err := json.Unmarshal(link.StructuredContent, &got); err != nil || link.IsError {
+		t.Fatalf("get_invite_link: %s %v", link.StructuredContent, err)
+	}
+	if code, b := m.alice.do(t, "PATCH", fmt.Sprintf("/api/rooms/%s/invites/%d", room, got.ID), map[string]string{"name": "Alice's link"}); code != http.StatusOK {
+		t.Fatalf("rename the shareable link: %d %s", code, b)
+	}
+	if again := m.call(t, m.aliceFull, "get_invite_link", map[string]any{"room": room}); !strings.Contains(string(again.StructuredContent), `"name":"Alice's link"`) {
+		t.Fatalf("get_invite_link after the rename: %s", again.StructuredContent)
+	}
+}

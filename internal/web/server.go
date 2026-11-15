@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"go.uber.org/zap"
 
@@ -293,6 +294,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/invites", s.memberOrAdmin(s.listInvites))
 	mux.Handle("POST /api/rooms/{room}/invites", s.memberOrAdmin(s.createInvite))
 	mux.Handle("DELETE /api/rooms/{room}/invites/{invite}", s.memberOrAdmin(s.revokeInvite))
+	mux.Handle("PATCH /api/rooms/{room}/invites/{invite}", s.memberOrAdmin(s.renameInvite))
 	mux.Handle("GET /api/rooms/{room}/invites/{invite}/revoke-preview", s.memberOrAdmin(s.revokePreview))
 	mux.Handle("POST /api/rooms/{room}/invites/share", s.participant(s.shareInvite))
 	mux.Handle("GET /api/profiles", s.admin(s.listProfiles))
@@ -325,6 +327,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/admin/rooms/{room}/invites", adminOnly(s.listInvites))
 	mux.Handle("POST /api/admin/rooms/{room}/invites", adminOnly(s.createInvite))
 	mux.Handle("DELETE /api/admin/rooms/{room}/invites/{invite}", adminOnly(s.revokeInvite))
+	mux.Handle("PATCH /api/admin/rooms/{room}/invites/{invite}", adminOnly(s.renameInvite))
 	mux.Handle("GET /api/admin/rooms/{room}/invites/{invite}/revoke-preview", adminOnly(s.revokePreview))
 	mux.Handle("GET /api/admin/profiles", s.admin(s.listProfiles))
 	mux.Handle("DELETE /api/admin/profiles/{id}", s.admin(s.deleteProfile))
@@ -773,7 +776,22 @@ func decodeLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) boo
 		httpError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
 		return false
 	}
+	return bodyOK(w, json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(v), limit)
+}
+
+// decodeOptional is decode for a route that took no body before it took a JSON one: an empty body,
+// or one not sent as application/json, still means none.
+func decodeOptional(w http.ResponseWriter, r *http.Request, v any) bool {
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
+		return true
+	}
+	const limit = 64 << 10
 	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(v)
+	return errors.Is(err, io.EOF) || bodyOK(w, err, limit)
+}
+
+// bodyOK answers a body's decoding error err, 413 past limit bytes, and reports whether there was none.
+func bodyOK(w http.ResponseWriter, err error, limit int64) bool {
 	var mbe *http.MaxBytesError
 	switch {
 	case errors.As(err, &mbe):
@@ -922,13 +940,49 @@ func (s *Server) listInvites(w http.ResponseWriter, r *http.Request, sess *sessi
 	writeJSON(w, http.StatusOK, invs)
 }
 
+// maxInviteName bounds an invite's name, in characters (040-AC14).
+const maxInviteName = 60
+
+// inviteName is an invite's name from a create or rename body: trimmed, one line, "" for none
+// (040-AC14). It answers a 400 and returns false for any other.
+func inviteName(w http.ResponseWriter, raw string) (string, bool) {
+	name := strings.TrimSpace(raw)
+	if name != "" && (!store.ValidText(name, maxInviteName, false) || strings.ContainsFunc(name, isLineBreak)) {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("name must be one line of at most %d characters", maxInviteName))
+		return "", false
+	}
+	return name, true
+}
+
+// isLineBreak is a Unicode line or paragraph separator, which ValidText lets through: archives
+// already hold names with them (040-AC14).
+func isLineBreak(c rune) bool { return unicode.In(c, unicode.Zl, unicode.Zp) }
+
+// inviteBody is the optional body of an invite creation (040-AC14).
+type inviteBody struct {
+	Name string `json:"name"`
+}
+
+// readInviteName decodes an optional inviteBody and returns its name, answering the request otherwise.
+func readInviteName(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var req inviteBody
+	if !decodeOptional(w, r, &req) {
+		return "", false
+	}
+	return inviteName(w, req.Name)
+}
+
 func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, sess *session) {
 	room := r.PathValue("room")
+	name, ok := readInviteName(w, r)
+	if !ok {
+		return
+	}
 	tok := NewToken()
 	var by int64
 	if sess != nil {
 		by = sess.p.ID
-		// A room admin's invites are audited; a plain member's are not admin actions.
+		// Audited for a room admin, the admin, or any API-token call (012-AC20).
 		may, err := s.mayInvite(r.Context(), sess)
 		if err != nil {
 			s.serverError(w, "create_invite_failed", err)
@@ -939,7 +993,7 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, sess *sess
 			return
 		}
 	}
-	inv, err := s.bus.Store.CreateInvite(s.roomAuditing(r, sess, ActionInviteCreate, room, nil), room, HashToken(tok), by)
+	inv, err := s.bus.Store.CreateInvite(s.roomAuditing(r, sess, ActionInviteCreate, room, nil), room, HashToken(tok), by, name)
 	if errors.Is(err, store.ErrNotFound) && sess != nil {
 		// Revoked between the auth check and the insert.
 		httpError(w, http.StatusUnauthorized, "invalid or revoked token")
@@ -958,9 +1012,10 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, sess *sess
 	writeJSON(w, http.StatusCreated, inviteResp{Invite: inv, Token: tok, URL: s.baseURL + "/join#" + tok})
 }
 
-// revocable returns the request's invite id, provided sess may revoke it: the super-admin and room
-// admins any, a plain member only the ones they created. It answers the request otherwise.
-func (s *Server) revocable(w http.ResponseWriter, r *http.Request, sess *session) (id int64, admin, ok bool) {
+// manageableInvite returns the request's invite id, provided sess may revoke it, or rename it as
+// verb says: the super-admin and room admins any, a plain member only the ones they created. It
+// answers the request otherwise.
+func (s *Server) manageableInvite(w http.ResponseWriter, r *http.Request, sess *session, verb string) (id int64, admin, ok bool) {
 	id, err := strconv.ParseInt(r.PathValue("invite"), 10, 64)
 	if err != nil {
 		httpError(w, http.StatusNotFound, "no such invite")
@@ -969,7 +1024,7 @@ func (s *Server) revocable(w http.ResponseWriter, r *http.Request, sess *session
 	admin = sess == nil
 	if !admin {
 		if admin, err = s.roomAdmin(r.Context(), sess); err != nil {
-			s.serverError(w, "revoke_invite_failed", err)
+			s.serverError(w, verb+"_invite_failed", err)
 			return 0, false, false
 		}
 	}
@@ -980,11 +1035,11 @@ func (s *Server) revocable(w http.ResponseWriter, r *http.Request, sess *session
 			return 0, false, false
 		}
 		if err != nil {
-			s.serverError(w, "revoke_invite_failed", err)
+			s.serverError(w, verb+"_invite_failed", err)
 			return 0, false, false
 		}
 		if inv.CreatedBy != sess.p.ID {
-			httpError(w, http.StatusForbidden, "you can revoke only the invites you created")
+			httpError(w, http.StatusForbidden, "you can "+verb+" only the invites you created")
 			return 0, false, false
 		}
 	}
@@ -998,7 +1053,7 @@ type previewSeat struct {
 
 // revokePreview answers what revoking the invite would do now, for whoever may revoke it (011-AC19).
 func (s *Server) revokePreview(w http.ResponseWriter, r *http.Request, sess *session) {
-	id, _, ok := s.revocable(w, r, sess)
+	id, _, ok := s.manageableInvite(w, r, sess, "revoke")
 	if !ok {
 		return
 	}
@@ -1034,7 +1089,7 @@ type lostSeat struct {
 // access.
 func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request, sess *session) {
 	room := r.PathValue("room")
-	id, admin, ok := s.revocable(w, r, sess)
+	id, admin, ok := s.manageableInvite(w, r, sess, "revoke")
 	if !ok {
 		return
 	}
@@ -1067,8 +1122,55 @@ func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request, sess *sess
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": plan.Invites, "lost": lost})
 }
 
+// renameInvite names an invite, or with "" clears its name, for whoever may revoke it, a stopped
+// one included (040-AC14); audited as creation is (040-AC15). It answers the invite.
+func (s *Server) renameInvite(w http.ResponseWriter, r *http.Request, sess *session) {
+	room := r.PathValue("room")
+	id, _, ok := s.manageableInvite(w, r, sess, "rename")
+	if !ok {
+		return
+	}
+	var req struct {
+		// Raw, as a missing key must not clear the name the way null does.
+		Name json.RawMessage `json:"name"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Name == nil {
+		httpError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	var raw string
+	if err := json.Unmarshal(req.Name, &raw); err != nil {
+		httpError(w, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	name, ok := inviteName(w, raw)
+	if !ok {
+		return
+	}
+	err := s.bus.Store.RenameInvite(s.roomAuditing(r, sess, ActionInviteRename, room, nil), room, id, name)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "no such invite")
+		return
+	}
+	if err != nil {
+		s.serverError(w, "rename_invite_failed", err)
+		return
+	}
+	inv, err := s.bus.Store.Invite(r.Context(), room, id)
+	if err != nil {
+		s.serverError(w, "rename_invite_failed", err)
+		return
+	}
+	s.log.Info("invite_renamed", zap.String("room", room), zap.Int64("invite", id))
+	writeJSON(w, http.StatusOK, inv)
+}
+
 type shareResp struct {
 	ID        int64     `json:"id"`
+	Name      string    `json:"name,omitempty"`
 	URL       string    `json:"url"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -1077,7 +1179,11 @@ type shareResp struct {
 // then, 200 after (011-AC26).
 func (s *Server) shareInvite(w http.ResponseWriter, r *http.Request, sess session) {
 	room := r.PathValue("room")
-	// A room admin's invites are audited, as createInvite does.
+	name, ok := readInviteName(w, r)
+	if !ok {
+		return
+	}
+	// Audited for a room admin or any API-token call (012-AC20), as createInvite does.
 	may, err := s.mayInvite(r.Context(), &sess)
 	if err != nil {
 		s.serverError(w, "share_invite_failed", err)
@@ -1088,7 +1194,7 @@ func (s *Server) shareInvite(w http.ResponseWriter, r *http.Request, sess sessio
 		return
 	}
 	link := NewToken()
-	inv, tok, created, err := s.bus.Store.ShareInvite(s.roomAuditing(r, &sess, ActionInviteCreate, room, nil), room, sess.p.ID, link, HashToken(link))
+	inv, tok, created, err := s.bus.Store.ShareInvite(s.roomAuditing(r, &sess, ActionInviteCreate, room, nil), room, sess.p.ID, name, link, HashToken(link))
 	if errors.Is(err, store.ErrNotFound) {
 		// Revoked between the auth check and the insert.
 		httpError(w, http.StatusUnauthorized, "invalid or revoked token")
@@ -1103,7 +1209,7 @@ func (s *Server) shareInvite(w http.ResponseWriter, r *http.Request, sess sessio
 		code = http.StatusCreated
 		s.log.Info("invite_created", zap.String("room", room), zap.Int64("invite", inv.ID), zap.Int64("by", sess.p.ID), zap.Bool("shareable", true))
 	}
-	writeJSON(w, code, shareResp{ID: inv.ID, URL: s.baseURL + "/join#" + tok, CreatedAt: inv.CreatedAt})
+	writeJSON(w, code, shareResp{ID: inv.ID, Name: inv.Name, URL: s.baseURL + "/join#" + tok, CreatedAt: inv.CreatedAt})
 }
 
 type joinResp struct {

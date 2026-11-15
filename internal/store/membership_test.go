@@ -45,7 +45,7 @@ func TestEndSeatsRemove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	link, _, _, err := s.ShareInvite(ctx, "a", alice.ID, "lnk", "lnk-h")
+	link, _, _, err := s.ShareInvite(ctx, "a", alice.ID, "", "lnk", "lnk-h")
 	if err != nil {
 		t.Fatal(err)
 	}

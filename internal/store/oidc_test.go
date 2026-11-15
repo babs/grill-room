@@ -178,7 +178,7 @@ func TestJoinRestricted(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice := seed(t, s, "a")
-	if _, err := s.CreateInvite(ctx, "a", "by-alice", alice.ID); err != nil {
+	if _, err := s.CreateInvite(ctx, "a", "by-alice", alice.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	join := func(name, issuer string) error {

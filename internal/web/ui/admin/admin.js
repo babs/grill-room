@@ -174,7 +174,7 @@ function Sessions() {
 const actionLabels = {
   'room.create': 'Room created', 'room.rename': 'Room renamed', 'room.delete': 'Room deleted', 'room.quota': 'Room quota set', 'room.speech': 'Call voices changed',
   'room.export': 'Room exported', 'room.import': 'Room imported', 'room.host_transfer': 'AI host changed',
-  'invite.create': 'Invite created', 'invite.revoke': 'Invite revoked', 'room_admin.add': 'Room admin added', 'room_admin.remove': 'Room admin removed',
+  'invite.create': 'Invite created', 'invite.revoke': 'Invite revoked', 'invite.rename': 'Invite renamed', 'room_admin.add': 'Room admin added', 'room_admin.remove': 'Room admin removed',
   'room_skill.remove': 'Room skill removed', 'participant.rename': 'Participant renamed', 'document.delete': 'Document deleted',
   'participant.remove': 'Participant removed', 'participant.unblock': 'Participant unblocked',
   'room_link.create': 'Rooms linked', 'room_link.delete': 'Room link removed', 'room_proposal.dismiss': 'Room proposal dismissed',

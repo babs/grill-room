@@ -15,7 +15,7 @@ func personaRoom(t *testing.T, s *Store, room string) (alice, bob *Participant, 
 	if _, err := s.CreateRoom(ctx, room, "R"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateInvite(ctx, room, "inv-"+room, 0); err != nil {
+	if _, err := s.CreateInvite(ctx, room, "inv-"+room, 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	var err error

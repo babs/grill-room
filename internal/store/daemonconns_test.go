@@ -17,7 +17,7 @@ func hostRoom(t *testing.T, s *Store) (alice, bob *Participant, da, db *Daemon) 
 	if _, err := s.CreateRoom(ctx, "r", "R"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateInvite(ctx, "r", "inv-r", 0); err != nil {
+	if _, err := s.CreateInvite(ctx, "r", "inv-r", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	var ps [2]*Participant

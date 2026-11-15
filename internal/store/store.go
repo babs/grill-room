@@ -97,6 +97,10 @@ type Invite struct {
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 	// Shareable marks its creator's shareable link (011-AC26); the token itself never leaves here.
 	Shareable bool `json:"shareable"`
+	// Name is its optional label, "" for none (040-AC14).
+	Name string `json:"name,omitempty"`
+	// InRoom counts the seats that joined through it and are still in the room (040-AC15).
+	InRoom int `json:"in_room"`
 }
 
 // Participant is a guest who joined a room through an invite.
@@ -404,6 +408,8 @@ INSERT INTO room_reads(profile_id, room_id, read_through)
 	SELECT DISTINCT p.profile_id, p.room_id, (SELECT COALESCE(MAX(m.id), 0) FROM messages m WHERE m.room_id = p.room_id)
 	FROM participants p WHERE p.profile_id IS NOT NULL AND p.removed_at IS NULL
 	ON CONFLICT DO NOTHING;`,
+	// 67 (040 Phase 3): an invite's optional name, never exported (040-AC14).
+	`ALTER TABLE invites ADD COLUMN IF NOT EXISTS name TEXT;`,
 }
 
 // written is the predicate of the written lines' index, literal SQL in every query that uses it,
@@ -763,17 +769,17 @@ func (s *Store) RenameRoom(ctx context.Context, roomID, name string, by *Partici
 	return m, nil
 }
 
-// CreateInvite stores an invite for room, created by participant createdBy or, when 0, by the
-// admin. ErrNotFound if the room does not exist, or createdBy is not in it with a valid invite: the
-// check and the insert are one statement, so a revoke cannot slip between them.
-func (s *Store) CreateInvite(ctx context.Context, roomID, tokenHash string, createdBy int64) (*Invite, error) {
+// CreateInvite stores an invite for room named name, created by participant createdBy or, when 0,
+// by the admin. ErrNotFound if the room does not exist, or createdBy is not in it with a valid
+// invite: the check and the insert are one statement, so a revoke cannot slip between them.
+func (s *Store) CreateInvite(ctx context.Context, roomID, tokenHash string, createdBy int64, name string) (*Invite, error) {
 	var inv *Invite
 	err := s.withTx(ctx, "create invite", func(tx *txn) error {
 		var err error
-		if inv, err = insertInvite(ctx, tx, roomID, tokenHash, createdBy, ""); err != nil {
+		if inv, err = insertInvite(ctx, tx, roomID, tokenHash, createdBy, "", name); err != nil {
 			return err
 		}
-		return auditTx(ctx, tx, "", map[string]any{"invite": inv.ID})
+		return auditTx(ctx, tx, "", map[string]any{"invite": inv.ID, "name": name})
 	})
 	if err != nil {
 		return nil, err
@@ -783,14 +789,14 @@ func (s *Store) CreateInvite(ctx context.Context, roomID, tokenHash string, crea
 
 // insertInvite is CreateInvite in tx, storing link as the token of a shareable invite when not
 // empty. A shareable one the unique index refuses is ErrNotFound too: the caller looks again.
-func insertInvite(ctx context.Context, tx *txn, roomID, tokenHash string, createdBy int64, link string) (*Invite, error) {
-	inv := &Invite{RoomID: roomID, CreatedAt: time.Now().UTC(), CreatedBy: createdBy, Shareable: link != ""}
+func insertInvite(ctx context.Context, tx *txn, roomID, tokenHash string, createdBy int64, link, name string) (*Invite, error) {
+	inv := &Invite{RoomID: roomID, CreatedAt: time.Now().UTC(), CreatedBy: createdBy, Shareable: link != "", Name: name}
 	err := tx.QueryRowContext(ctx, `
-		INSERT INTO invites(room_id, token_hash, created_at, created_by, link) SELECT id, ?, ?, ?, ? FROM rooms r WHERE r.id = ?
+		INSERT INTO invites(room_id, token_hash, created_at, created_by, link, name) SELECT id, ?, ?, ?, ?, ? FROM rooms r WHERE r.id = ?
 		AND (? = 0 OR EXISTS (SELECT 1 FROM participants p
 			WHERE p.id = ? AND p.room_id = r.id AND p.removed_at IS NULL))
 		ON CONFLICT(room_id, created_by) WHERE link IS NOT NULL AND revoked_at IS NULL DO NOTHING RETURNING id`,
-		tokenHash, formatTS(inv.CreatedAt), nullID(createdBy), nullStr(link), roomID, createdBy, createdBy).Scan(&inv.ID)
+		tokenHash, formatTS(inv.CreatedAt), nullID(createdBy), nullStr(link), nullStr(name), roomID, createdBy, createdBy).Scan(&inv.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -801,9 +807,9 @@ func insertInvite(ctx context.Context, tx *txn, roomID, tokenHash string, create
 }
 
 // ShareInvite returns participant by's shareable invite of room and its token, creating it with
-// link and its hash when by has none valid (011-AC26); created says which. ErrNotFound unless by is
-// a participant in room with a valid invite.
-func (s *Store) ShareInvite(ctx context.Context, roomID string, by int64, link, linkHash string) (inv *Invite, tok string, created bool, err error) {
+// link and its hash, named name, when by has none valid (011-AC26, 040-AC14); created says which.
+// ErrNotFound unless by is a participant in room with a valid invite.
+func (s *Store) ShareInvite(ctx context.Context, roomID string, by int64, name, link, linkHash string) (inv *Invite, tok string, created bool, err error) {
 	if by == 0 {
 		// The super-admin has no shareable link: insertInvite would take 0 for it.
 		return nil, "", false, ErrNotFound
@@ -812,7 +818,7 @@ func (s *Store) ShareInvite(ctx context.Context, roomID string, by int64, link, 
 		if inv, tok, err = shareable(ctx, tx, roomID, by); !errors.Is(err, ErrNotFound) {
 			return err
 		}
-		inv, err = insertInvite(ctx, tx, roomID, linkHash, by, link)
+		inv, err = insertInvite(ctx, tx, roomID, linkHash, by, link, name)
 		if errors.Is(err, ErrNotFound) {
 			// Another request made it first, or by has no valid seat: either way, look again.
 			inv, tok, err = shareable(ctx, tx, roomID, by)
@@ -822,7 +828,7 @@ func (s *Store) ShareInvite(ctx context.Context, roomID string, by int64, link, 
 			return err
 		}
 		tok, created = link, true
-		return auditTx(ctx, tx, "", map[string]any{"invite": inv.ID})
+		return auditTx(ctx, tx, "", map[string]any{"invite": inv.ID, "name": name})
 	})
 	if err != nil {
 		return nil, "", false, err
@@ -835,9 +841,10 @@ func shareable(ctx context.Context, tx *txn, roomID string, by int64) (*Invite, 
 	inv := &Invite{RoomID: roomID, CreatedBy: by, Shareable: true}
 	var created, link string
 	err := tx.QueryRowContext(ctx, `
-		SELECT s.id, s.created_at, s.link FROM invites s JOIN participants p ON p.id = s.created_by
+		SELECT s.id, s.created_at, s.link, COALESCE(s.name, ''),
+			(SELECT COUNT(*) FROM participants j WHERE j.invite_id = s.id AND j.removed_at IS NULL) FROM invites s JOIN participants p ON p.id = s.created_by
 		WHERE s.room_id = ? AND s.created_by = ? AND s.link IS NOT NULL AND s.revoked_at IS NULL AND p.removed_at IS NULL`,
-		roomID, by).Scan(&inv.ID, &created, &link)
+		roomID, by).Scan(&inv.ID, &created, &link, &inv.Name, &inv.InRoom)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", ErrNotFound
 	}
@@ -869,8 +876,9 @@ func (s *Store) Invites(ctx context.Context, roomID string, createdBy int64) ([]
 // invites lists room's invites, narrowed to one id and to one creator when those are not 0.
 func (s *Store) invites(ctx context.Context, roomID string, id, createdBy int64) ([]Invite, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, room_id, created_at, COALESCE(created_by, 0), revoked_at, link IS NOT NULL FROM invites
-		WHERE room_id = ? AND (? = 0 OR id = ?) AND (? = 0 OR created_by = ?) ORDER BY id`, roomID, id, id, createdBy, createdBy)
+		SELECT i.id, i.room_id, i.created_at, COALESCE(i.created_by, 0), i.revoked_at, i.link IS NOT NULL, COALESCE(i.name, ''),
+			(SELECT COUNT(*) FROM participants p WHERE p.invite_id = i.id AND p.removed_at IS NULL) FROM invites i
+		WHERE i.room_id = ? AND (? = 0 OR i.id = ?) AND (? = 0 OR i.created_by = ?) ORDER BY i.id`, roomID, id, id, createdBy, createdBy)
 	if err != nil {
 		return nil, fmt.Errorf("query invites: %w", err)
 	}
@@ -880,7 +888,7 @@ func (s *Store) invites(ctx context.Context, roomID string, id, createdBy int64)
 		var inv Invite
 		var created string
 		var revoked sql.NullString
-		if err := rows.Scan(&inv.ID, &inv.RoomID, &created, &inv.CreatedBy, &revoked, &inv.Shareable); err != nil {
+		if err := rows.Scan(&inv.ID, &inv.RoomID, &created, &inv.CreatedBy, &revoked, &inv.Shareable, &inv.Name, &inv.InRoom); err != nil {
 			return nil, fmt.Errorf("scan invite: %w", err)
 		}
 		inv.CreatedAt = parseTS(created)
@@ -889,6 +897,49 @@ func (s *Store) invites(ctx context.Context, roomID string, id, createdBy int64)
 			inv.RevokedAt = &t
 		}
 		out = append(out, inv)
+	}
+	return out, rows.Err()
+}
+
+// RenameInvite sets the name of invite id of room, "" clearing it (040-AC14). ErrNotFound if room
+// has no such invite.
+func (s *Store) RenameInvite(ctx context.Context, roomID string, id int64, name string) error {
+	return s.withTx(ctx, "rename invite", func(tx *txn) error {
+		var old string
+		err := tx.QueryRowContext(ctx, `WITH old AS (SELECT id, name FROM invites WHERE id = ? AND room_id = ? FOR UPDATE)
+			UPDATE invites i SET name = ? FROM old WHERE i.id = old.id RETURNING COALESCE(old.name, '')`, id, roomID, nullStr(name)).Scan(&old)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("rename invite %d: %w", id, err)
+		}
+		return auditTx(ctx, tx, "", map[string]any{"invite": id, "from": old, "to": name})
+	})
+}
+
+// SeatInvite is the invite a seat joined through, for room admins only (040-AC10).
+type SeatInvite struct {
+	ParticipantID int64  `json:"participant_id"`
+	InviteID      int64  `json:"invite_id"`
+	InviteName    string `json:"invite_name,omitempty"`
+}
+
+// SeatInvites lists, for each valid seat of room in join order, the invite it joined through.
+func (s *Store) SeatInvites(ctx context.Context, roomID string) ([]SeatInvite, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.invite_id, COALESCE((SELECT i.name FROM invites i WHERE i.id = p.invite_id), '')
+		FROM participants p WHERE p.room_id = ? AND p.removed_at IS NULL ORDER BY p.id`, roomID)
+	if err != nil {
+		return nil, fmt.Errorf("query seat invites: %w", err)
+	}
+	defer rows.Close()
+	out := []SeatInvite{}
+	for rows.Next() {
+		var si SeatInvite
+		if err := rows.Scan(&si.ParticipantID, &si.InviteID, &si.InviteName); err != nil {
+			return nil, fmt.Errorf("scan seat invite: %w", err)
+		}
+		out = append(out, si)
 	}
 	return out, rows.Err()
 }
