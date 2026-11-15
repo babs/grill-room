@@ -323,7 +323,11 @@ for (const list of [messages, voiceLines]) {
     }
     pin.lastTop = list.scrollTop;
   });
-  new ResizeObserver(() => stick(list)).observe(list);
+  // markRead: a chat shown again, or grown, fires no scroll (041-AC8).
+  new ResizeObserver(() => {
+    stick(list);
+    if (list === messages) markRead();
+  }).observe(list);
 }
 
 // Unread count (005-AC12): lines from others and syntheses that arrive while the tab is not
@@ -1649,7 +1653,7 @@ function renderSwitch() {
       a.dataset.tip = r.room_name;
       const name = Object.assign(document.createElement('span'), { className: 'switch-name', textContent: r.room_name });
       const meta = Object.assign(document.createElement('span'), { className: 'switch-meta', textContent: 'active ' + grillAgo(r.last_activity) + (r.admin ? ' · room admin' : '') });
-      a.append(name, ' ', meta);
+      a.append(name, ...grillUnread(r), ' ', meta);
       return a;
     }) : [note('No other rooms yet.')];
   for (const el of switchMenu.querySelectorAll(':scope > .switch-item')) el.remove();
@@ -1664,8 +1668,8 @@ $('switch-open').addEventListener('click', () => {
   switchMenu.showPopover();
   renderSwitch();
   switchMenu.querySelector(':scope > .switch-item')?.focus();
-  // A read under way redraws the list when it lands.
-  if (!ownBusy && Date.now() - ownAt > 60000) reloadOwn();
+  // Unread counts go stale at once: every open reads again, the rows redrawn when it lands (041-AC12).
+  reloadOwn();
 });
 // Escape gives the focus to the room's name, not to what held it at opening: a click in Safari focuses no button (041-AC6).
 switchMenu.addEventListener('keydown', (e) => {
@@ -2717,6 +2721,45 @@ function dropZone(zone, pane, take) {
 dropZone(docsMode ? document.body : $('docs-pane'), $('docs-pane'), addFiles);
 if (!docsMode) dropZone(chatColumn, chatColumn, addPending);
 
+// The read marker (041-AC8): the newest line the stream delivered while the chat was read, any
+// kind, so a voice line the filter hides does not stall it.
+let readEligible = 0;
+let readSent = 0;
+let readSentAt = 0;
+let readTimer = 0;
+// checkVisibility: on a phone the Docs and People tabs hide the chat. A modal sheet covers it.
+const chatRead = () => !docsMode && !ended && hasProfile && isPinned(messages) && messages.checkVisibility()
+  && !document.querySelector('dialog:modal') && document.visibilityState === 'visible' && document.hasFocus();
+function markRead() {
+  if (lastID > readEligible && chatRead()) readEligible = lastID;
+  if (readEligible <= readSent || readTimer) return;
+  // The first move waits 0 ms: the lines of one replayed chunk land before it, one PUT for them.
+  readTimer = setTimeout(sendRead, readSent ? Math.max(0, readSentAt + 5000 - Date.now()) : 0);
+}
+function sendRead() {
+  clearTimeout(readTimer);
+  readTimer = 0;
+  if (readEligible <= readSent) return;
+  const was = readSent;
+  const through = readSent = readEligible;
+  readSentAt = Date.now();
+  fetch(api + '/read', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ through }), keepalive: true })
+    .then((res) => { if (!res.ok) throw new Error('HTTP ' + res.status); })
+    .catch(() => {
+      if (readSent !== through) return;
+      readSent = was;
+      // Never 0 ms: a server that keeps failing gets one write every 5 s.
+      readTimer ||= setTimeout(sendRead, 5000);
+    });
+}
+messages.addEventListener('scroll', markRead, { passive: true });
+window.addEventListener('focus', markRead);
+// A phone may hide the page for good without a pagehide.
+document.addEventListener('visibilitychange', () => (document.hidden ? sendRead() : markRead()));
+window.addEventListener('pagehide', sendRead);
+// close does not bubble: caught on its way down.
+document.addEventListener('close', markRead, true);
+
 // connect opens the event stream, replacing any previous one. A new EventSource cannot send
 // Last-Event-ID, so it resumes with ?since=.
 function connect() {
@@ -2731,6 +2774,7 @@ function connect() {
     lastID = m.id;
     addMessage(m);
     loaded();
+    markRead();
   };
   // Listing on open, not before: the stream announces only changes made after it opened.
   es.onopen = () => {
@@ -5447,6 +5491,7 @@ function showTab(t) {
   // The Video tab is the stage: left, it stops receiving video (030-AC13, 030-AC14).
   if (t === 'video') openStage();
   else if (was === 'video') closeStage();
+  markRead();
 }
 // A stage open in a window made narrow is the Video tab, or it would receive video unseen (030-AC13).
 matchMedia('(max-width: 40rem)').addEventListener('change', () => {

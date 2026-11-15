@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const pgdb = fileURLToPath(new URL('../bin/pgdb', import.meta.url));
@@ -12,6 +13,9 @@ export function withFreshDB(db, command) {
 export function withExistingDB(db, command) {
   return withDB('url', db, command);
 }
+
+// execSQL runs q on database db and answers how many rows it changed.
+export const execSQL = (db, q) => execFileSync(pgdb, ['exec', process.env.GRILL_ROOM_TEST_DATABASE_URL, db, q]).toString().trim();
 
 function withDB(mode, db, command) {
   if (!process.env.GRILL_ROOM_TEST_DATABASE_URL) {

@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures.js';
-import { noOverflow, appointAdmin } from './helpers.js';
-import { adminToken } from './playwright.config.js';
+import { noOverflow, appointAdmin, upload } from './helpers.js';
+import { adminToken, db } from './playwright.config.js';
+import { execSQL } from './pgdb.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -24,10 +25,12 @@ async function joinAll(browser, request, rooms, name) {
   return page;
 }
 
-// post writes a line in a room through the browser's seat there: the room's activity moves.
+// post writes a line in a room through the browser's seat there: the room's activity moves. It
+// answers the line's id.
 const post = (page, roomID, body) => page.evaluate(async ([id, body]) => {
   const res = await fetch(`/api/rooms/${id}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) });
   if (!res.ok) throw new Error('post: HTTP ' + res.status);
+  return (await res.json()).id;
 }, [roomID, body]);
 
 // openRoom loads a room and waits for the page's own read of the profile.
@@ -185,25 +188,18 @@ test('a seat of another profile lists the browser profile rooms', async ({ brows
   await expect(names(alice)).toHaveText(['Bob only']);
 });
 
-// 041-AC3: a reload past a minute that fails says so, "All my rooms" still there; the next good
-// read draws the rows again.
+// 041-AC3 041-AC12: every open reads the profile again (041-AC12 drops 041-AC3's minute), one
+// that fails says so, "All my rooms" still there; the next good read draws the rows again.
 test('a failed read says the rooms could not load', async ({ browser, request }) => {
   const [here, there] = [await newRoom(request, 'Here'), await newRoom(request, 'There')];
   const alice = await joinAll(browser, request, [here, there], 'Alice');
-  await alice.clock.install();
   await openRoom(alice, here.id);
   await openSwitch(alice);
   await expect(names(alice)).toHaveText(['There']);
   await alice.keyboard.press('Escape');
   await alice.route('**/api/profile', (r) => r.fulfill({ status: 500, body: 'down' }));
-  // Within the minute, no new read: the rows stay.
   let reads = 0;
   alice.on('request', (r) => { if (new URL(r.url()).pathname === '/api/profile') reads++; });
-  await openSwitch(alice);
-  await expect(names(alice)).toHaveText(['There']);
-  expect(reads).toBe(0);
-  await alice.keyboard.press('Escape');
-  await alice.clock.fastForward('01:01');
   const failed = alice.waitForResponse((r) => new URL(r.url()).pathname === '/api/profile');
   await openSwitch(alice);
   await failed;
@@ -309,10 +305,12 @@ test('the switcher by keyboard', async ({ browser, request }) => {
   await expect(note).toHaveText('Loading your rooms…');
   await expect(note).toBeFocused();
   await expect(links(alice)).toHaveText(['All my rooms', 'New room…']);
+  // One request at a time: opening while the first read runs starts no second one; it queues one
+  // more read, after it (041-AC12).
+  expect(reads).toBe(1);
   release();
   await expect(names(alice)).toHaveText(['Room B', 'Room A']);
-  // One request at a time: opening while the first read runs starts no second one.
-  expect(reads).toBe(1);
+  await expect.poll(() => reads).toBe(2);
   const rows = switcher(alice).locator('.switch-room');
   await expect(rows.first()).toBeFocused();
   await alice.keyboard.press('Tab');
@@ -366,4 +364,311 @@ test('a hung profile read does not hold the page', async ({ browser, request }) 
   await alice.locator('#text-size').getByRole('group', { name: 'Chat' }).getByLabel('L', { exact: true }).check();
   await expect.poll(() => puts.length, { timeout: 20_000 }).toBe(1);
   expect(reads).toBe(2);
+});
+
+// Phase 2: unread counts.
+const row = (page, name) => switcher(page).locator('.switch-room').filter({ has: page.locator('.switch-name', { hasText: new RegExp('^' + name + '$') }) });
+// unread reads the count the profile answers for a room, as the switcher draws it.
+const unread = (page, roomID) => page.evaluate(async (id) => (await (await fetch('/api/profile')).json()).profile.rooms.find((r) => r.room_id === id).unread ?? 0, roomID);
+// reads records the room page's marker writes in page's browser context, every page of it.
+function reads(page) {
+  const puts = [];
+  page.context().on('request', (r) => { if (r.method() === 'PUT' && new URL(r.url()).pathname.endsWith('/read')) puts.push(r.postDataJSON().through); });
+  return puts;
+}
+
+// 041-AC8 041-AC12: Bob writes in B while Alice is in A: her switcher and /profile › Rooms say 1;
+// opening B moves the marker, and back in A, and in a second browser of Alice's, the count is gone.
+test('a line in another room shows in the switcher until read', async ({ browser, request }) => {
+  const [a, b] = [await newRoom(request, 'Room A'), await newRoom(request, 'Room B')];
+  const alice = await joinAll(browser, request, [a, b], 'Alice');
+  const link = await recoveryLink(alice);
+  const bob = await joinAll(browser, request, [b], 'Bob');
+  const other = await (await browser.newContext()).newPage();
+  await signInWith(other, link);
+  const puts = reads(alice);
+  await openRoom(alice, a.id);
+  const said = await post(bob, b.id, 'news in B');
+  await openSwitch(alice);
+  await expect(row(alice, 'Room B').locator('.badge')).toHaveText('1');
+  await expect(row(alice, 'Room B')).toHaveAccessibleName('Room B 1 unread active just now');
+  // The sign-in left other on /profile: a fragment alone would not load it again.
+  await other.reload();
+  const card = other.locator('#rooms .card').filter({ hasText: 'Room B' });
+  await expect(card.locator('.badge')).toHaveText('1');
+  await expect(card.getByRole('link')).toHaveAccessibleName('Room B 1 unread');
+  // Row height stays one menu line with a badge (009-AC38).
+  const style = await switcher(alice).locator(':scope > a').evaluateAll((as) => as.map((el) => Math.round(el.getBoundingClientRect().height)));
+  expect(new Set(style).size).toBe(1);
+  await row(alice, 'Room B').click();
+  await expect(alice.locator('#room-name .name')).toHaveText('Room B');
+  await expect.poll(() => puts.at(-1)).toBe(said);
+  await expect.poll(() => unread(alice, b.id)).toBe(0);
+  await openRoom(alice, a.id);
+  await openSwitch(alice);
+  await expect(row(alice, 'Room B')).toHaveAccessibleName('Room B active just now');
+  await expect(row(alice, 'Room B').locator('.badge')).toHaveCount(0);
+  await other.reload();
+  await expect(card).toBeVisible();
+  await expect(card.locator('.badge')).toHaveCount(0);
+});
+
+// 041-AC12: a line naming Alice marks the count "@"; 100 unread lines show "99+".
+test('a mention shows @, and 100 lines 99+', async ({ browser, request }) => {
+  test.setTimeout(60_000);
+  const [a, b] = [await newRoom(request, 'Room A'), await newRoom(request, 'Room B')];
+  const alice = await joinAll(browser, request, [a, b], 'Alice');
+  const bob = await joinAll(browser, request, [b], 'Bob');
+  await openRoom(alice, a.id);
+  await post(bob, b.id, '@Alice a question');
+  await openSwitch(alice);
+  await expect(row(alice, 'Room B').locator('.badge')).toHaveText('1 · @');
+  await expect(row(alice, 'Room B')).toHaveAccessibleName('Room B 1 unread, mentions you active just now');
+  await alice.keyboard.press('Escape');
+  await bob.evaluate(async (id) => {
+    for (let i = 0; i < 99; i++) {
+      const res = await fetch(`/api/rooms/${id}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: 'line ' + i }) });
+      if (!res.ok) throw new Error('post: HTTP ' + res.status);
+    }
+  }, b.id);
+  await openSwitch(alice);
+  await expect(row(alice, 'Room B').locator('.badge')).toHaveText('99+ · @');
+  await expect(row(alice, 'Room B')).toHaveAccessibleName('Room B 99+ unread, mentions you active just now');
+  await alice.goto('/profile#rooms');
+  await expect(alice.locator('#rooms .card').filter({ hasText: 'Room B' }).locator('.badge')).toHaveText('99+ · @');
+  expect(await unread(alice, b.id)).toBe(100);
+});
+
+// 041-AC8: a voice line, which the Written filter hides, newest in the room moves the marker to it.
+test('a voice line last does not stall the marker', async ({ browser, request }) => {
+  const [room, there] = [await newRoom(request, 'Call room'), await newRoom(request, 'There')];
+  const alice = await joinAll(browser, request, [room, there], 'Alice');
+  const bob = await joinAll(browser, request, [room], 'Bob');
+  await alice.setViewportSize({ width: 900, height: 720 });
+  const puts = reads(alice);
+  await openRoom(alice, room.id);
+  const text = await post(bob, room.id, 'typed line');
+  // Sent once the 5 s since the load's move are past.
+  await expect.poll(() => puts.at(-1), { timeout: 10_000 }).toBe(text);
+  // The e2e server has no STT worker: the voice line goes in the database as the worker's would,
+  // and Bob's edit wakes the streams, which send every line past the last one.
+  const bobID = await bob.evaluate(() => myID);
+  const ts = new Date().toISOString().replace('Z', '000000Z');
+  expect(execSQL(db, `INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, source)
+    VALUES ('${room.id}', '${ts}', 'voice', ${bobID}, 'Bob', 'spoken last', 'server')`)).toBe('1');
+  const voice = await bob.evaluate(async ([id, since]) => (await (await fetch(`/api/rooms/${id}/messages?since=${since}`)).json()).messages.at(-1), [room.id, text]);
+  expect(voice.kind).toBe('voice');
+  await bob.evaluate(([id, msg]) => fetch(`/api/rooms/${id}/messages/${msg}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{"body":"typed line, edited"}' }), [room.id, text]);
+  await expect.poll(() => alice.evaluate(() => lastID)).toBe(voice.id);
+  await expect(alice.locator('#chat-filter [data-filter=written]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(alice.locator(`#messages li[data-id="${voice.id}"]`)).toBeHidden();
+  await expect.poll(() => puts.at(-1), { timeout: 10_000 }).toBe(voice.id);
+  const profile = await alice.evaluate(async () => (await (await fetch('/api/profile')).json()).profile.id);
+  expect(execSQL(db, `UPDATE room_reads SET read_through = read_through WHERE profile_id = ${profile} AND room_id = '${room.id}' AND read_through = ${voice.id}`)).toBe('1');
+});
+
+// 041-AC8: no move while the chat is scrolled up, the tab not focused, or in a docs window; the
+// move comes once the chat is back at its end, or the tab focused again.
+test('the marker moves only while the chat is read', async ({ browser, request }) => {
+  test.setTimeout(60_000);
+  const [here, there] = [await newRoom(request, 'Here'), await newRoom(request, 'There')];
+  const alice = await joinAll(browser, request, [here, there], 'Alice');
+  const bob = await joinAll(browser, request, [here], 'Bob');
+  let last;
+  for (let i = 0; i < 40; i++) last = await post(bob, here.id, 'filler ' + i);
+  const puts = reads(alice);
+  await alice.clock.install();
+  await openRoom(alice, here.id);
+  await expect.poll(() => puts.at(-1)).toBe(last);
+  // Scrolled up: not pinned.
+  await alice.clock.fastForward(1500);
+  await alice.locator('#messages').evaluate((el) => { el.scrollTop = 0; });
+  await expect.poll(() => alice.evaluate(() => isPinned(messages))).toBe(false);
+  const up = await post(bob, here.id, 'while scrolled up');
+  await expect.poll(() => alice.evaluate(() => lastID)).toBe(up);
+  await alice.clock.fastForward(6000);
+  expect(puts.at(-1)).toBe(last);
+  expect(await unread(alice, here.id)).toBe(1);
+  await alice.locator('#messages').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await expect.poll(() => puts.at(-1)).toBe(up);
+  // Not focused.
+  await alice.evaluate(() => { window.realFocus = document.hasFocus; document.hasFocus = () => false; });
+  const away = await post(bob, here.id, 'while away');
+  await expect.poll(() => alice.evaluate(() => lastID)).toBe(away);
+  await alice.clock.fastForward(6000);
+  expect(puts.at(-1)).toBe(up);
+  await alice.evaluate(() => { document.hasFocus = window.realFocus; window.dispatchEvent(new Event('focus')); });
+  await expect.poll(() => puts.at(-1)).toBe(away);
+  // A docs window never moves it.
+  const n = puts.length;
+  await alice.goto('/r/' + here.id + '/docs');
+  const docs = await post(bob, here.id, 'while in docs');
+  await expect.poll(() => alice.evaluate(() => lastID)).toBe(docs);
+  await alice.clock.fastForward(6000);
+  expect(puts.length).toBe(n);
+  // A chat window does.
+  await alice.goto('/r/' + here.id + '/chat');
+  await expect.poll(() => puts.at(-1)).toBe(docs);
+  // A phone's Docs tab hides the chat: no move until the Chat tab is back.
+  await alice.setViewportSize({ width: 390, height: 844 });
+  await alice.goto('/r/' + here.id);
+  await expect.poll(() => puts.at(-1)).toBe(docs);
+  await alice.locator('#tabbar [data-tab=docs]').click();
+  const tabbed = await post(bob, here.id, 'while on the Docs tab');
+  await expect.poll(() => alice.evaluate(() => lastID)).toBe(tabbed);
+  await alice.clock.fastForward(6000);
+  expect(puts.at(-1)).toBe(docs);
+  await alice.locator('#tabbar [data-tab=chat]').click();
+  await expect.poll(() => puts.at(-1)).toBe(tabbed);
+});
+
+// 041-AC8: a line made eligible within the 5 s window goes out on pagehide, with keepalive.
+test('leaving the page sends the last eligible line', async ({ browser, request }) => {
+  const [here, there] = [await newRoom(request, 'Here'), await newRoom(request, 'There')];
+  const alice = await joinAll(browser, request, [here, there], 'Alice');
+  const bob = await joinAll(browser, request, [here], 'Bob');
+  const first = await post(bob, here.id, 'first');
+  const puts = reads(alice);
+  await alice.clock.install();
+  await openRoom(alice, here.id);
+  await expect.poll(() => puts.at(-1)).toBe(first);
+  // Timers held: the 5 s window stays open whatever the machine's pace.
+  await alice.clock.pauseAt(await alice.evaluate(() => Date.now() + 100));
+  const next = await post(bob, here.id, 'next');
+  await expect(alice.locator('#messages')).toContainText('next');
+  expect(puts).toEqual([first]);
+  await alice.goto('/r/' + there.id);
+  // Playwright may not report a request of a page going away: the server's count tells.
+  await expect.poll(() => unread(alice, here.id)).toBe(0);
+});
+
+// 041-AC8: what the timer or pagehide sends is the newest line seen while the chat was read, never
+// one that came after, with the chat scrolled up.
+test('a line that came while the chat was not read stays unread', async ({ browser, request }) => {
+  const [here, there] = [await newRoom(request, 'Here'), await newRoom(request, 'There')];
+  const alice = await joinAll(browser, request, [here, there], 'Alice');
+  const bob = await joinAll(browser, request, [here], 'Bob');
+  let last;
+  for (let i = 0; i < 40; i++) last = await post(bob, here.id, 'filler ' + i);
+  const puts = reads(alice);
+  await alice.clock.install();
+  await openRoom(alice, here.id);
+  await expect.poll(() => puts.at(-1)).toBe(last);
+  // Timers held: the 5 s window stays open whatever the machine's pace.
+  await alice.clock.pauseAt(await alice.evaluate(() => Date.now() + 100));
+  const seen = await post(bob, here.id, 'seen');
+  await expect.poll(() => alice.evaluate(() => lastID)).toBe(seen);
+  await alice.locator('#messages').evaluate((el) => { el.scrollTop = 0; });
+  await expect.poll(() => alice.evaluate(() => isPinned(messages))).toBe(false);
+  const unseen = await post(bob, here.id, 'unseen');
+  await expect.poll(() => alice.evaluate(() => lastID)).toBe(unseen);
+  expect(puts).toEqual([last]);
+  await alice.goto('/r/' + there.id);
+  await expect.poll(() => unread(alice, here.id)).toBe(1);
+});
+
+// 041-AC8: a marker write that fails is sent again 5 s later, by its own timer.
+test('a failed marker write is sent again', async ({ browser, request }) => {
+  const [here, there] = [await newRoom(request, 'Here'), await newRoom(request, 'There')];
+  const alice = await joinAll(browser, request, [here, there], 'Alice');
+  const bob = await joinAll(browser, request, [here], 'Bob');
+  const said = await post(bob, here.id, 'line');
+  const puts = reads(alice);
+  let fail = true;
+  await alice.route(`**/api/rooms/${here.id}/read`, (r) => {
+    if (!fail) return r.continue();
+    fail = false;
+    return r.fulfill({ status: 500 });
+  });
+  await alice.clock.install();
+  await openRoom(alice, here.id);
+  await expect.poll(() => puts.length).toBe(1);
+  expect(await unread(alice, here.id)).toBe(1);
+  await alice.clock.fastForward(6000);
+  await expect.poll(() => puts).toEqual([said, said]);
+  await expect.poll(() => unread(alice, here.id)).toBe(0);
+});
+
+// 041-AC8: a modal sheet over the chat holds the marker; closing it moves it.
+test('a sheet over the chat holds the marker', async ({ browser, request }) => {
+  const room = await newRoom(request, 'Here');
+  const alice = await joinAll(browser, request, [room], 'Alice');
+  const bob = await joinAll(browser, request, [room], 'Bob');
+  const puts = reads(alice);
+  await alice.clock.install();
+  await openRoom(alice, room.id);
+  await expect.poll(() => puts.length).toBe(1);
+  await alice.locator('#room-open').click();
+  await alice.locator('#invite-open').click();
+  await expect.poll(() => alice.evaluate(() => $('invites').matches(':modal'))).toBe(true);
+  const under = await post(bob, room.id, 'under the sheet');
+  await expect.poll(() => alice.evaluate(() => lastID)).toBe(under);
+  await alice.clock.fastForward(6000);
+  expect(puts).toHaveLength(1);
+  await alice.keyboard.press('Escape');
+  await expect.poll(() => alice.evaluate(() => $('invites').open)).toBe(false);
+  await expect.poll(() => puts.at(-1)).toBe(under);
+});
+
+// 041-AC8: a page hidden sends its eligible line at once: a phone may not fire pagehide after.
+test('hiding the page sends the last eligible line', async ({ browser, request }) => {
+  const room = await newRoom(request, 'Here');
+  const alice = await joinAll(browser, request, [room], 'Alice');
+  const bob = await joinAll(browser, request, [room], 'Bob');
+  const first = await post(bob, room.id, 'first');
+  const puts = reads(alice);
+  await alice.clock.install();
+  await openRoom(alice, room.id);
+  await expect.poll(() => puts.at(-1)).toBe(first);
+  await alice.clock.pauseAt(await alice.evaluate(() => Date.now() + 100));
+  const next = await post(bob, room.id, 'next');
+  await expect.poll(() => alice.evaluate(() => lastID)).toBe(next);
+  expect(puts).toEqual([first]);
+  await alice.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { get: () => true });
+    Object.defineProperty(document, 'visibilityState', { get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(() => puts).toEqual([first, next]);
+});
+
+// 041-AC8: a short chat folded beside a document is not read; unfolding it, which scrolls nothing,
+// moves the marker.
+test('unfolding a short chat moves the marker', async ({ browser, request }) => {
+  const room = await newRoom(request, 'Here');
+  const alice = await joinAll(browser, request, [room], 'Alice');
+  const bob = await joinAll(browser, request, [room], 'Bob');
+  const puts = reads(alice);
+  await alice.clock.install();
+  await openRoom(alice, room.id);
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await alice.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
+  await alice.locator('#chat-fold').click();
+  await expect(alice.locator('#messages')).toBeHidden();
+  await alice.clock.fastForward(6000);
+  const n = puts.length;
+  const said = await post(bob, room.id, 'while folded');
+  await expect.poll(() => alice.evaluate(() => lastID)).toBe(said);
+  await alice.clock.fastForward(6000);
+  expect(puts).toHaveLength(n);
+  await alice.locator('#chat-unfold').click();
+  // Nothing to scroll: no scroll event can be what moves it.
+  expect(await alice.locator('#messages').evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+  await expect.poll(() => puts.at(-1)).toBe(said);
+});
+
+// 041-AC12: a refresh of /profile's rooms keeps the focus on the card that held it.
+test('a rooms refresh keeps the focused card', async ({ browser, request }) => {
+  const [a, b] = [await newRoom(request, 'Room A'), await newRoom(request, 'Room B')];
+  const alice = await joinAll(browser, request, [a, b], 'Alice');
+  const bob = await joinAll(browser, request, [b], 'Bob');
+  await alice.goto('/profile#rooms');
+  const card = alice.locator('#rooms .card').filter({ hasText: 'Room B' });
+  await card.getByRole('link').focus();
+  await post(bob, b.id, 'news');
+  const read = alice.waitForResponse((r) => new URL(r.url()).pathname === '/api/profile');
+  await alice.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await read;
+  await expect(card.locator('.badge')).toHaveText('1');
+  await expect(card.getByRole('link')).toBeFocused();
 });
