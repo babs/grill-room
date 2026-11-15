@@ -108,20 +108,15 @@ func setUp(ctx context.Context, tx *txn, r *Room, by *Participant, setup *RoomSe
 		if !ok {
 			return 0, fmt.Errorf("set up room: skill %s: no file %q", k.Name, k.File)
 		}
-		var id int64
-		if err := tx.QueryRowContext(ctx, `INSERT INTO skills(name, created_at, room_id, pending, from_starter) VALUES(?,?,?,?,?) RETURNING id`,
-			k.Name, now(), r.ID, setup.SkillsPending, setup.SkillsPending).Scan(&id); err != nil {
-			return 0, fmt.Errorf("set up room: skill %s: %w", k.Name, err)
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO skill_versions(skill_id, n, author, description, files, size, sha256, data, created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-			id, k.Version, k.Author, k.Description, k.Files, k.Size, k.SHA256, data, now()); err != nil {
-			return 0, fmt.Errorf("set up room: skill %s: %w", k.Name, err)
+		id, err := insertKitSkill(ctx, tx, r.ID, k, data, setup.SkillsPending)
+		if err != nil {
+			return 0, fmt.Errorf("set up room: %w", err)
 		}
 		skills[k.Name] = [2]int64{id, int64(k.Version)}
 	}
 	plugins, kept, left, err := setUpPlugins(ctx, tx, r.ID, by, setup)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("set up room: %w", err)
 	}
 	for _, p := range setup.Personas {
 		var id int64
@@ -205,34 +200,66 @@ func setUp(ctx context.Context, tx *txn, r *Room, by *Participant, setup *RoomSe
 	return kept, nil
 }
 
+// insertKitSkill adds skill k, a starter's or a library persona's frozen copy holding data, to
+// room at its version; pending holds it until the room's host approves without asking (006-AC13).
+func insertKitSkill(ctx context.Context, tx *txn, roomID string, k StarterSkill, data []byte, pending bool) (int64, error) {
+	var id int64
+	if err := tx.QueryRowContext(ctx, `INSERT INTO skills(name, created_at, room_id, pending, from_starter) VALUES(?,?,?,?,?) RETURNING id`,
+		k.Name, now(), roomID, pending, pending).Scan(&id); err != nil {
+		return 0, fmt.Errorf("skill %s: %w", k.Name, err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO skill_versions(skill_id, n, author, description, files, size, sha256, data, created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+		id, k.Version, k.Author, k.Description, k.Files, k.Size, k.SHA256, data, now()); err != nil {
+		return 0, fmt.Errorf("skill %s: %w", k.Name, err)
+	}
+	return id, nil
+}
+
 // setUpPlugins adds setup's plugins to room at their version 1, waiting for the AI host's
-// inspection, and returns their ids by name with the bytes they take. Each snapshot is read again,
-// as an import reads it: the manifest and file list come from its files. A plugin past the
-// instance's current cap, the room's plugin limit or its quota is left out, and the personas go
-// without it: a starter's plugin never fails the room's creation (006-AC13). left holds a chat
-// line for each.
+// inspection, and returns their ids by name with the bytes they take. A plugin the room cannot take
+// is left out, and the personas go without it: a starter's plugin never fails the room's creation
+// (006-AC13). left holds a chat line for each.
 func setUpPlugins(ctx context.Context, tx *txn, roomID string, by *Participant, setup *RoomSetup) (ids map[string]int64, kept int64, left []string, err error) {
+	load := func(name string, limit int64) ([]byte, bool, error) {
+		data, ok := setup.Files[name]
+		if !ok {
+			return nil, false, fmt.Errorf("no file %q", name)
+		}
+		return data, int64(len(data)) <= limit, nil
+	}
+	ids, kept, err = insertKitPlugins(ctx, tx, roomID, by, setup.Plugins, load, 0, setup.UploadQuota, func(name, why string) {
+		left = append(left, fmt.Sprintf("The room starts without the starter's plugin %s: %s.", name, why))
+	})
+	return ids, kept, left, err
+}
+
+// insertKitPlugins adds plugins, a starter's or a library persona's, to room at their version 1,
+// waiting for the AI host's inspection, and returns their ids by name with the bytes they take. Each
+// snapshot is read again, as an import reads it: the manifest and file list come from its files. A
+// plugin past the instance's current cap, the room's plugin limit (have plugins already) or the
+// bytes its quota has left, free, is left out and told to leave. load reads a snapshot's file, and
+// fits tells it holds at most limit bytes; one that does not fit may come back without its data.
+func insertKitPlugins(ctx context.Context, tx *txn, roomID string, by *Participant, plugins []StarterPlugin,
+	load func(name string, limit int64) (data []byte, fits bool, err error), have int, free int64,
+	leave func(name, why string)) (ids map[string]int64, kept int64, err error) {
 	ids = map[string]int64{}
-	if len(setup.Plugins) == 0 {
-		return ids, 0, nil, nil
+	if len(plugins) == 0 {
+		return ids, 0, nil
 	}
 	set, err := instanceSettings(ctx, tx)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
-	leave := func(name, why string) {
-		left = append(left, fmt.Sprintf("The room starts without the starter's plugin %s: %s.", name, why))
-	}
-	for _, p := range setup.Plugins {
-		data, ok := setup.Files[p.File]
-		if !ok {
-			return nil, 0, nil, fmt.Errorf("set up room: plugin %s: no file %q", p.Name, p.File)
-		}
-		if len(ids) == MaxRoomPlugins {
+	for _, p := range plugins {
+		if have+len(ids) >= MaxRoomPlugins {
 			leave(p.Name, fmt.Sprintf("a room holds at most %d plugins", MaxRoomPlugins))
 			continue
 		}
-		if kept+int64(len(data)) > setup.UploadQuota {
+		data, fits, err := load(p.File, free-kept)
+		if err != nil {
+			return nil, 0, fmt.Errorf("plugin %s: %w", p.Name, err)
+		}
+		if !fits {
 			leave(p.Name, "it would take the room past its quota")
 			continue
 		}
@@ -251,22 +278,22 @@ func setUpPlugins(ctx context.Context, tx *txn, roomID string, by *Participant, 
 		err = tx.QueryRowContext(ctx, `INSERT INTO room_plugins(room_id, name, source_url, ref, ref_name, entry, private, created_by_name, created_at)
 			VALUES(?,?,?,?,?,?,?,?,?) RETURNING id`, roomID, p.Name, p.URL, p.Ref, p.RefName, p.Entry, p.Private, by.Name, now()).Scan(&id)
 		if err != nil {
-			return nil, 0, nil, fmt.Errorf("set up room: plugin %s: %w", p.Name, err)
+			return nil, 0, fmt.Errorf("plugin %s: %w", p.Name, err)
 		}
 		v := PluginSnapshot{Commit: p.Commit, SHA256: sn.SHA256, Size: sn.Size, Files: len(sn.Files), FileList: files, Manifest: manifest, Data: sn.Tar}
 		if err := insertPluginVersion(ctx, tx, id, 1, v, by); err != nil {
-			return nil, 0, nil, err
+			return nil, 0, err
 		}
 		// Files an import brought stay the archive's word through a starter (009-AC27).
 		if p.Imported {
 			if _, err := tx.ExecContext(ctx, `UPDATE plugin_versions SET hold = 1 WHERE plugin_id = ?`, id); err != nil {
-				return nil, 0, nil, fmt.Errorf("set up room: plugin %s: %w", p.Name, err)
+				return nil, 0, fmt.Errorf("plugin %s: %w", p.Name, err)
 			}
 		}
 		ids[p.Name] = id
 		kept += int64(len(sn.Tar))
 	}
-	return ids, kept, left, nil
+	return ids, kept, nil
 }
 
 // ReleaseStarterSkills turns on the skills a starter brought into room once its host is one who

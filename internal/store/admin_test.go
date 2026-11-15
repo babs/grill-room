@@ -178,6 +178,10 @@ func TestAuditWriteFailureRollsBackTheChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 035-AC19: the admin removes shared personas only.
+	if err := s.ShareTemplate(ctx, p.ProfileID, tpl.ID, true); err != nil {
+		t.Fatal(err)
+	}
 	k := publish(t, s, p.ProfileID, true, "stamp", "v1")
 	sess, err := s.CreateAdminSession(ctx, "h1", "ua", "ip", t0, t0.Add(AdminSessionTTL), 0)
 	if err != nil {
@@ -215,7 +219,7 @@ func TestAuditWriteFailureRollsBackTheChange(t *testing.T) {
 			return err
 		}, `SELECT revoked_at FROM invites WHERE id = ?`, []any{invs[0].ID}, ""},
 		{"delete profile", func() error { return s.DeleteProfile(audited(TargetProfile, "p"), p.ProfileID) }, `SELECT count(*) FROM profiles WHERE id = ?`, []any{p.ProfileID}, "1"},
-		{"remove template", func() error { return s.RemoveTemplate(audited(TargetTemplate, "t"), tpl.ID) }, `SELECT count(*) FROM persona_templates WHERE id = ?`, []any{tpl.ID}, "1"},
+		{"remove template", func() error { return s.RemoveTemplate(audited(TargetTemplate, "t"), 0, tpl.ID) }, `SELECT count(*) FROM persona_templates WHERE id = ?`, []any{tpl.ID}, "1"},
 		{"remove skill", func() error { return s.RemoveSkill(audited(TargetSkill, "k"), k.ID, 0) }, `SELECT count(*) FROM skills WHERE id = ?`, []any{k.ID}, "1"},
 		{"admin login", func() error {
 			_, err := s.CreateAdminSession(audited(TargetAdminSession, ""), "h2", "ua", "ip", t0, t0.Add(AdminSessionTTL), 0)

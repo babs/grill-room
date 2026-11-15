@@ -43,6 +43,8 @@
       <div id="persona-buttons" role="group" aria-label="AI personas"></div>
       <button type="button" class="persona-more right" hidden></button>
     </div>
+    <!-- Outside the bar's scroll area, so it never sits under an edge "+N" (035-AC14). -->
+    <button type="button" id="persona-new" class="btn-icon btn-ghost" aria-label="Add a persona" data-tip="Add a persona" data-icon="plus"></button>
     <span id="chain-count" class="auto-turns" data-tip="Answers the personas started on their own, one calling another. They pause at the limit; any message from a person starts the count over." hidden></span>
     <button type="button" id="agent-warn" class="btn-icon btn-ghost" data-icon="alert" aria-label="AI warning" aria-describedby="agent-status" hidden></button>
     <span id="agent-status" class="muted" role="status"></span>
@@ -162,26 +164,48 @@
   <p class="hint">Each persona is an AI with its own Claude session. Changes apply from its next answer.</p>
   <p id="personas-status" class="said" role="status"></p>
   <ul id="persona-list" class="persona-rows" aria-label="AI personas"></ul>
+  <!-- The sheet's one primary action, before the room's limits and skills (035-AC17). -->
+  <div class="row persona-add">
+    <button type="button" id="persona-add" class="btn-primary">Add a persona</button>
+    <span id="personas-full" class="hint" hidden></span>
+  </div>
   <form id="chain-form" class="row">
     <label>Auto-turn limit <input id="chain-budget" type="number" min="1" max="1000" required></label>
-    <button type="submit">Set</button>
+    <button type="submit" class="btn-secondary">Set</button>
   </form>
   <p class="hint">Answers the personas start one after another (every N answers, or when an answer names another persona) before they pause. A message from a person starts the count over.</p>
   <label><input id="parallel-turns" type="checkbox"> Personas answer at the same time</label>
   <p class="hint" id="parallel-hint">Each one in its own sandbox on the AI host's computer. When two edit the same document, the second runs again on the new version. Only the AI host switches it.</p>
-  <form id="persona-add" class="row">
-    <label>Add from the library <select id="persona-template" required></select></label>
-    <button type="submit">Add</button>
-  </form>
   <section id="room-skills" aria-labelledby="room-skills-title">
     <h3 id="room-skills-title">Room skills</h3>
     <p class="hint">The room's own copies of skills, at the version copied. They stay when whoever copied them leaves, and any persona can turn them on.</p>
     <ul id="room-skill-list"></ul>
     <form id="room-skill-copy" class="row" hidden>
       <label>Copy one of your personal skills into the room <select id="room-skill-source" required></select></label>
-      <button type="submit">Copy</button>
+      <button type="submit" class="btn-secondary">Copy</button>
     </form>
   </section>
+</dialog>
+<!-- The library picker: three sections, then a preview of the one chosen (035-AC14). -->
+<dialog id="persona-picker" class="sheet wide full" aria-labelledby="persona-picker-title">
+  <div class="sheet-head">
+    <h2 id="persona-picker-title">Add a persona</h2>
+    <button type="button" id="persona-picker-close" class="btn-icon btn-ghost" aria-label="Close" data-icon="close"></button>
+  </div>
+  <form id="persona-pick">
+    <div id="persona-pick-lists"></div>
+    <section id="persona-preview" class="persona-preview" aria-labelledby="persona-preview-title">
+      <h3 id="persona-preview-title">Preview</h3>
+      <p id="persona-preview-none" class="hint">Choose a persona to see what it does.</p>
+      <dl id="persona-preview-facts" class="profile-facts" hidden></dl>
+    </section>
+    <p id="persona-pick-status" class="said error" role="alert"></p>
+    <p id="persona-pick-full" class="hint" hidden></p>
+    <div class="actions">
+      <button type="button" id="persona-pick-cancel" class="btn-secondary">Cancel</button>
+      <button type="submit" id="persona-pick-add" class="btn-primary">Add</button>
+    </div>
+  </form>
 </dialog>
 <!-- One persona's settings in four tabs, each a deep link #personas/<id>/<tab> (009-AC2). -->
 <dialog id="persona-sheet" class="sheet wide full" aria-labelledby="persona-sheet-title">

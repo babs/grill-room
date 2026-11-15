@@ -550,12 +550,23 @@ func TestImportOnAnotherInstance(t *testing.T) {
 	src, dst := openTest(t), openTest(t)
 	ctx := t.Context()
 	alice, _ := richRoom(t, src, "orig")
+	tp, err := src.PublishTemplate(ctx, alice.ProfileID, "Alice", "Critic", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "t", Model: "sonnet", Effort: "medium"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := src.AddPersona(ctx, "orig", tp.ID, alice, true, 1<<20); err != nil {
+		t.Fatal(err)
+	}
 	dir := export(t, src, "orig")
 	o := importOpts("there")
 	o.SameInstance = false
 	rep, err := dst.ImportRoom(ctx, dir, o)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// 035-AC16: the library persona stays behind, and the copy keeps no version of it.
+	if ps, _ := dst.RoomPersonas(ctx, "there"); len(ps) != 2 || ps[1].Name != "Critic" || ps[1].TemplateID != 0 || ps[1].TemplateVersion != 0 {
+		t.Fatalf("unlinked copy %+v", ps)
 	}
 	if rep.Relinked != 0 || rep.Unlinked != 1 || rep.RoomSkills != 1 || rep.LinkedSkills != 0 {
 		t.Fatalf("report %+v", rep)
@@ -812,6 +823,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"starters":                  server,
 		"starter_versions":          server,
 		"starter_files":             server,
+		"persona_template_files":    server,
 		"schema_version":            server,
 	}
 	rows, err := s.db.QueryContext(t.Context(), `SELECT table_name::text, string_agg(column_name::text, ' ') FROM information_schema.columns
@@ -1202,7 +1214,7 @@ func TestImportPersonaTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := src.AddPersona(ctx, "orig", tpl.ID, alice, true); err != nil {
+	if _, _, err := src.AddPersona(ctx, "orig", tpl.ID, alice, true, 1<<20); err != nil {
 		t.Fatal(err)
 	}
 	dir := export(t, src, "orig")

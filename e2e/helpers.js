@@ -457,13 +457,22 @@ export async function newRoomEditor(page) {
   await page.getByRole('button', { name: 'Use this starter' }).click();
 }
 
+// addFromLibrary adds title, a library persona of section, with the picker the Personas sheet's
+// Add a persona opens (035-AC14); the Personas sheet stays open.
+export async function addFromLibrary(page, title, section = 'Built-in') {
+  const panel = page.locator('#personas');
+  if (!(await panel.isVisible())) await menuItem(page, 'Personas');
+  await panel.getByRole('button', { name: 'Add a persona', exact: true }).click();
+  const picker = page.locator('#persona-picker');
+  await picker.getByRole('group', { name: section }).getByRole('radio', { name: new RegExp(`^${title}, v`) }).check();
+  await picker.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(picker).toBeHidden();
+}
+
 // addSecretary adds the Secretary from the library in the personas panel, applies the trigger
 // fields given on its Triggers tab (009-AC2), and leaves the panel open.
 export async function addSecretary(page, fields = {}) {
-  const panel = page.locator('#personas');
-  await menuItem(page, 'Personas');
-  await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
-  await panel.getByRole('button', { name: 'Add', exact: true }).click();
+  await addFromLibrary(page, 'Secretary');
   await expect(personaRow(page, 'Secretary')).toHaveCount(1);
   if (fields.everyN) {
     const sec = await personaSheet(page, 'Secretary', 'Triggers');
@@ -475,7 +484,7 @@ export async function addSecretary(page, fields = {}) {
     // 009-AC1: the row says the trigger in words.
     await expect(personaRow(page, 'Secretary').locator('.pr-meta')).toHaveText(`sonnet · effort medium · every ${fields.everyN} answers`);
   }
-  return panel;
+  return page.locator('#personas');
 }
 
 // commentOnDocument saves a whole-document note on the open document (005-AC37 calls them notes).

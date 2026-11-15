@@ -164,7 +164,7 @@ func TestColumnTypes(t *testing.T) {
 	if got := cols("integer"); len(got) != 0 {
 		t.Errorf("integer columns: %v", got)
 	}
-	blobs := []string{"agent_sessions.data", "attachments.data", "plugin_snapshots.data", "skill_versions.data", "starter_files.data",
+	blobs := []string{"agent_sessions.data", "attachments.data", "persona_template_files.data", "plugin_snapshots.data", "skill_versions.data", "starter_files.data",
 		"tts_samples.data", "uploads.data"}
 	if got := cols("bytea"); !slices.Equal(got, blobs) {
 		t.Errorf("bytea columns %v, want %v", got, blobs)
@@ -487,7 +487,7 @@ func TestTwoStoresKeepTheInvariants(t *testing.T) {
 		var wg sync.WaitGroup
 		errs := make([]error, 2*MaxRoomPersonas)
 		for i := range errs {
-			wg.Go(func() { _, _, errs[i] = stores[i%2].AddPersona(ctx, "r", tpl, p, true) })
+			wg.Go(func() { _, _, errs[i] = stores[i%2].AddPersona(ctx, "r", tpl, p, true, 1<<20) })
 		}
 		wg.Wait()
 		for _, err := range errs {

@@ -226,8 +226,9 @@ func (s *Server) elect(ctx context.Context, room string) error {
 	return err
 }
 
-// releaseStarterSkills turns on the skills the room's starter brought once a host who approves
-// without asking is online; under "approve everything" they wait for that host (006-AC13).
+// releaseStarterSkills turns on the skills the room's starter or a library persona brought once a
+// host who approves without asking is online; under "approve everything" they wait for that host
+// (006-AC13, 035-AC10).
 func (s *Server) releaseStarterSkills(ctx context.Context, room string) {
 	r, err := s.bus.Store.Room(ctx, room)
 	if err != nil {
@@ -250,7 +251,7 @@ func (s *Server) releaseStarterSkills(ctx context.Context, room string) {
 	}
 	s.log.Info("starter_skills_released", zap.String("room", room), zap.Strings("skills", names))
 	if err := s.bus.Post(ctx, &store.Message{RoomID: room, Kind: store.KindSystem, ParticipantID: p.ID, Sender: p.Name,
-		Body: "The starter's skills are on, as " + p.Name + "'s AI host approves without asking: " + strings.Join(names, ", ") + "."}); err != nil {
+		Body: "The skills held for the host are on, as " + p.Name + "'s AI host approves without asking: " + strings.Join(names, ", ") + "."}); err != nil {
 		s.log.Error("post_failed", zap.String("room", room), zap.Error(err))
 	}
 }

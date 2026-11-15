@@ -113,7 +113,11 @@ func TestPersonaAPI(t *testing.T) {
 	if code, _ := e.do(t, "POST", r.path("/templates"), bob, map[string]any{"template_id": ts[0].ID, "name": "Grill", "badge": "🔥", "colour": "#112233", "text": "x", "model": "haiku", "effort": "low"}); code != http.StatusForbidden {
 		t.Fatalf("Bob versions a preset: %d", code)
 	}
-	cp := e.addPersona(t, r, bob, tp.ID)
+	// 035-AC18: Alice's template is personal: only her profile adds it or takes its update.
+	if code, _ := e.do(t, "POST", r.path("/personas"), bob, map[string]int64{"template_id": tp.ID}); code != http.StatusNotFound {
+		t.Fatalf("Bob adds Alice's personal template: %d", code)
+	}
+	cp := e.addPersona(t, r, alice, tp.ID)
 	code, b = e.do(t, "POST", r.path("/templates"), alice, critic)
 	if v2 := decodeJSON[store.Template](t, b); code != http.StatusCreated || v2.Version != 2 {
 		t.Fatalf("version 2: %d %s", code, b)
@@ -128,27 +132,41 @@ func TestPersonaAPI(t *testing.T) {
 	if offered.Text != "Find the flaw." || offered.UpdateVersion != 2 {
 		t.Fatalf("offer: %+v", offered)
 	}
-	code, b = e.do(t, "POST", r.path(fmt.Sprintf("/personas/%d/update", cp.ID)), bob, nil)
+	if code, _ := e.do(t, "POST", r.path(fmt.Sprintf("/personas/%d/update", cp.ID)), bob, nil); code != http.StatusNotFound {
+		t.Fatalf("Bob takes the update of Alice's personal template: %d", code)
+	}
+	code, b = e.do(t, "POST", r.path(fmt.Sprintf("/personas/%d/update", cp.ID)), alice, nil)
 	if p := decodeJSON[store.RoomPersona](t, b); code != http.StatusOK || p.Text != "Find the flaw, then the fix." || p.TemplateVersion != 2 {
 		t.Fatalf("update: %d %s", code, b)
 	}
 
-	// The admin's library.
+	// The admin's library: built-in and shared ones, never a profile's own (035-AC19).
 	if code, _ := e.do(t, "GET", "/api/templates", bob, nil); code != http.StatusUnauthorized {
 		t.Fatalf("library without the admin token: %d", code)
 	}
-	if code, b := e.do(t, "GET", "/api/templates", e.admin, nil); code != http.StatusOK || len(decodeJSON[[]store.Template](t, b)) != 5 {
+	if code, b := e.do(t, "GET", "/api/templates", e.admin, nil); code != http.StatusOK || len(decodeJSON[[]store.Template](t, b)) != 4 {
 		t.Fatalf("admin library: %d %s", code, b)
 	}
 	for path, want := range map[string]int{
 		"/api/templates/" + strconv.FormatInt(ts[0].ID, 10): http.StatusConflict,
 		"/api/templates/999": http.StatusNotFound,
 		"/api/templates/x":   http.StatusNotFound,
-		"/api/templates/" + strconv.FormatInt(tp.ID, 10): http.StatusNoContent,
+		"/api/templates/" + strconv.FormatInt(tp.ID, 10): http.StatusNotFound,
 	} {
 		if code, b := e.do(t, "DELETE", path, e.admin, nil); code != want {
 			t.Errorf("DELETE %s: %d %s, want %d", path, code, b, want)
 		}
+	}
+	// 035-AC19: a profile's own is not the admin's to remove until shared.
+	ap, err := e.st.ParticipantByToken(t.Context(), HashToken(alice))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.ShareTemplate(t.Context(), ap.ProfileID, tp.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if code, b := e.do(t, "DELETE", "/api/templates/"+strconv.FormatInt(tp.ID, 10), e.admin, nil); code != http.StatusNoContent {
+		t.Fatalf("admin removes the shared one: %d %s", code, b)
 	}
 	if code, _ := e.do(t, "DELETE", r.path(fmt.Sprintf("/personas/%d", cp.ID)), bob, nil); code != http.StatusNoContent {
 		t.Fatalf("remove: %d", code)
@@ -347,7 +365,65 @@ func TestPersonaTextNewlinesAndLimits(t *testing.T) {
 	for range store.MaxRoomPersonas - 1 {
 		e.addPersona(t, r, tok, sec)
 	}
-	if code, b := e.do(t, "POST", r.path("/personas"), tok, map[string]int64{"template_id": sec}); code != http.StatusConflict || !strings.Contains(string(b), "at most 12 personas per room") {
+	if code, b := e.do(t, "POST", r.path("/personas"), tok, map[string]int64{"template_id": sec}); code != http.StatusConflict || !strings.Contains(string(b), "A room holds 12 personas at most.") {
 		t.Fatalf("persona past the limit: %d %s", code, b)
+	}
+}
+
+// 035-AC12 035-AC13 035-AC7 035-AC20: "Save to my personas" makes a library persona of the room
+// persona, then its next version; it needs a profile, answers 409 past the limits and 404 for an
+// unknown persona. The library lists each persona's section and description.
+func TestSavePersonaToLibraryAPI(t *testing.T) {
+	e := newEnv(t)
+	r := newTurnRoom(t, e)
+	alice := r.alice.p.Token
+	bob := e.join(t, e.createInvite(t, r.room).Token, "Bob").Token
+	save := r.path(fmt.Sprintf("/personas/%d/library", r.grill.ID))
+	events, _ := e.openStream(t, r.path("/events"), bob, "")
+	nextEvent(t, events, "agent")
+	code, b := e.do(t, "POST", save, alice, nil)
+	tp := decodeJSON[store.Template](t, b)
+	if code != http.StatusCreated || tp.Version != 1 || tp.Section != store.SectionPersonal || !tp.Mine || tp.Name != "Grill" {
+		t.Fatalf("save: %d %s", code, b)
+	}
+	// The save wakes the room: Bob's view shows the persona's new source without a reload.
+	for !strings.Contains(nextEvent(t, events, "agent").data, `"template_section":"personal"`) {
+	}
+	if code, b := e.do(t, "POST", save, alice, nil); code != http.StatusCreated || decodeJSON[store.Template](t, b).Version != 2 {
+		t.Fatalf("save again: %d %s", code, b)
+	}
+	// A seat whose profile the admin deleted stays in the room, without a profile.
+	bp, err := e.st.ParticipantByToken(t.Context(), HashToken(bob))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := e.do(t, "DELETE", "/api/profiles/"+strconv.FormatInt(bp.ProfileID, 10), e.admin, nil); code != http.StatusNoContent {
+		t.Fatalf("delete Bob's profile: %d", code)
+	}
+	if code, b := e.do(t, "POST", save, bob, nil); code != http.StatusForbidden || !strings.Contains(string(b), "saving to your personas needs a profile") {
+		t.Fatalf("without a profile: %d %s", code, b)
+	}
+	if code, _ := e.do(t, "POST", r.path("/personas/999/library"), alice, nil); code != http.StatusNotFound {
+		t.Fatalf("unknown persona: %d", code)
+	}
+	p, err := e.st.ParticipantByToken(t.Context(), HashToken(alice))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := 3; n <= store.MaxTemplateVersions; n++ {
+		if _, err := e.st.PublishVersion(t.Context(), p.ProfileID, tp.ID, "Alice", tp.PersonaFields); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code, b := e.do(t, "POST", save, alice, nil); code != http.StatusConflict || !strings.Contains(string(b), "at most 100 versions per persona") {
+		t.Fatalf("past the limit: %d %s", code, b)
+	}
+	ts := e.templates(t, r, alice)
+	if first, last := ts[0], ts[len(ts)-1]; first.Section != store.SectionBuiltin || first.Description == "" || last.ID != tp.ID || last.Section != store.SectionPersonal {
+		t.Fatalf("library: %+v", ts)
+	}
+	_, b = e.do(t, "GET", r.path("/templates"), alice, nil)
+	if !strings.Contains(string(b), `"section":"builtin"`) || !strings.Contains(string(b), `"description":"`) {
+		t.Fatalf("library JSON: %s", b)
 	}
 }

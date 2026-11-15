@@ -134,7 +134,7 @@ func seedHeld(t *testing.T, s *Store, room string) *Participant {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, _, err := s.AddPersona(ctx, room, templateByPreset(t, s, "secretary").ID, bob, true)
+	p, _, err := s.AddPersona(ctx, room, templateByPreset(t, s, "secretary").ID, bob, true, 1<<20)
 	if err != nil || !p.Pending {
 		t.Fatalf("held persona: %+v %v", p, err)
 	}
@@ -148,7 +148,7 @@ func seedHeld(t *testing.T, s *Store, room string) *Participant {
 // catalogue voices' samples (013-AC27), the lexicon (013-AC31), the schema version, and the pods'
 // shared STT workers, TTS pod and rate-limit events (017 Phase 3).
 var serverWide = []string{"settings", "persona_templates", "persona_template_versions", "skills", "skill_versions", "admin_sessions", "audit_log",
-	"starters", "starter_versions", "starter_files", "tts_samples", "pronunciations", "schema_version", "stt_workers", "tts_pod", "rate_events"}
+	"starters", "starter_versions", "starter_files", "persona_template_files", "tts_samples", "pronunciations", "schema_version", "stt_workers", "tts_pod", "rate_events"}
 
 // fkSQL lists the single-column foreign keys: table, column, parent table, ON DELETE action and
 // whether the column is NOT NULL.
@@ -364,7 +364,7 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 			t.Fatal(err)
 		}
 		// A turn an agent queued: no participant holds it, only the room (002-AC24).
-		sec, _, err := s.AddPersona(ctx, room, templateByPreset(t, s, "secretary").ID, p, true)
+		sec, _, err := s.AddPersona(ctx, room, templateByPreset(t, s, "secretary").ID, p, true, 1<<20)
 		if err != nil {
 			t.Fatal(err)
 		}

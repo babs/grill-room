@@ -24,6 +24,7 @@
   "htm/preact": "/static/esm/htm-preact.js"
 }}</script>
 <script type="module" src="/static/admin/profile-starters.js"></script>
+<script type="module" src="/static/admin/profile-personas.js"></script>
 </head>
 <body class="home">
 <header class="app-header">
@@ -62,6 +63,7 @@
     <nav class="tabs sticky" id="profile-tabs" data-header aria-label="Profile">
       <a href="#rooms" id="tab-rooms">Rooms <span class="badge" id="count-rooms"></span></a>
       <a href="#starters" id="tab-starters">Starters <span class="badge" id="count-starters"></span></a>
+      <a href="#personas" id="tab-personas">Personas <span class="badge" id="count-personas"></span></a>
       <a href="#skills" id="tab-skills">Skills <span class="badge" id="count-skills"></span></a>
       <a href="#tokens" id="tab-tokens">API tokens <span class="badge" id="count-tokens"></span></a>
       <a href="#account" id="tab-account">Account</a>
@@ -75,6 +77,9 @@
     </section>
     <section id="panel-starters" class="tab-panel" aria-labelledby="tab-starters" hidden>
       <section id="starters" aria-labelledby="starters-title"></section>
+    </section>
+    <section id="panel-personas" class="tab-panel" aria-labelledby="tab-personas" hidden>
+      <section id="personas" aria-labelledby="personas-title"></section>
     </section>
     <section id="panel-skills" class="tab-panel" aria-labelledby="tab-skills" hidden>
       <div class="list-head">
@@ -133,6 +138,8 @@
   </section>
 </main>
 <dialog id="room-create-sheet" class="sheet wide full" aria-labelledby="room-create-title"></dialog>
+<dialog id="persona-lib-sheet" class="sheet wide full" aria-labelledby="persona-lib-title"></dialog>
+<dialog id="persona-room-sheet" class="sheet" aria-labelledby="persona-room-title"></dialog>
 <dialog id="token-sheet" class="sheet" aria-labelledby="token-sheet-title">
   <div class="sheet-head"><h2 id="token-sheet-title">New API token</h2>
     <button type="button" class="btn-ghost btn-icon" id="token-close" aria-label="Close" data-icon="close"></button></div>

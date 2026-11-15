@@ -99,7 +99,7 @@ func (e *env) merges(t *testing.T) int {
 }
 
 // seatlessGuest is a browser holding a guest profile without a seat, so without a name; with
-// things, it has a personal and a published skill, a persona template and a starter.
+// things, it has a personal and a published skill, a library persona and a starter.
 func seatlessGuest(t *testing.T, e *env, things bool) (*device, int64) {
 	t.Helper()
 	db := e.sqlDB(t)
@@ -162,7 +162,7 @@ func TestOIDCAttachOffer(t *testing.T) {
 		{name: "account with an email only", device: gwen, claims: map[string]any{"email": "ivo@example.com", "email_verified": true},
 			want: "Attach your guest profile Gwen (1 room) to your organisation account, signed in as ivo@example.com?"},
 		{name: "nameless guest with things", device: func(t *testing.T) (*device, int64) { return seatlessGuest(t, e, true) },
-			want: "Attach your guest profile Guest (0 rooms) to your organisation account?", moves: []string{"1 personal skill", "1 published skill", "1 persona template", "1 starter"}},
+			want: "Attach your guest profile Guest (0 rooms) to your organisation account?", moves: []string{"1 personal skill", "1 published skill", "1 library persona", "1 starter"}},
 		{name: "guest with nothing to move", device: func(t *testing.T) (*device, int64) { return seatlessGuest(t, e, false) }},
 		{name: "guest with an email", device: gwen, guest: func(t *testing.T, id int64) { setEmail(t, e, id, "had@example.com") }},
 		{name: "emailed at login, not at the callback", device: gwen, guest: func(t *testing.T, id int64) { setEmail(t, e, id, "was@example.com") },
@@ -465,7 +465,7 @@ func TestAttachMoves(t *testing.T) {
 		{&store.MergePreview{Rooms: rooms(2), Skills: store.MergeSkills{Merge: []string{"a", "b"}}, SharedSkills: store.MergeCount{Merge: 1}},
 			2, "Rooms: r0, r1|2 personal skills|1 published skill"},
 		{&store.MergePreview{Rooms: rooms(7), Templates: store.MergeCount{Merge: 3}, Starters: store.MergeCount{Merge: 2}},
-			7, "Rooms: r0, r1, r2, r3, r4 and 2 more|3 persona templates|2 starters"},
+			7, "Rooms: r0, r1, r2, r3, r4 and 2 more|3 library personas|2 starters"},
 	} {
 		n, moves := attachMoves(tc.pv)
 		if n != tc.rooms || strings.Join(moves, "|") != tc.moves {

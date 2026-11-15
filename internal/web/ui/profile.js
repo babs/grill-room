@@ -613,8 +613,8 @@ $('name-form').addEventListener('submit', async (e) => {
   button.disabled = false;
 });
 
-// The tabs (011b-AC12): the hash names the tab, #email the Account tab's address field (011-AC7).
-const tabs = ['rooms', 'starters', 'skills', 'tokens', 'account'];
+// The tabs (011b-AC12, 035-AC1): the hash names the tab, #email the Account tab's address field (011-AC7).
+const tabs = ['rooms', 'starters', 'personas', 'skills', 'tokens', 'account'];
 function showTab() {
   const id = location.hash.slice(1);
   const tab = id === 'email' ? 'account' : tabs.includes(id) ? id : 'rooms';

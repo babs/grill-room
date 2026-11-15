@@ -370,6 +370,25 @@ CREATE INDEX IF NOT EXISTS room_proposals_turn ON room_proposals(turn_id);
 CREATE INDEX IF NOT EXISTS room_proposals_created ON room_proposals(created_room_id);
 ALTER TABLE rooms ADD COLUMN IF NOT EXISTS proposed_in_room_id TEXT REFERENCES rooms(id) ON DELETE SET NULL,
 	ADD COLUMN IF NOT EXISTS proposed_in_name TEXT;`,
+	// 65 (035 Phase 1): library personas get a section, as starters do (presets are built in, the rest
+	// personal), the room persona a save made them from, and their versions every setting and frozen
+	// skill and plugin files (035-AC8, 035-AC13, 035-AC18).
+	`ALTER TABLE persona_templates ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'personal' CHECK (section IN ('builtin', 'personal', 'instance')),
+	ADD COLUMN IF NOT EXISTS source_persona_id BIGINT REFERENCES room_personas(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS persona_templates_source ON persona_templates(source_persona_id);
+UPDATE persona_templates SET section = 'builtin' WHERE preset IS NOT NULL;
+ALTER TABLE persona_templates DROP CONSTRAINT IF EXISTS persona_templates_check;
+ALTER TABLE persona_templates DROP CONSTRAINT IF EXISTS persona_templates_builtin;
+ALTER TABLE persona_templates ADD CONSTRAINT persona_templates_builtin CHECK ((section = 'builtin') = (preset IS NOT NULL) AND (section = 'builtin') = (profile_id IS NULL));
+ALTER TABLE persona_template_versions ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '',
+	ADD COLUMN IF NOT EXISTS manifest TEXT NOT NULL DEFAULT '{}',
+	ADD COLUMN IF NOT EXISTS size BIGINT NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS persona_template_files (
+	version_id BIGINT NOT NULL REFERENCES persona_template_versions(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	data bytea NOT NULL,
+	PRIMARY KEY (version_id, name)
+);`,
 }
 
 // nonText is the predicate of the non-typed message indexes, written into every query that uses
@@ -614,7 +633,7 @@ func insertRoom(ctx context.Context, tx *txn, id, name string, creator int64, wi
 	if err != nil {
 		return nil, err
 	}
-	if _, _, err = addPersona(ctx, tx, r.ID, def); err != nil {
+	if _, _, err = addPersona(ctx, tx, r.ID, def, 0); err != nil {
 		return nil, err
 	}
 	return r, nil

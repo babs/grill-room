@@ -562,7 +562,7 @@ func (s *Store) DecideRoomSkill(ctx context.Context, roomID string, id int64, ap
 		}
 		what := fmt.Sprintf("%s's copy of the skill %s v%d", k.Author, k.Name, k.Version)
 		if k.FromStarter {
-			what = fmt.Sprintf("the starter's skill %s v%d", k.Name, k.Version)
+			what = fmt.Sprintf("the skill %s v%d held for the host", k.Name, k.Version)
 		}
 		body := "approved " + what + "."
 		q := `UPDATE skills SET pending = 0, from_starter = 0 WHERE id = ?`

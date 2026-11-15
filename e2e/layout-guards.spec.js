@@ -157,7 +157,10 @@ test('profile widths at 1920 px', async ({ browser, request }) => {
   const g = await grid.evaluate((e) => ({ width: e.getBoundingClientRect().width, cols: getComputedStyle(e).gridTemplateColumns.split(' ').length }));
   expect.soft(g.width, 'rooms grid spans the page').toBeGreaterThanOrEqual(sizes.wide.width - 64);
   expect.soft(g.cols, 'room card columns').toBeGreaterThan(3);
-  for (const tab of ['rooms', 'starters', 'skills', 'tokens', 'account']) {
+  // The tabs as the bar lists them, so a tab added later is measured too.
+  const tabs = await pat.locator('#profile-tabs a').evaluateAll((as) => as.map((a) => new URL(a.href).hash.slice(1)));
+  expect(tabs).toContain('personas');
+  for (const tab of tabs) {
     await pat.goto('/profile#' + tab);
     await expect(pat.locator('#panel-' + tab)).toBeVisible();
     // The status line and the confirm card show only on a magic link's landing: fill them in place.

@@ -474,8 +474,13 @@ func TestEmailStaysPrivate(t *testing.T) {
 		t.Fatal("post")
 	}
 	critic := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "Find the flaw.", "model": "sonnet", "effort": "medium", "title": "Critic"}
-	if code, b := alice.do(t, "POST", "/api/rooms/"+room.ID+"/templates", critic); code != http.StatusCreated {
+	code, b := alice.do(t, "POST", "/api/rooms/"+room.ID+"/templates", critic)
+	if code != http.StatusCreated {
 		t.Fatalf("publish: %d %s", code, b)
+	}
+	// The template is Alice's alone (035-AC18): the room sees it through her copy.
+	if code, b := alice.do(t, "POST", "/api/rooms/"+room.ID+"/personas", map[string]int64{"template_id": decodeJSON[store.Template](t, b).ID}); code != http.StatusCreated {
+		t.Fatalf("add: %d %s", code, b)
 	}
 	other := e.createRoom(t, "B")
 	carol := e.device(t)

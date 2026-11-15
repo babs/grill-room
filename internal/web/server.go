@@ -361,6 +361,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/profile/starters/{starter}/publish", s.publishStarter)
 	mux.HandleFunc("DELETE /api/profile/starters/{starter}", s.deleteMyStarter)
 	mux.HandleFunc("POST /api/profile/starters/{starter}/versions", s.saveStarterVersion)
+	mux.HandleFunc("GET /api/profile/personas", s.myPersonas)
+	mux.HandleFunc("GET /api/profile/personas/{template}", s.getLibraryPersona)
+	mux.HandleFunc("POST /api/profile/personas/{template}/versions", s.editLibraryPersona)
+	mux.HandleFunc("POST /api/profile/personas/{template}/duplicate", s.duplicateLibraryPersona)
+	mux.HandleFunc("POST /api/profile/personas/{template}/share", s.shareLibraryPersona)
+	mux.HandleFunc("POST /api/profile/personas/{template}/unshare", s.shareLibraryPersona)
+	mux.HandleFunc("DELETE /api/profile/personas/{template}", s.deleteLibraryPersona)
+	mux.HandleFunc("POST /api/profile/personas/{template}/rooms", s.addLibraryPersonaToRoom)
 	mux.Handle("GET /api/rooms/{room}/starter-draft", s.participant(s.starterDraft))
 	mux.Handle("POST /api/rooms/{room}/starters", s.participant(s.saveRoomStarter))
 	mux.Handle("GET /api/admin/starters", s.admin(s.adminStarters))
@@ -439,6 +447,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/personas", s.participant(s.addPersona))
 	mux.Handle("PATCH /api/rooms/{room}/personas/{persona}", s.participant(s.editPersona))
 	mux.Handle("POST /api/rooms/{room}/personas/{persona}/update", s.participant(s.updatePersona))
+	mux.Handle("POST /api/rooms/{room}/personas/{persona}/library", s.participant(s.savePersonaToLibrary))
 	mux.Handle("DELETE /api/rooms/{room}/personas/{persona}", s.participant(s.removePersona))
 	mux.Handle("GET /api/rooms/{room}/skills", s.participant(s.roomSkills))
 	mux.Handle("POST /api/rooms/{room}/skills", s.participant(s.copySkill))
@@ -654,46 +663,70 @@ func (s *Server) participant(next func(http.ResponseWriter, *http.Request, sessi
 			httpError(w, http.StatusUnauthorized, "missing token")
 			return
 		}
-		if crossSite(r) {
-			httpError(w, http.StatusForbidden, "cross-site request refused")
-			return
+		if s.seat(w, r, r.PathValue("room"), &sess, func() { httpError(w, http.StatusUnauthorized, "invalid or revoked token") }) {
+			next(w, r, sess)
 		}
-		var err error
-		sess.p, err = s.authorize(r.Context(), sess.creds, r.PathValue("room"))
-		if errors.Is(err, store.ErrNotFound) && apiTokenOf(r) != nil {
-			// The gate found the token live: what is missing is a seat (012-AC3).
-			httpError(w, http.StatusForbidden, msgTokenNotHere)
-			return
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			httpError(w, http.StatusUnauthorized, "invalid or revoked token")
-			return
-		}
-		// An expired seat leaves the audio on any request, not only on an open stream's (021-AC8).
-		if errors.Is(err, errReauth) && sess.p != nil {
-			s.kickExpired(r.PathValue("room"), sess.p.ID)
-		}
-		if errors.Is(err, errReauth) && bearer(r) == "" {
-			// The expired seat is another profile's room cookie: the browser signed in as someone
-			// else, whom a new sign-in would not help; drop that cookie, as a bad seat's (021-AC8).
-			if p, perr := s.profileFromCookie(r); perr == nil && p != nil {
-				setRoomCookieAge(w, r, r.PathValue("room"), "", -1)
-				httpError(w, http.StatusUnauthorized, "invalid or revoked token")
-				return
-			}
-		}
-		if errors.Is(err, errReauth) {
-			reasonError(w, http.StatusUnauthorized, "reauth", msgReauth)
-			return
-		}
-		if err != nil {
-			s.log.Error("auth_lookup_failed", zap.Error(err))
-			httpError(w, http.StatusInternalServerError, "auth failed")
-			return
-		}
-		s.seen(r.Context(), sess.p.ID, r)
-		next(w, r, sess)
 	})
+}
+
+// profileSeat is participant for a profile route naming room in its body: the profile's credential
+// only, its API token or its cookie, never a room cookie, so the seat is the profile's (035-AC4);
+// a room where it has none is a 404.
+func (s *Server) profileSeat(w http.ResponseWriter, r *http.Request, room string) (session, bool) {
+	var sess session
+	if tok := bearer(r); apiTokenOf(r) != nil {
+		sess.creds = []cred{{hash: HashToken(tok), apiToken: true}}
+	} else if c, err := r.Cookie(profileCookie); err == nil && c.Value != "" {
+		sess.creds = []cred{{hash: HashToken(c.Value), viaProfile: true}}
+	} else {
+		httpError(w, http.StatusUnauthorized, "no profile on this browser")
+		return sess, false
+	}
+	return sess, s.seat(w, r, room, &sess, func() { httpError(w, http.StatusNotFound, "no such room") })
+}
+
+// seat sets sess.p to the participant sess.creds prove in room and returns true; otherwise it
+// answers the request, with notFound when no credential proves a seat.
+func (s *Server) seat(w http.ResponseWriter, r *http.Request, room string, sess *session, notFound func()) bool {
+	if crossSite(r) {
+		httpError(w, http.StatusForbidden, "cross-site request refused")
+		return false
+	}
+	var err error
+	sess.p, err = s.authorize(r.Context(), sess.creds, room)
+	if errors.Is(err, store.ErrNotFound) && apiTokenOf(r) != nil {
+		// The gate found the token live: what is missing is a seat (012-AC3).
+		httpError(w, http.StatusForbidden, msgTokenNotHere)
+		return false
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		notFound()
+		return false
+	}
+	// An expired seat leaves the audio on any request, not only on an open stream's (021-AC8).
+	if errors.Is(err, errReauth) && sess.p != nil {
+		s.kickExpired(room, sess.p.ID)
+	}
+	if errors.Is(err, errReauth) && bearer(r) == "" {
+		// The expired seat is another profile's room cookie: the browser signed in as someone
+		// else, whom a new sign-in would not help; drop that cookie, as a bad seat's (021-AC8).
+		if p, perr := s.profileFromCookie(r); perr == nil && p != nil {
+			setRoomCookieAge(w, r, room, "", -1)
+			httpError(w, http.StatusUnauthorized, "invalid or revoked token")
+			return false
+		}
+	}
+	if errors.Is(err, errReauth) {
+		reasonError(w, http.StatusUnauthorized, "reauth", msgReauth)
+		return false
+	}
+	if err != nil {
+		s.log.Error("auth_lookup_failed", zap.Error(err))
+		httpError(w, http.StatusInternalServerError, "auth failed")
+		return false
+	}
+	s.seen(r.Context(), sess.p.ID, r)
+	return true
 }
 
 // authorize returns the participant the first valid credential proves in room; the first expired

@@ -46,7 +46,7 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
       await expect(newSession(alice)).toBeVisible();
     });
     await withMenu(bob, async (menu) => {
-      await expect(menu.getByRole('button')).toHaveText(['Save to the library', 'Remove']);
+      await expect(menu.getByRole('button')).toHaveText(['Save to my personas', 'Remove']);
       await expect(newSession(bob)).toHaveCount(0);
     });
     // Only the host sees the rights controls.

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -144,8 +145,8 @@ func TestPresetChangeIsOffered(t *testing.T) {
 	}
 }
 
-// 002-AC13: a profile publishes templates and versions of its own; versions are immutable with
-// their author; the admin removes a published template, never a preset; room copies survive.
+// 002-AC13 035-AC3: a profile publishes templates and versions of its own; versions are immutable with
+// their author; a rename retitles; the admin removes a published template, never a preset; room copies survive.
 func TestTemplateLibrary(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
@@ -175,26 +176,56 @@ func TestTemplateLibrary(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, `SELECT text FROM persona_template_versions WHERE template_id = ? AND n = 1`, tp.ID).Scan(&v1); err != nil || v1 != "v1 text" {
 		t.Fatalf("version 1 changed: %q %v", v1, err)
 	}
+	// 035-AC3: a rename through the room's old route retitles it, as the other version paths do.
+	f3 := f2
+	f3.Name = "Critic2"
+	if v3, err := s.PublishVersion(ctx, alice.ProfileID, tp.ID, "Alice", f3); err != nil || v3.Version != 3 || v3.Title != "Critic2" {
+		t.Fatalf("renamed version 3: %+v %v", v3, err)
+	}
+	if v4, err := s.PublishVersion(ctx, alice.ProfileID, tp.ID, "Alice", f2); err != nil || v4.Version != 4 || v4.Title != "Critic" {
+		t.Fatalf("renamed back in version 4: %+v %v", v4, err)
+	}
 	ts, err := s.Templates(ctx, alice.ProfileID)
 	mine := len(presets)
 	if err != nil || len(ts) != mine+1 || ts[0].Preset != PresetDefault || ts[mine].ID != tp.ID || !ts[mine].Mine || ts[0].Mine {
 		t.Fatalf("library for Alice: %+v %v", ts, err)
 	}
-	if ts, _ := s.Templates(ctx, bob.ProfileID); ts[mine].Mine {
-		t.Fatal("Bob sees Alice's template as his")
+	// 035-AC18: a personal template is its owner's alone, in the list and to add.
+	if ts, _ := s.Templates(ctx, bob.ProfileID); len(ts) != mine || ts[mine-1].Section != SectionBuiltin {
+		t.Fatalf("Bob's library: %+v", ts)
+	}
+	if ts[mine].Section != SectionPersonal || ts[0].Section != SectionBuiltin {
+		t.Fatalf("sections for Alice: %+v", ts)
+	}
+	if _, _, err := s.AddPersona(ctx, "a", tp.ID, bob, true, 1<<20); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Bob adds Alice's personal template: %v", err)
 	}
 
-	p, _, err := s.AddPersona(ctx, "a", tp.ID, bob, true)
-	if err != nil || p.TemplateVersion != 2 || p.Text != "v2 text" {
+	p, _, err := s.AddPersona(ctx, "a", tp.ID, alice, true, 1<<20)
+	if err != nil || p.TemplateVersion != 4 || p.Text != "v2 text" {
 		t.Fatalf("persona from it: %+v %v", p, err)
 	}
-	if err := s.RemoveTemplate(ctx, def.ID); !errors.Is(err, ErrPreset) {
+	// The room persona a library persona was saved from is its owner's to know, even once shared.
+	if _, err := s.db.ExecContext(ctx, `UPDATE persona_templates SET section = 'instance', source_persona_id = ? WHERE id = ?`, p.ID, tp.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		who  *Participant
+		want int64
+	}{{alice, p.ID}, {bob, 0}} {
+		ts, err := s.Templates(ctx, c.who.ProfileID)
+		i := slices.IndexFunc(ts, func(x Template) bool { return x.ID == tp.ID })
+		if err != nil || i < 0 || ts[i].SourcePersonaID != c.want {
+			t.Fatalf("source persona for %s: %+v %v", c.who.Name, ts, err)
+		}
+	}
+	if err := s.RemoveTemplate(ctx, 0, def.ID); !errors.Is(err, ErrPreset) {
 		t.Fatalf("remove a preset: %v", err)
 	}
-	if err := s.RemoveTemplate(ctx, 999); !errors.Is(err, ErrNotFound) {
+	if err := s.RemoveTemplate(ctx, 0, 999); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("remove unknown: %v", err)
 	}
-	if err := s.RemoveTemplate(ctx, tp.ID); err != nil {
+	if err := s.RemoveTemplate(ctx, 0, tp.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Template(ctx, tp.ID); !errors.Is(err, ErrNotFound) {
@@ -210,7 +241,7 @@ func TestTemplateLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q, _, err := s.AddPersona(ctx, "a", again.ID, alice, true)
+	q, _, err := s.AddPersona(ctx, "a", again.ID, alice, true, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,6 +260,43 @@ func TestTemplateLibrary(t *testing.T) {
 	}
 }
 
+// 035-AC3 035-AC4: a version renamed onto a title Yours already has is numbered as a duplicate is;
+// one renamed onto its own title keeps it.
+func TestTemplateRenameTaken(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	alice, _, _ := personaRoom(t, s, "a")
+	f := PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "t", Model: "haiku", Effort: "low"}
+	tmp := f
+	tmp.Name = "Tmp"
+	first, err := s.PublishTemplate(ctx, alice.ProfileID, "Alice", "Critic", f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Critic (copy)", "Critic (copy) 2"} {
+		tp, err := s.PublishTemplate(ctx, alice.ProfileID, "Alice", "Tmp", tmp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.PublishVersion(ctx, alice.ProfileID, tp.ID, "Alice", f); err != nil || got.Title != want {
+			t.Fatalf("renamed onto a taken title: %+v %v, want %q", got, err, want)
+		}
+	}
+	if got, err := s.Template(ctx, first.ID); err != nil || got.Title != "Critic" {
+		t.Fatalf("the first keeps its title: %+v %v", got, err)
+	}
+	// Its own title is no other's: "Solo" stays "Solo".
+	solo, err := s.PublishTemplate(ctx, alice.ProfileID, "Alice", "Solo", tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := f
+	g.Name = "Solo"
+	if got, err := s.PublishVersion(ctx, alice.ProfileID, solo.ID, "Alice", g); err != nil || got.Title != "Solo" {
+		t.Fatalf("renamed onto its own title: %+v %v", got, err)
+	}
+}
+
 // 002-AC14 002-AC15: the room copy keeps its own changes; a newer template version is offered and
 // applied only on request, keeping the room's name, badge and colour; every change is in the chat.
 func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
@@ -236,15 +304,15 @@ func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
 	ctx := context.Background()
 	alice, bob, grill := personaRoom(t, s, "a")
 	sec := templateByPreset(t, s, "secretary")
-	p, m, err := s.AddPersona(ctx, "a", sec.ID, bob, true)
+	p, m, err := s.AddPersona(ctx, "a", sec.ID, bob, true, 1<<20)
 	if err != nil || p.Name != "Secretary" || m.ParticipantID != bob.ID || m.Kind != KindSystem ||
-		m.Body != `Bob added the persona 📝 Secretary, from the template "Secretary" v1.` {
+		m.Body != `Bob added the persona 📝 Secretary, from the library persona "Secretary" v1.` {
 		t.Fatalf("add: %+v %+v %v", p, m, err)
 	}
-	if _, _, err := s.AddPersona(ctx, "a", 999, bob, true); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.AddPersona(ctx, "a", 999, bob, true, 1<<20); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown template: %v", err)
 	}
-	if _, _, err := s.AddPersona(ctx, "gone", sec.ID, bob, true); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.AddPersona(ctx, "gone", sec.ID, bob, true, 1<<20); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown room: %v", err)
 	}
 	model, effort, text, name, colour := "haiku", "low", "Only decisions.", "Scribe", "#000000"
@@ -273,7 +341,7 @@ func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
 	}
 	// A second Grill gets a number.
 	def := templateByPreset(t, s, PresetDefault)
-	if g2, _, err := s.AddPersona(ctx, "a", def.ID, bob, true); err != nil || g2.Name != "Grill-2" {
+	if g2, _, err := s.AddPersona(ctx, "a", def.ID, bob, true, 1<<20); err != nil || g2.Name != "Grill-2" {
 		t.Fatalf("second grill: %+v %v", g2, err)
 	}
 
@@ -282,7 +350,7 @@ func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, _, err := s.AddPersona(ctx, "a", tp.ID, alice, true)
+	c, _, err := s.AddPersona(ctx, "a", tp.ID, alice, true, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,9 +368,13 @@ func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
 	if err != nil || c.Text != "v1" || c.TemplateVersion != 1 || c.UpdateVersion != 2 {
 		t.Fatalf("offered: %+v %v", c, err)
 	}
-	c, m, _, err = s.UpdatePersona(ctx, "a", c.ID, bob)
+	// 035-AC18: Alice's template is personal: Bob cannot take its update.
+	if _, _, _, err := s.UpdatePersona(ctx, "a", c.ID, bob); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("update from a template Bob does not see: %v", err)
+	}
+	c, m, _, err = s.UpdatePersona(ctx, "a", c.ID, alice)
 	if err != nil || c.Text != "v2" || c.Model != "sonnet" || c.Effort != "high" || c.Badge != "🔎" || c.TemplateVersion != 2 || c.UpdateVersion != 0 ||
-		m.Body != `Bob updated 🔎 Critic to version 2 of the template "Critic".` {
+		m.Body != `Alice updated 🔎 Critic to version 2 of the library persona "Critic".` {
 		t.Fatalf("update: %+v %+v %v", c, m, err)
 	}
 	if got := lastBody(t, s, "a"); got != m.Body {
@@ -357,7 +429,7 @@ func TestQueue(t *testing.T) {
 	ctx := context.Background()
 	alice, bob, grill := personaRoom(t, s, "a")
 	_, _, other := personaRoom(t, s, "b")
-	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, alice, true)
+	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, alice, true, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +476,7 @@ func TestSessionsPerPersona(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	r := newTurnRoom(t, s, "a")
-	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, r.p, true)
+	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, r.p, true, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,11 +524,11 @@ func TestPersonaLimits(t *testing.T) {
 	alice, _, _ := personaRoom(t, s, "a")
 	sec := templateByPreset(t, s, "secretary")
 	for i := 1; i < MaxRoomPersonas; i++ {
-		if _, _, err := s.AddPersona(ctx, "a", sec.ID, alice, true); err != nil {
+		if _, _, err := s.AddPersona(ctx, "a", sec.ID, alice, true, 1<<20); err != nil {
 			t.Fatalf("persona %d: %v", i+1, err)
 		}
 	}
-	if _, _, err := s.AddPersona(ctx, "a", sec.ID, alice, true); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "12 personas per room") {
+	if _, _, err := s.AddPersona(ctx, "a", sec.ID, alice, true, 1<<20); !errors.Is(err, ErrLimit) || err.Error() != "A room holds 12 personas at most." {
 		t.Fatalf("persona past the limit: %v", err)
 	}
 	f := PersonaFields{Name: "T", Badge: "x", Colour: "#000000", Text: "t", Model: "sonnet", Effort: "medium"}
@@ -471,7 +543,7 @@ func TestPersonaLimits(t *testing.T) {
 		t.Fatalf("template past the limit: %v", err)
 	}
 	for n := 2; n <= MaxTemplateVersions; n++ {
-		if err := insertVersion(ctx, s.db, last.ID, n, "Alice", f); err != nil {
+		if err := insertVersion(ctx, s.db, last.ID, n, "Alice", f, "", []byte("{}"), nil); err != nil {
 			t.Fatal(err)
 		}
 	}
