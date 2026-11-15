@@ -928,6 +928,8 @@ test('several screen shares', async ({ browser, request }) => {
   await a.evaluate(() => document.exitFullscreen().catch(() => {}));
   await expect.poll(() => a.evaluate(() => document.fullscreenElement)).toBeNull();
   // An Escape a browser delivers right after leaving full screen is that exit's, not the stage's.
+  // The first exit must be older than the stage's 150 ms window: its stamp would cover this one.
+  await a.waitForTimeout(300);
   await a.getByRole('button', { name: 'Full screen', exact: true }).click();
   await expect.poll(() => a.evaluate(() => document.fullscreenElement?.id)).toBe('stage-main');
   await a.evaluate(async () => {

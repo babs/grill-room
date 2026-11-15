@@ -6385,8 +6385,9 @@ function leaveStage() {
 $('stage-close').addEventListener('click', leaveStage);
 // Escape in full screen only leaves full screen: the browser takes that one (030-AC11).
 // A browser may deliver the Escape that left full screen just after: that one is not for the stage.
+// fullscreenchange comes a frame after the exit itself: until then, the full screen counts as not left.
 let fullscreenLeft = 0;
-document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) fullscreenLeft = performance.now(); });
+document.addEventListener('fullscreenchange', () => { fullscreenLeft = document.fullscreenElement ? Infinity : performance.now(); });
 $('stage').addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !document.fullscreenElement && performance.now() - fullscreenLeft > 150) leaveStage();
 });
