@@ -94,10 +94,11 @@ test('a page back from the background resumes the stream and reloads the room', 
   await setVisibility(alice, 'hidden');
 
   // The stream delivers the line to the page, which no longer draws it.
-  const delivered = alice.evaluate(() => new Promise((ok) => events.addEventListener('message', (e) => { if (e.data.includes('sent while away')) ok(); })));
+  // The listener is in place before the line is sent: a line that came first would never resolve it.
+  await alice.evaluate(() => { window.awayLine = new Promise((ok) => events.addEventListener('message', (e) => { if (e.data.includes('sent while away')) ok(); })); });
   const bob = await joinAPI(request, room.id, 'Bob');
   await post(request, room.id, bob, 'sent while away');
-  await delivered;
+  await alice.evaluate(() => window.awayLine);
   await expect(alice.locator('#messages')).not.toContainText('sent while away');
 
   const resumed = alice.waitForRequest((r) => /\/events\?since=\d+&tab=\w+$/.test(r.url()));
