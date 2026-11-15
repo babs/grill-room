@@ -226,3 +226,36 @@ test('the unread count ignores the filter', async ({ browser, request }) => {
   await expect(seg(alice, 'voice')).toHaveText('Voice · 1');
   await expect(alice).toHaveTitle('(1) Docs room · grill-room');
 });
+
+// 038-AC11: a filter that hides lines says how many under it, with "Show all" for this visit; the
+// hint goes once nothing is hidden, and the stored choice stays.
+test('the filter says how many lines it hides', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  const hint = alice.locator('#filter-hidden');
+  await playEvents(alice, room.id, [['', line(1000001, 'text', 'typed line')], ['', line(1000002, 'voice', 'spoken line')]]);
+  await expect(hint).toHaveText('1 voice line hidden Show all');
+  await live(alice, line(1e9, 'voice', 'spoken again'));
+  await expect(hint).toHaveText('2 voice lines hidden Show all');
+  await seg(alice, 'voice').click();
+  await expect(hint).toHaveText('1 written line hidden Show all');
+  // Show all's target stays in the hint's row: the bottom of each segment is that segment's.
+  for (const f of ['all', 'written', 'voice']) {
+    expect(await seg(alice, f).evaluate((b) => {
+      const r = b.getBoundingClientRect();
+      return document.elementFromPoint(r.left + r.width / 2, r.bottom - 2)?.closest('button') === b;
+    }), f).toBe(true);
+  }
+  await hint.getByRole('button', { name: 'Show all' }).click();
+  await expect(seg(alice, 'all')).toHaveAttribute('aria-pressed', 'true');
+  await expect(seg(alice, 'all')).toBeFocused();
+  await expect(hint).toBeHidden();
+  await expect(msg(alice, 1000001)).toBeVisible();
+  expect(await alice.evaluate(() => localStorage.getItem('grill-room-chat-filter'))).toBe('voice');
+  // Nothing of the hidden kind: no hint.
+  await playEvents(alice, room.id, [['', line(1000001, 'text', 'typed line')]]);
+  await expect(seg(alice, 'voice')).toHaveAttribute('aria-pressed', 'true');
+  await expect(hint).toHaveText('1 written line hidden Show all');
+  await seg(alice, 'written').click();
+  await expect(msg(alice, 1000001)).toBeVisible();
+  await expect(hint).toBeHidden();
+});

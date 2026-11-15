@@ -1,6 +1,6 @@
 # Scenarios
 
-`scenarios/` replays a scripted grill session against a running instance: synthetic voices on fake microphones, chat lines, uploads, annotations, persona presses, a host hand-over. Real daemons on this machine run the agent turns. The run ends with a report that says pass or fail for each assertion. Use it for demos, for a non-regression pass on the lab before a release, and for tuning the STT and agent thresholds of spec 003.
+`scenarios/` replays a scripted grill session against a running instance: synthetic voices on fake microphones, chat lines, uploads, notes, persona presses, a host hand-over. Real AI host apps on this machine run the agent turns. The run ends with a report that says pass or fail for each assertion. Use it for demos, for a non-regression pass on the lab before a release, and for tuning the STT and agent thresholds of spec 003.
 
 ## Run one
 
@@ -11,7 +11,7 @@ cd scenarios
 uv run grill-scenario two-persona-chain.yaml --url https://grill-room.<domain>
 ```
 
-Before anything starts, the tool prints how many Claude requests the run should spend and the hard stop, then asks. `--yes` skips the question. The driver stops the run once the daemons have spent more than the budget line allows.
+Before anything starts, the tool prints how many Claude requests the run should spend and the hard stop, then asks. `--yes` skips the question. The driver stops the run once the AI host apps have spent more than the budget line allows.
 
 | Option | Does |
 |---|---|
@@ -20,18 +20,18 @@ Before anything starts, the tool prints how many Claude requests the run should 
 | `--check` | validates, prints the budget, synthesises the audio, runs nothing |
 | `--fake-agent` | runs turns on the fake claude image (`make sandbox-fake-image`): no request, so content assertions fail. For trying a scenario's steps for free |
 
-A run writes `scenarios/out/<scenario>-<time>/`: `report.md`, `report.json`, the driver's `result.json`, the audio, and the daemons' state and logs. Voice models and synthesised lines are cached in `scenarios/.cache/`. Neither is committed.
+A run writes `scenarios/out/<scenario>-<time>/`: `report.md`, `report.json`, the driver's `result.json`, the audio, and the AI host apps' state and logs. Voice models and synthesised lines are cached in `scenarios/.cache/`. Neither is committed.
 
-The run deletes its room and the profiles its participants got. It stops its daemons, which remove their sandboxes.
+The run deletes its room and the profiles its participants got. It stops its AI host apps, which remove their sandboxes.
 
 ## The library
 
 | File | Covers | Requests (haiku) |
 |---|---|---|
-| `dark-mode-grill.yaml` | spike S5's 2.5 min FR/EN session: 18 lines, a language switch, an overlap, an annotation, one Grill turn revising `plan.md` | 4 |
+| `dark-mode-grill.yaml` | spike S5's 2.5 min FR/EN session: 18 lines, a language switch, an overlap, a note, one Grill turn revising `plan.md` | 4 |
 | `two-persona-chain.yaml` | Grill calls the Secretary with `@Secretary`, then the Secretary runs again on its every-round trigger | 6 |
 | `long-session.yaml` | 480 chat lines through the API in seconds: three transcript chunks, a word found in the first one, the second turn fetching only the chunk that grew, context use | 3 to 4 |
-| `host-handover.yaml` | Claire's daemon runs a turn, Marc pairs his own, Claire hands him the host role and stops hers, and Grill recalls her word from the resumed session on Marc's machine | 2 |
+| `host-handover.yaml` | Claire's AI host app runs a turn, Marc pairs his own, Claire hands him the host role and stops hers, and Grill recalls her word from the resumed session on Marc's machine | 2 |
 
 ## Writing one
 
@@ -90,6 +90,6 @@ Lines are synthesised at 16 kHz, the rate the STT worker reads, as in spike S5's
 
 ## How it works
 
-`grill-scenario` (Python) validates the file, applies the license gate, prints the budget, synthesises the audio and writes `plan.json`. It then runs the Playwright driver `e2e/scenario/scenario.spec.js`, which reuses `e2e/`'s helpers: one Chrome per participant with its WAV as microphone, real daemons paired through their approval page, the supervisor's monitoring for each turn's model, cause and context. The driver only records what happened. The Python side scores `result.json`: WER and attribution against the script, latency from the end of speech to the line, and each assertion.
+`grill-scenario` (Python) validates the file, applies the license gate, prints the budget, synthesises the audio and writes `plan.json`. It then runs the Playwright driver `e2e/scenario/scenario.spec.js`, which reuses `e2e/`'s helpers: one Chrome per participant with its WAV as microphone, real AI host apps paired through their approval page, the supervisor's monitoring for each turn's model, cause and context. The driver only records what happened. The Python side scores `result.json`: WER and attribution against the script, latency from the end of speech to the line, and each assertion.
 
 `make scenarios-test` runs ruff, mypy and the unit tests (schema, budget, license gate, timeline, scoring). CI runs it too. It spends no request.

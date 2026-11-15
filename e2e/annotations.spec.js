@@ -76,10 +76,10 @@ test('element annotation follows a re-render', async ({ browser, request }) => {
   await upload(alice, 'board.html', 'text/html', board);
   const aliceDoc = alice.frameLocator('#doc-frame iframe');
   await expect(aliceDoc.locator('h1')).toHaveText('Launch board');
-  await alice.getByRole('button', { name: 'Annotate an element' }).click();
+  await alice.getByRole('button', { name: 'Add a note on an element' }).click();
   await aliceDoc.getByText('Ship behind a flag').click();
   await expect(alice.locator('#annot-target')).toHaveText('<li> element: Ship behind a flag');
-  await alice.getByRole('textbox', { name: 'Annotation', exact: true }).fill('Which flag?');
+  await alice.getByRole('textbox', { name: 'Note', exact: true }).fill('Which flag?');
   await alice.locator('#annot-new').getByRole('button', { name: 'Save', exact: true }).click();
 
   await bob.locator('#documents').getByRole('button', { name: 'board.html' }).click();
@@ -106,9 +106,9 @@ test('image attachment appears in the other browser', async ({ browser, request 
   await expect(alice.frameLocator('#doc-frame iframe').locator('h1')).toHaveText('Rollout plan');
   await bob.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
 
-  await alice.getByRole('button', { name: 'Comment on the document' }).click();
+  await alice.getByRole('button', { name: 'Add a note on the document' }).click();
   await expect(alice.locator('#annot-target')).toHaveText('Whole document');
-  await alice.getByRole('textbox', { name: 'Annotation', exact: true }).fill('See the chart');
+  await alice.getByRole('textbox', { name: 'Note', exact: true }).fill('See the chart');
   await alice.locator('#annot-files').setInputFiles({ name: 'chart.png', mimeType: 'image/png', buffer: png });
   await alice.locator('#annot-new').getByRole('button', { name: 'Save', exact: true }).click();
 
@@ -120,8 +120,8 @@ test('image attachment appears in the other browser', async ({ browser, request 
   expect(resp.headers()['content-type']).toBe('image/png');
 
   // A non-image is refused with the reason shown, and nothing is posted.
-  await alice.getByRole('button', { name: 'Comment on the document' }).click();
-  await alice.getByRole('textbox', { name: 'Annotation', exact: true }).fill('Not an image');
+  await alice.getByRole('button', { name: 'Add a note on the document' }).click();
+  await alice.getByRole('textbox', { name: 'Note', exact: true }).fill('Not an image');
   await alice.locator('#annot-files').setInputFiles({ name: 'x.png', mimeType: 'image/png', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>') });
   await alice.locator('#annot-new').getByRole('button', { name: 'Save', exact: true }).click();
   await expect(alice.locator('#annot-status')).toContainText('must be PNG, JPEG, GIF or WebP');

@@ -133,7 +133,7 @@ export function Monitoring({ instances }) {
   const open = h?.turns.find((t) => t.id === shown) || null;
   return html`<section id="monitoring-section" aria-labelledby="monitoring-title">
     <h2 id="monitoring-title">Activity</h2>
-    <p class="hint">Every answer this computer ran, kept here only, for the days set on Settings. Cost is Claude Code's estimate.</p>
+    <p class="hint">Every answer this computer ran, kept here only, for the days set on General. Cost is Claude Code's estimate.</p>
     <form id="monitor-filter" class="filters" onSubmit=${(/** @type {Event} */ e) => e.preventDefault()}>
       ${pick('instance', 'Server', fc?.instances || [], url)} ${pick('room', 'Room', fc?.rooms || [], roomName)}
       ${pick('persona', 'AI persona', fc?.personas || [])} ${pick('account', 'AI account', fc?.accounts || [])}

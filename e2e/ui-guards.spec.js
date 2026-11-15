@@ -73,7 +73,7 @@ test('no native file input shows', async ({ browser, request }) => {
     } else await alice.locator('#documents li').first().click();
     if (size === phone) await alice.getByRole('button', { name: /Notes/ }).click();
     await expect(alice.locator('.annot-reply').first()).toBeVisible();
-    await alice.getByRole('button', { name: 'Comment on the document' }).click();
+    await alice.getByRole('button', { name: 'Add a note on the document' }).click();
     await expect(alice.locator('#annot-new')).toBeVisible();
     await expect(alice.locator('input[type=file]:visible')).toHaveCount(0);
     // The paperclip is the way in, and a chosen file shows as a chip.

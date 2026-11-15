@@ -6,7 +6,7 @@ GitHub Actions builds and signs every release. Nobody holds a signing key: cosig
 
 `.github/workflows/ci.yml` runs on pull requests to `develop` and on pushes to `develop` and `feat/**`:
 
-- `go`: `make lint`, `make test` (`go test -race -cover ./...`, on a PostgreSQL 16 service container), `make build`, and `make release VERSION=v0.0.0`, which cross-compiles the six daemon targets.
+- `go`: `make lint`, `make test` (`go test -race -cover ./...`, on a PostgreSQL 16 service container), `make build`, and `make release VERSION=v0.0.0`, which cross-compiles the six AI host app targets.
 - `windows`: `go test ./...` on `windows-latest`. See [Tests skipped on Windows](#tests-skipped-on-windows).
 - `stt`: `make stt-test`, with the whisper `small` model at the revision the STT image pins. CI sets `CI`, so the e2e test fails instead of skipping when the model is missing.
 
@@ -67,7 +67,7 @@ cosign verify \
 
 ## Shipping a release in the room server
 
-The room server serves the daemon release in `GRILL_ROOM_DAEMON_DIR` (`/daemon` in the image). Each binary's bundle sits beside it as `/download/<binary>.sigstore.json`, and `GET /api/daemon/version` lists the bundle paths under `bundles`. A release without bundles serves none, and `bundles` stays empty. The server refuses to start on a bundle it cannot read.
+The room server serves the AI host app release in `GRILL_ROOM_DAEMON_DIR` (`/daemon` in the image). Each binary's bundle sits beside it as `/download/<binary>.sigstore.json`, and `GET /api/daemon/version` lists the bundle paths under `bundles`. A release without bundles serves none, and `bundles` stays empty. The server refuses to start on a bundle it cannot read.
 
 The image builds an unsigned release by default. To ship a signed one, hand it to the build as a directory:
 
@@ -76,7 +76,7 @@ gh release download v0.0.1 -R babs/grill-room -D dist --clobber
 make docker-build VERSION=v0.0.1 DAEMON_DIST=dist
 ```
 
-The build fails when `dist/VERSION` differs from `VERSION`. Put `sandbox-image.txt`'s content in `GRILL_ROOM_SANDBOX_IMAGE` so daemons pull the released image by digest.
+The build fails when `dist/VERSION` differs from `VERSION`. Put `sandbox-image.txt`'s content in `GRILL_ROOM_SANDBOX_IMAGE` so AI host apps pull the released image by digest.
 
 ## Protocol bumps
 
@@ -94,7 +94,7 @@ The previous release needs its `PROTO` file. Releases from before it have none: 
 
 ## Dev signing
 
-Local builds can be signed with a cosign key pair, for a supervisor told to trust that key (003-AC4): on its page under "Trusted dev keys", or as `dev-keys/<name>.pub` in its config root. Signing stays offline: no certificate, no Rekor entry.
+Local builds can be signed with a cosign key pair, for a supervisor told to trust that key (003-AC4): in the AI host app under "Trusted dev keys", or as `dev-keys/<name>.pub` in its config root. Signing stays offline: no certificate, no Rekor entry.
 
 ```sh
 cosign generate-key-pair --output-key-prefix /path/to/dev-cosign   # asks for a password

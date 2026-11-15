@@ -27,7 +27,7 @@ interface Window {
   grillCreateProposal?: (m: { id: number; body: string; html?: string; proposal: { id: number; name: string; status: string; trigger?: number } }) => void;
 }
 interface Window {
-  grillSTT?: { glossary: boolean; device: DeviceOffer | null };
+  grillSTT?: { glossary: boolean; available: boolean; device: DeviceOffer | null };
   // room.js: whether this tab is in the audio with my voice to transcribe; "grill:voice" follows each
   // change. grillSTTOff: I turned the transcription of my voice off (010-AC23).
   grillVoiceOn?: boolean;

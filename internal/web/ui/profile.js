@@ -76,6 +76,8 @@ function render({ email_enabled: enabled, profile, magic_link_ttl_s: linkTTL, in
   pendingExpires = profile.pending_ttl_s != null ? at + profile.pending_ttl_s * 1000 : 0;
   pendingSent = profile.pending_age_s != null ? at - profile.pending_age_s * 1000 : 0;
   showEmail(false);
+  showTextSizes(profile.text_sizes);
+  showPush(profile.rooms);
 }
 
 // showMe draws the header's user menu button as the room does (011b-AC17): initials in a ring, the
@@ -193,7 +195,7 @@ async function loadSkills() {
     name.textContent = k.name;
     const meta = document.createElement('span');
     meta.className = 'hint';
-    meta.textContent = 'v' + k.version + ' · ' + (k.shared ? 'Everyone on this server' : 'Only my rooms');
+    meta.textContent = 'v' + k.version + ' · ' + (k.shared ? 'Shared with everyone on this server' : 'Only my rooms');
     const about = document.createElement('span');
     about.className = 'hint';
     about.textContent = k.description;
@@ -611,6 +613,101 @@ $('name-form').addEventListener('submit', async (e) => {
     $('name-error').textContent = 'Network error, try again.';
   }
   button.disabled = false;
+});
+
+// Text size per room area (028, 038-AC14), the room's steps, saved on the profile. This browser
+// keeps the copy a room paints first with (room.js textSizeKey); its storage event reaches open rooms.
+let textSizes = {};
+function showTextSizes(sizes) {
+  textSizes = sizes && typeof sizes === 'object' && !Array.isArray(sizes) ? sizes : {};
+  for (const r of $('text-size').querySelectorAll('input')) r.checked = (textSizes[r.name] || 'm') === r.value;
+}
+// One save at a time: each sends the whole map, so the last pick must be the last write.
+let textSaving = Promise.resolve();
+$('text-size').addEventListener('change', (e) => {
+  textSizes = { ...textSizes, [e.target.name]: e.target.value };
+  const sizes = textSizes;
+  localStorage.setItem('grill-room-text-size', JSON.stringify(sizes));
+  textSaving = textSaving.then(() => fetch('/api/profile/text-size', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sizes) }))
+    .then((res) => { if (!res.ok) throw new Error('HTTP ' + res.status); })
+    .catch((err) => window.grillToast("Couldn't save the text size: " + err.message));
+});
+// A pick in a room tab of this browser: the next pick here sends it too.
+addEventListener('storage', (e) => {
+  if (e.key !== 'grill-room-text-size') return;
+  try {
+    showTextSizes(JSON.parse(e.newValue || '{}'));
+  } catch { /* a value this page cannot read: keep its own */ }
+});
+
+// Notifications per room in this browser (005-AC24, 038-AC14), turned on as a room does: the
+// explainer before the browser asks for permission (008-AC10).
+const push = window.grillPush;
+let pushRooms = [];
+// The room the explainer is open for; null once answered.
+let pushAsking = null;
+const pushSay = (text) => { $('push-status').textContent = text; };
+function showPush(rooms) {
+  pushRooms = rooms;
+  $('push-hint').hidden = !push.hint;
+  $('push-hint').textContent = push.hint;
+  $('push-rooms').hidden = !!push.hint || !rooms.length;
+  $('push-rooms').replaceChildren(...rooms.map((r) => {
+    const on = push.on(r.room_id);
+    const li = document.createElement('li');
+    li.dataset.room = r.room_id;
+    const name = document.createElement('span');
+    const state = document.createElement('span');
+    state.className = 'hint';
+    state.textContent = on ? ' · on' : ' · off';
+    name.append(r.room_name, state);
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn-secondary';
+    b.textContent = on ? 'Turn off' : 'Turn on';
+    b.setAttribute('aria-label', b.textContent + ' notifications for ' + r.room_name);
+    // The state the row shows, not the live one: another tab may have changed it since.
+    b.addEventListener('click', () => togglePush(r, on));
+    li.append(name, b);
+    return li;
+  }));
+}
+function turnOnPush(r) {
+  localStorage.removeItem(push.snoozeKey);
+  push.save(r.room_id).then(() => 'Notifications on for ' + r.room_name + '.', (err) => 'Notifications: ' + err.message)
+    .then(pushSay).finally(() => showPush(pushRooms));
+}
+function togglePush(r, on) {
+  pushSay('');
+  if (on) {
+    push.off(r.room_id).then(() => pushSay('Notifications off for ' + r.room_name + '.'), (err) => pushSay('Notifications: ' + err.message))
+      .finally(() => showPush(pushRooms));
+  } else if (Notification.permission === 'granted') turnOnPush(r);
+  else if (Notification.permission === 'denied') pushSay(push.denied);
+  else {
+    pushAsking = r;
+    $('push-explain-text').textContent = 'Get notified when someone mentions you directly in ' + r.room_name + ', even when the room is closed.';
+    $('push-explain').showModal();
+  }
+}
+for (const id of ['push-later', 'push-close']) $(id).addEventListener('click', () => $('push-explain').close());
+$('push-yes').addEventListener('click', () => {
+  const r = pushAsking;
+  pushAsking = null;
+  $('push-explain').close();
+  Notification.requestPermission().then((perm) => {
+    if (perm === 'granted') return turnOnPush(r);
+    // The browser's own prompt dismissed: snoozed, as Chrome blocks a site that asks again and again.
+    if (perm === 'default') push.snooze();
+    pushSay(perm === 'default' ? 'Notifications stay off. Turn them on here at any time.' : push.denied);
+  }).catch((err) => pushSay('Notifications: ' + err.message));
+});
+// A room tab of this browser turned one on or off.
+addEventListener('storage', (e) => { if (e.key?.startsWith('grill-room-push:')) showPush(pushRooms); });
+// Dismissed, the explainer snoozes the rooms' unprompted offer, as a room's does (008-AC11).
+$('push-explain').addEventListener('close', () => {
+  if (pushAsking) push.snooze();
+  pushAsking = null;
 });
 
 // The tabs (011b-AC12, 035-AC1): the hash names the tab, #email the Account tab's address field (011-AC7).

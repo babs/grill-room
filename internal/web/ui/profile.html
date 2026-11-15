@@ -14,6 +14,7 @@
 <script src="/static/kit/ui.js" defer></script>
 <script src="/static/reauth.js" defer></script>
 <link rel="stylesheet" href="/static/app.css">
+<script src="/static/push.js" defer></script>
 <script src="/static/profile.js" defer></script>
 <script type="importmap">{"imports": {
   "preact": "/static/esm/preact.js",
@@ -65,7 +66,7 @@
       <a href="#starters" id="tab-starters">Starters <span class="badge" id="count-starters"></span></a>
       <a href="#personas" id="tab-personas">Personas <span class="badge" id="count-personas"></span></a>
       <a href="#skills" id="tab-skills">Skills <span class="badge" id="count-skills"></span></a>
-      <a href="#tokens" id="tab-tokens">API tokens <span class="badge" id="count-tokens"></span></a>
+      <a href="#tokens" id="tab-tokens">API tokens and Claude Code <span class="badge" id="count-tokens"></span></a>
       <a href="#account" id="tab-account">Account</a>
     </nav>
     <section id="panel-rooms" class="tab-panel" aria-labelledby="tab-rooms">
@@ -92,7 +93,7 @@
     </section>
     <section id="panel-tokens" class="tab-panel" aria-labelledby="tab-tokens" hidden>
       <div class="list-head">
-        <h2>API tokens</h2>
+        <h2>API tokens and Claude Code</h2>
         <button type="button" id="token-new" class="btn-primary">New token</button>
       </div>
       <p class="hint">A token lets a script or an AI agent use grill-room as you: your rooms, with your rights. It never opens the admin pages.</p>
@@ -124,6 +125,22 @@
             <button type="button" id="email-cancel" class="btn-secondary" hidden>Cancel</button>
           </form></dd></div>
         <div><dt>Other devices</dt><dd id="device"></dd></div>
+        <!-- The room's Text size sheet, the same steps on the profile (028, 038-AC14). -->
+        <div><dt>Text size</dt><dd id="text-size">
+          <fieldset>
+            <legend>Chat</legend>
+            <div class="text-steps"><label><input type="radio" name="chat" value="s"> S</label><label><input type="radio" name="chat" value="m"> M</label><label><input type="radio" name="chat" value="l"> L</label><label><input type="radio" name="chat" value="xl"> XL</label></div>
+          </fieldset>
+          <fieldset>
+            <legend>Transcription</legend>
+            <div class="text-steps"><label><input type="radio" name="transcript" value="s"> S</label><label><input type="radio" name="transcript" value="m"> M</label><label><input type="radio" name="transcript" value="l"> L</label><label><input type="radio" name="transcript" value="xl"> XL</label></div>
+          </fieldset>
+          <p class="hint">In every room, on all your devices.</p></dd></div>
+        <div><dt>Notifications</dt><dd id="notify">
+          <p class="hint">In this browser, room by room. Each room's Notifications sheet has the same switch.</p>
+          <p id="push-hint" class="hint" hidden></p>
+          <ul id="push-rooms" class="rows"></ul>
+          <p id="push-status" class="said" role="status"></p></dd></div>
       </dl>
     </section>
   </div>
@@ -154,8 +171,8 @@
         <option value="0">Never</option>
       </select></label>
     <fieldset class="token-scope"><legend>Scope</legend>
-      <label><input type="radio" name="token-scope" value="read" checked> Read only</label>
-      <label><input type="radio" name="token-scope" value="full"> Full: what your profile can do</label>
+      <label><input type="radio" name="token-scope" value="read" checked> Read only: Claude Code can read your rooms, documents and transcripts.</label>
+      <label><input type="radio" name="token-scope" value="full"> Full: it can also create rooms, add personas, link rooms and change settings.</label>
     </fieldset>
     <p id="token-error" class="field-error" role="alert"></p>
     <div class="actions">
@@ -164,7 +181,7 @@
     </div>
   </form>
   <div id="token-made" class="stack" hidden>
-    <p><strong>You won't see this token again.</strong> Copy it now.</p>
+    <p><strong>This command shows once.</strong> Lost it? Make a new token and revoke this one.</p>
     <div id="token-value"></div>
     <p class="hint">Add grill-room to Claude Code as an MCP server:</p>
     <div id="token-mcp"></div>
@@ -172,6 +189,19 @@
     <div id="token-curl"></div>
     <p class="hint">An invite link made with this token keeps working after you revoke it.</p>
     <div class="actions"><button type="button" id="token-done">Done</button></div>
+  </div>
+</dialog>
+<!-- The push explainer (008-AC10), as the room has it: the only way to the browser's permission prompt. -->
+<dialog id="push-explain" class="sheet" aria-labelledby="push-explain-title" aria-describedby="push-explain-text">
+  <div class="sheet-head">
+    <h2 id="push-explain-title" tabindex="-1" autofocus>Turn on notifications?</h2>
+    <button type="button" class="btn-icon btn-ghost close" id="push-close" aria-label="Close" data-icon="close"></button>
+  </div>
+  <p id="push-explain-text"></p>
+  <p class="hint">Your browser will ask for permission next.</p>
+  <div class="actions">
+    <button type="button" id="push-later" class="btn-secondary">Not now</button>
+    <button type="button" id="push-yes" class="btn-primary">Turn on notifications</button>
   </div>
 </dialog>
 <dialog id="skill-sheet" class="sheet full" aria-labelledby="skill-sheet-title">
@@ -190,7 +220,7 @@
     <label for="skill-scope">Who can use it</label>
     <select id="skill-scope">
       <option value="personal">Only my rooms</option>
-      <option value="shared">Everyone on this server</option>
+      <option value="shared">Shared with everyone on this server</option>
     </select>
     <p id="skill-error" class="field-error" role="alert"></p>
     <div class="actions">

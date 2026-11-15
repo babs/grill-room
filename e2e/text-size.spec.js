@@ -82,3 +82,83 @@ test('a seat without a profile keeps its pick in the browser', async ({ browser,
   expect(await chat(alice)).toBe('18.75px');
   expect(puts).toEqual([]);
 });
+
+// 038-AC14: /profile › Account lists the room's text sizes, the same steps, editable there; a pick
+// in the room shows on /profile after a reload, and one on /profile in the room after a reload.
+test('text size on /profile and in the room', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await playEvents(alice, room.id, lines);
+  const prof = await alice.context().newPage();
+  await prof.goto('/profile#account');
+  const group = (area) => prof.locator('#text-size').getByRole('group', { name: area });
+  for (const area of ['Chat', 'Transcription']) {
+    await expect(group(area).getByRole('radio')).toHaveCount(4);
+    await expect(group(area).locator('label')).toHaveText(['S', 'M', 'L', 'XL']);
+    await expect(group(area).getByLabel('M', { exact: true })).toBeChecked();
+  }
+  const saved = () => prof.evaluate(() => fetch('/api/profile').then((r) => r.json()).then((r) => r.profile.text_sizes));
+
+  await pick(alice, 'Chat', 'L');
+  await expect.poll(saved).toEqual({ chat: 'l' });
+  await prof.reload();
+  await expect(group('Chat').getByLabel('L', { exact: true })).toBeChecked();
+  await expect(group('Transcription').getByLabel('M', { exact: true })).toBeChecked();
+
+  await group('Transcription').getByLabel('XL', { exact: true }).check();
+  await expect.poll(saved).toEqual({ chat: 'l', transcript: 'xl' });
+  // Another browser of the profile: the pick came from the server, not this one's copy.
+  const other = await browser.newContext();
+  await other.addCookies(await alice.context().cookies());
+  const away = await openRoom(other, alice.url(), room.id);
+  await expect.poll(() => pane(away)).toBe('17.5px');
+  expect(await chat(away)).toBe('16.875px');
+  await playEvents(alice, room.id, lines);
+  expect(await pane(alice)).toBe('17.5px');
+});
+
+// 038-AC14: a pick in a room while /profile is open is kept by the next pick on /profile, which
+// sends the whole map.
+test('a room pick survives the next pick on an open /profile', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await playEvents(alice, room.id, lines);
+  const prof = await alice.context().newPage();
+  await prof.goto('/profile#account');
+  const group = (area) => prof.locator('#text-size').getByRole('group', { name: area });
+  await expect(group('Chat').getByLabel('M', { exact: true })).toBeChecked();
+  await pick(alice, 'Chat', 'L');
+  await expect(group('Chat').getByLabel('L', { exact: true })).toBeChecked();
+  await group('Transcription').getByLabel('XL', { exact: true }).check();
+  await expect.poll(() => prof.evaluate(() => fetch('/api/profile').then((r) => r.json()).then((r) => r.profile.text_sizes)))
+    .toEqual({ chat: 'l', transcript: 'xl' });
+});
+
+// 038-AC14: a stored copy that is not a map, here an array from another tab, is ignored: a pick in
+// the room and one on /profile send chat and transcript keys only.
+test('a text size copy that is not a map is ignored', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await playEvents(alice, room.id, lines);
+  const prof = await alice.context().newPage();
+  await prof.goto('/profile#account');
+  const sent = [];
+  for (const page of [alice, prof]) {
+    page.on('request', (r) => { if (r.url().endsWith('/api/profile/text-size')) sent.push(r.postDataJSON()); });
+  }
+  const tab = await alice.context().newPage();
+  await tab.goto('/profile');
+  // Each copy lands before the pick: a map both pages show, then the array, which leaves them on M.
+  const seed = async () => {
+    await tab.evaluate(() => localStorage.setItem('grill-room-text-size', '{"chat":"s"}'));
+    await expect.poll(() => alice.evaluate(() => document.body.style.getPropertyValue('--chat-scale'))).toBe('0.875');
+    await expect(prof.locator('#text-size').getByRole('group', { name: 'Chat' }).getByLabel('S', { exact: true })).toBeChecked();
+    await tab.evaluate(() => localStorage.setItem('grill-room-text-size', '["xl"]'));
+    await expect.poll(() => alice.evaluate(() => document.body.style.getPropertyValue('--chat-scale'))).toBe('1');
+    await expect(prof.locator('#text-size').getByRole('group', { name: 'Chat' }).getByLabel('M', { exact: true })).toBeChecked();
+  };
+  await seed();
+  await pick(alice, 'Chat', 'L');
+  await expect.poll(() => sent.length).toBe(1);
+  await seed();
+  await prof.locator('#text-size').getByRole('group', { name: 'Transcription' }).getByLabel('XL', { exact: true }).check();
+  await expect.poll(() => sent.length).toBe(2);
+  for (const body of sent) expect(Object.keys(body).every((k) => k === 'chat' || k === 'transcript'), JSON.stringify(body)).toBe(true);
+});

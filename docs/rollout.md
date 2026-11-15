@@ -17,14 +17,14 @@ Every command runs from the checkout, with `KUBECONFIG` set to the cluster's fil
 
 ## Building a release
 
-The room server, STT and tts images are built on a workstation and pushed to a private registry (`REGISTRY`): the tts image holds gated weights (spec 013). The daemon binaries and the sandbox image come from the tag's GitHub release ([release.md](release.md)).
+The room server, STT and tts images are built on a workstation and pushed to a private registry (`REGISTRY`): the tts image holds gated weights (spec 013). The AI host app binaries and the sandbox image come from the tag's GitHub release ([release.md](release.md)).
 
 1. If the release adds a migration, dump the database first: an older server refuses a newer schema, so the dump is the rollback.
    ```sh
    kubectl -n "$K8S_PG_NAMESPACE" exec <primary pod> -- pg_dump -Fc "$K8S_PG_DATABASE" > pre-<tag>.dump
    ```
 2. Tag and wait for the release: `git tag -s -m <tag> <tag> && git push origin <tag>`, then `gh run watch` on `release.yml`.
-3. Build from a clean checkout at the tag, with the signed daemons:
+3. Build from a clean checkout at the tag, with the signed AI host apps:
    ```sh
    git worktree add ../grill-room-<tag> <tag>
    cp .env ../grill-room-<tag>/
@@ -33,7 +33,7 @@ The room server, STT and tts images are built on a workstation and pushed to a p
    make -C ../grill-room-<tag> k8s-push VERSION=<tag> DAEMON_DIST="$dist"
    rm -r "${dist:?}"
    ```
-   - `k8s-push` refuses another commit than the tag's, a dirty tree, or a `DAEMON_DIST` of another version: an image without the signed release ships workers every daemon refuses. A `-dev` version skips these checks.
+   - `k8s-push` refuses another commit than the tag's, a dirty tree, or a `DAEMON_DIST` of another version: an image without the signed release ships workers every AI host app refuses. A `-dev` version skips these checks.
    - It pulls the base images first (`--pull`): a cached floating tag such as `golang:1.27-bookworm` would ship an old toolchain.
    - `make` reads `REGISTRY` and `HF_TOKEN_FILE`, the tts image's token (`.env.example`), from `.env`: give the token file an absolute path, the build runs in the worktree.
 4. Back in the checkout, save `.env`, then paste the three printed lines into it, and `GRILL_ROOM_SANDBOX_IMAGE` from the release's `sandbox-image.txt`.

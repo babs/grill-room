@@ -204,7 +204,7 @@ export async function annotateSelection(page, needle, comment) {
   await select(frame, needle);
   await page.frameLocator('#doc-frame iframe').locator('.gr-annot-bubble').click();
   await expect(page.locator('#annot-target')).toHaveText(`"${needle}"`);
-  await page.getByRole('textbox', { name: 'Annotation', exact: true }).fill(comment);
+  await page.getByRole('textbox', { name: 'Note', exact: true }).fill(comment);
   await page.locator('#annot-new').getByRole('button', { name: 'Save' }).click();
   await expect(page.locator('#annot-new')).toBeHidden();
 }
@@ -489,8 +489,8 @@ export async function addSecretary(page, fields = {}) {
 
 // commentOnDocument saves a whole-document note on the open document (005-AC37 calls them notes).
 export async function commentOnDocument(page, text) {
-  await page.getByRole('button', { name: 'Comment on the document' }).click();
-  await page.getByRole('textbox', { name: 'Annotation', exact: true }).fill(text);
+  await page.getByRole('button', { name: 'Add a note on the document' }).click();
+  await page.getByRole('textbox', { name: 'Note', exact: true }).fill(text);
   await page.locator('#annot-new').getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.locator('#annot-new')).toBeHidden();
 }
@@ -554,12 +554,12 @@ export const tableLayout = (page, sel) => page.locator(sel).evaluate((t) => {
   return { clipped, firstInBox: first.left >= b.left - 0.5, fits: box.scrollWidth <= box.clientWidth + 1, share: t.getBoundingClientRect().width / innerWidth };
 });
 
-// approveEverything switches the daemon page's "approve every new AI persona and change" on: it
-// applies at once and says so in a toast (003b-AC15).
+// approveEverything switches the daemon page's "hold new AI personas and changes for my approval"
+// on: it applies at once and says so in a toast (003b-AC15, 038-AC1).
 export async function approveEverything(admin) {
   await admin.locator('#tab-general').click();
-  await admin.getByLabel('Approve every new AI persona and change').check();
-  await expect(admin.locator('.toast', { hasText: 'approved at once' })).toBeVisible();
+  await admin.getByLabel('Hold new AI personas and changes for my approval').check();
+  await expect(admin.locator('.toast', { hasText: 'New AI personas and changes wait for your approval' })).toBeVisible();
 }
 
 // A name unique across parallel workers: Date.now() alone repeats when two start in the same ms.

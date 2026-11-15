@@ -366,7 +366,7 @@
     bubble = document.createElement('button');
     bubble.type = 'button';
     bubble.className = 'gr-annot-ui gr-annot-bubble';
-    bubble.textContent = 'Annotate';
+    bubble.textContent = 'Add a note';
     bubble.hidden = true;
     // mousedown, not click: a click first collapses the selection the bubble is about.
     bubble.addEventListener('mousedown', function (ev) {

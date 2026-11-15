@@ -91,7 +91,7 @@ test('two rooms speak at once on the lab', async ({ browser }) => {
     const page = await listener(browser, room.id);
     const daemon = await fakeDaemon(page, room.id, line);
     const inAudio = page.waitForResponse((r) => r.url().endsWith('/presence') && r.request().postDataJSON().audio === true);
-    await page.getByRole('button', { name: 'Join audio' }).click();
+    await page.getByRole('button', { name: 'Join the call' }).click();
     await inAudio;
     await expect(page.locator('#voice-audio audio[data-pid^="persona-"]')).toHaveCount(1, { timeout: 60_000 });
     rooms.push({ room, page, daemon });

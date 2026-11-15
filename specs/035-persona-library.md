@@ -11,13 +11,13 @@ A PM tunes a persona in one room (prompt, trigger, voice, skills) and cannot tak
 
 ## Solution
 
-Personas get a library like starters. `/profile` gains a Personas tab with three sections: Yours, Shared with everyone, Built-in. A library persona holds the whole persona: every setting the persona sheet has, plus frozen copies of its skills and the plugins it uses. From the tab, a PM reads a persona before using it, edits their own (each save is a new version), duplicates any into Yours, shares or unshares their own, deletes their own, and adds one to any room where they can add personas. In a room, "Save to my personas" puts the persona in Yours; sharing is a separate, confirmed step. "Add a persona" opens a picker that shows what each persona does. A room persona says truthfully where it came from.
+Personas get a library like starters. `/profile` gains a Personas tab with three sections: Yours, Shared with everyone, Built-in (Superseded (038-AC15): "Shared with everyone on this server"). A library persona holds the whole persona: every setting the persona sheet has, plus frozen copies of its skills and the plugins it uses. From the tab, a PM reads a persona before using it, edits their own (each save is a new version), duplicates any into Yours, shares or unshares their own, deletes their own, and adds one to any room where they can add personas. In a room, "Save to my personas" puts the persona in Yours; sharing is a separate, confirmed step. "Add a persona" opens a picker that shows what each persona does. A room persona says truthfully where it came from.
 
 ## Scope
 
 - A library persona carries every persona setting: name, badge, colour, text, model, effort, memory size, trigger (every N answers, voice lines or minutes), follow-up, notes watcher, speaks in the call, voice, rate, time keeper, speak-over wait, and a one-line description.
 - It carries frozen copies of the skills it has on, at their version, and the plugins it has on as git references, as a starter does (006, 009-AC28).
-- Three libraries: Yours (private to the profile), Shared with everyone (every profile on the instance), Built-in (shipped presets).
+- Three libraries: Yours (private to the profile), Shared with everyone (every profile on the instance; Superseded (038-AC15): "Shared with everyone on this server"), Built-in (shipped presets).
 - `/profile` › Personas: list, read, edit (new version), duplicate to Yours, share, unshare, delete, add to a room.
 - Room: "Save to my personas" from the persona sheet ⋯; a picker for "Add a persona" with sections, description and a preview; a "+" at the end of the persona bar that opens the picker.
 - Adding a library persona to an existing room brings its skills in as room skills and its plugins as room plugins, under the AI host's approval as today.
@@ -40,11 +40,11 @@ Personas get a library like starters. `/profile` gains a Personas tab with three
 
 ### The library
 
-- [x] **AC1** `/profile` has a "Personas" tab after "Starters", with a count, and a deep link `/profile#personas`. It lists three sections in this order: "Yours", "Shared with everyone", "Built-in". Each row shows badge, name, version, author, description and the row ⋯. Empty Yours reads "No personas of yours yet. Save one from a room, or duplicate one below."; empty Shared reads "Nobody has shared a persona yet."
+- [x] **AC1** `/profile` has a "Personas" tab after "Starters", with a count, and a deep link `/profile#personas`. It lists three sections in this order: "Yours", "Shared with everyone", "Built-in". Each row shows badge, name, version, author, description and the row ⋯. Empty Yours reads "No personas of yours yet. Save one from a room, or duplicate one below."; empty Shared reads "Nobody has shared a persona yet." Superseded (038-AC15): "Shared with everyone on this server".
 - [x] **AC2** A row's name opens the persona's page: every setting in read-only form (identity, model, triggers, call, capabilities with skill names and versions and plugin names), its version history (number, author, date), and actions by role. On a phone the page is a full-screen sheet.
 - [x] **AC3** The author edits their own library persona on its page with the same four tabs as the room persona sheet (Identity, Model, Triggers, Capabilities), Description included. Save makes version N+1; nothing in any room changes. A non-author has no Edit.
 - [x] **AC4** Row ⋯ for the author: "Add to a room…", "Duplicate", "Share with everyone" or "Stop sharing", "Delete…". For anyone else: "Add to a room…", "Duplicate to yours". Duplicate makes a new library persona in Yours at version 1, titled "<name> (copy)" when the name is taken in Yours.
-- [x] **AC5** "Share with everyone" asks: "Everyone on this server will see <name> and can add it to their rooms. Rooms keep their copies if you stop sharing." Confirming moves it to Shared. "Stop sharing" moves it back to Yours without a confirm; rooms that added it keep their copies, and other viewers lose its "Update to vN" offer.
+- [x] **AC5** "Share with everyone" asks: "Everyone on this server will see <name> and can add it to their rooms. Rooms keep their copies if you stop sharing." Confirming moves it to Shared. "Stop sharing" moves it back to Yours without a confirm; rooms that added it keep their copies, and other viewers lose its "Update to vN" offer. Superseded (038-AC15): "Every profile on this server will see <name> and can add it to their rooms. Rooms keep their copies if you stop sharing."
 - [x] **AC6** "Delete…" confirms "Rooms keep the personas they added from it." and removes the library persona with its versions and frozen files. The instance admin removes a Shared one from `/admin`; Built-in ones cannot be deleted.
 - [x] **AC7** A profile holds at most 50 library personas of its own and 100 versions each (today's limits); past them, the action answers with the limit in words and changes nothing.
 

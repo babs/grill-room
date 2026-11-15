@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures.js';
+import { fileURLToPath } from 'node:url';
 import { adminToken } from './playwright.config.js';
 import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, playSTT, newRoomEditor, rowAction, unfoldTabs } from './helpers.js';
 
@@ -74,7 +75,7 @@ for (const vp of widths) {
     await expect(bob.locator('#rename-profile-label')).toBeHidden();
   });
 
-  // 005-AC21 005-AC15: a room admin renames Bob from the Admins tab of Manage, a wide sheet with
+  // 005-AC21 005-AC15: a room admin renames Bob from the Members and admins tab of Manage, a wide sheet with
   // deep-linked tabs, full screen on a phone; Bob gets a notice. The super-admin renames him from
   // /admin. Both are audited.
   test(`admin rename and Manage tabs, ${vp.name}`, async ({ browser, request }) => {
@@ -349,3 +350,63 @@ for (const vp of widths) {
     expect(await noOverflow(ana)).toEqual([]);
   });
 }
+
+// wholeTab: the bar's current tab shows whole, folded on a phone as the name on its button.
+const wholeTab = (nav) => nav.evaluate((n) => {
+  const cur = n.querySelector('[aria-current=page]');
+  const b = 'menu' in n.dataset ? n.querySelector('.tabs-menu') : cur;
+  const [r, box] = [b.getBoundingClientRect(), n.getBoundingClientRect()];
+  return { name: (b.textContent || '').trim(), whole: r.left >= box.left - 0.5 && r.right <= box.right + 0.5 && b.scrollWidth <= b.clientWidth + 0.5 };
+});
+
+// 038-AC9: Room settings names its tabs Members and admins and Deleted documents, their deep links
+// unchanged; the blocked profiles show under the member list, no longer under Invites. The longer
+// names fold or scroll: no sideways overflow, the current tab whole, at 390, 820 and 1440 px.
+test('Room settings: Members and admins, Deleted documents', async ({ browser, request }) => {
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  await makeAdmin(request, alice, room);
+  const bobID = await bob.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()).then((d) => d.me.id), room.id);
+  expect((await request.delete(`/api/admin/rooms/${room.id}/participants/${bobID}`, { headers: admin, data: { block: true } })).status()).toBe(204);
+  const sheet = alice.locator('#manage');
+  const nav = sheet.locator('nav.tabs');
+  const shots = fileURLToPath(new URL('./test-results/038-captures/', import.meta.url));
+  for (const width of [390, 820, 1440]) {
+    await alice.setViewportSize({ width, height: 900 });
+    await alice.goto('about:blank');
+    await alice.goto(`/r/${room.id}#manage/admins`);
+    await expect(sheet.locator('#tab-admins')).toHaveAttribute('aria-current', 'page');
+    await expect(sheet.locator('#tab-admins')).toHaveText('Members and admins');
+    const [members, blocked] = [sheet.locator('#room-admins'), sheet.locator('#blocked')];
+    await expect(blocked).toContainText('Bob');
+    await expect(sheet.getByRole('heading', { name: 'Blocked from rejoining' })).toBeVisible();
+    const [m, b] = [await members.boundingBox(), await blocked.boundingBox()];
+    expect(b.y, `${width}: blocked under the members`).toBeGreaterThanOrEqual(m.y + m.height);
+    await expect.poll(() => wholeTab(nav), `${width}: admins tab`).toEqual({ name: 'Members and admins', whole: true });
+    expect(await noOverflow(alice), `${width} px`).toEqual([]);
+    if (width !== 820) await alice.screenshot({ path: `${shots}room-settings-members-${width}.png` });
+
+    await alice.goto('about:blank');
+    await alice.goto(`/r/${room.id}#manage/documents`);
+    await expect(sheet.locator('#tab-documents')).toHaveAttribute('aria-current', 'page');
+    await expect(sheet.locator('#tab-documents')).toHaveText('Deleted documents');
+    await expect.poll(() => wholeTab(nav), `${width}: documents tab`).toEqual({ name: 'Deleted documents', whole: true });
+    expect(await noOverflow(alice), `${width} px`).toEqual([]);
+  }
+  // Invites no longer mounts the blocked list: it would fetch the blocks in the same pass as the invites.
+  const asked = [];
+  const log = (r) => asked.push(new URL(r.url()).pathname);
+  await alice.goto('about:blank');
+  alice.on('request', log);
+  await alice.goto(`/r/${room.id}#manage/invites`);
+  await expect(sheet.locator('#panel-invites')).toBeVisible();
+  await expect(sheet.locator('#invites-all')).toBeVisible();
+  alice.off('request', log);
+  expect(asked).toContain(`/api/rooms/${room.id}/invites`);
+  expect(asked).not.toContain(`/api/rooms/${room.id}/blocks`);
+  await expect(sheet.locator('#blocked')).toHaveCount(0);
+  // /admin's room panel shares the tab and the section.
+  const page = await (await browser.newContext()).newPage();
+  expect(await signIn(page, undefined, `rooms/${room.id}/admins`)).toBe(201);
+  await expect(page.locator('#room-panel #tab-admins')).toHaveText('Members and admins');
+  await expect(page.locator('#room-panel #blocked')).toContainText('Bob');
+});

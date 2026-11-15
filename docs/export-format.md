@@ -31,7 +31,7 @@ Every row carries `ref`, its id on the exporting instance. Other rows point to i
 | `participants.jsonl` | `ref`, `name`, `joined_at`, `can_trigger`, `active` (false once their seat ended: revoked, removed or left), `profile_uuid` (or the hint an earlier import kept), `admin`, `previous_name` (the name before the latest rename, when there was one) |
 | `messages.jsonl` | `ref`, `ts`, `kind` (`voice`, `text`, `agent`, `system`), `participant`, `persona`, `sender`, `body`, `source` (voice lines only: `device` when the speaker's browser transcribed it, `server` when the STT worker did; any other value, or a `source` on another kind, is refused), `model`, `model_note`, `model_mismatch`, `effort`, `requested_model`, `requested_effort`, `spoken` (agent lines only: what the turn wrote to say in the call, sanitised; on another kind it is refused), `edited_at`, `deleted_at`, `change_seq`, `documents` (text lines only: the refs of the documents the line was sent with, in the order sent, absent for none; on another kind they are refused) |
 | `mentions.jsonl` | how each line's @mention of a persona ended: `message`, `persona`, `status` (`done`, `failed`, `stopped`, `cancelled`, or `queued` and `running` at export, which import as `cancelled`: the turn history stays behind), `line` (the synthesis, or the line telling the failure or stop) |
-| `note_mentions.jsonl` | the same for note messages: `message` is an annotation message's ref. Optional: an archive from before it has none, and imports with no chips on its notes |
+| `note_mentions.jsonl` | the same for note messages: `message` is a note message's ref. Optional: an archive from before it has none, and imports with no chips on its notes |
 | `message_versions.jsonl` | earlier bodies of edited lines: `message`, `seq`, `body`, `written_at` |
 | `transcript.md` | the lines as Markdown, each followed by its earlier versions; deletions marked. For people: the import never reads it |
 | `uploads.jsonl` and `uploads/<ref>` | `ref`, `participant`, `filename`, `content_type`, `size`, `created_at`, `file`; the file is the original |
@@ -39,7 +39,7 @@ Every row carries `ref`, its id on the exporting instance. Other rows point to i
 | `revisions.jsonl` and `documents/<document>/<n>.<format>` | `document`, `n`, `author`, `created_at`, `file`. An office upload's revision 1 is its Markdown copy |
 | `annotations.jsonl` | `ref`, `document`, `revision`, `anchor` (null for a whole-document thread), `orphaned`, `status`, `version`, `created_at` |
 | `annotation_messages.jsonl` | `ref`, `annotation`, `by` (`participant`, `agent`), `participant`, `persona`, `author`, `body`, `created_at` |
-| `attachments.jsonl` and `attachments/<ref>` | `ref`, `message` (an annotation message), `content_type`, `size`, `created_at`, `file` |
+| `attachments.jsonl` and `attachments/<ref>` | `ref`, `message` (a note message), `content_type`, `size`, `created_at`, `file` |
 | `skills.jsonl` | `ref`, `name`, `scope` (`room`, `shared`, `personal`), `pending`, `created_at` |
 | `skill_versions.jsonl` and `skills/<skill>/<n>.tar` | `skill`, `n`, `author`, `description`, `files`, `size`, `sha256`, `created_at`, `file`; the file is the skill's normalised tar |
 | `plugins.jsonl` | the room's plugins: `ref`, `name`, `url` (the repo link), `git_ref` (the branch, tag or commit its admin typed, empty for the default branch), `ref_name` (what the room shows), `entry` (its marketplace entry, absent for a repo that is one plugin), `private` (fetched by an AI host), `created_by`, `created_at` |
@@ -55,7 +55,7 @@ Plugins: a removed plugin stays out, and so do the room's requests to its AI hos
 ## What an export leaves out
 
 - Emails, profile ids, tokens and token hashes, invites, and any profile uuid but the participants'.
-- Daemons, the host, and the host's cap decisions on personas.
+- AI host apps, the host, and the host's cap decisions on personas.
 - Plugin option values, removed plugins, requests to the AI host to fetch a plugin, and whether a plugin needs host setup.
 - Personas waiting for the host's approval, and held persona changes.
 - The turn history, apart from each persona's resume point, and the turn queue.
@@ -74,7 +74,7 @@ On top of the archive checks above, an import re-reads the content the room trus
 - an anchor must validate as one the room would take;
 - a skill name must be one Claude Code takes, and a skill version a normalised skill tar whose files pass the upload rules and hash to its `sha256`;
 - a persona must pass the room API's checks: at most 12 personas, each with at most 10 skills and 5 plugins on; at most 20 room skills, 20 versions each;
-- a plugin must pass the add form's checks: a name Claude Code takes and not `grill-room`, at most 10 per room, an https link without credentials (or, for a private one, an https or ssh link the AI host's git may fetch), a ref git takes, a 40-hex commit, and versions numbered once each. A snapshot must be a normalised tar within the instance's plugin size limit and 5 000 files, regular files only under the path rules of a daemon's upload, hashing to its `sha256`; the manifest and file list stored come from its files, not from the archive;
+- a plugin must pass the add form's checks: a name Claude Code takes and not `grill-room`, at most 10 per room, an https link without credentials (or, for a private one, an https or ssh link the AI host's git may fetch), a ref git takes, a 40-hex commit, and versions numbered once each. A snapshot must be a normalised tar within the instance's plugin size limit and 5 000 files, regular files only under the path rules of an AI host app's upload, hashing to its `sha256`; the manifest and file list stored come from its files, not from the archive;
 - every ref must point to a row of the archive, and a session id must be a UUID;
 - a JSON line is at most 1 MiB.
 

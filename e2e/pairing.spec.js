@@ -13,14 +13,14 @@ test('approve a daemon pairing in the room', async ({ browser, request }) => {
 
   await alice.goto(new URL(pairing.approve_url).pathname + new URL(pairing.approve_url).search);
   // 003-AC17: the name a daemon sends, a machine name before spec 003, never reaches the room.
-  await expect(alice.locator('#pairing-text')).toContainText('An agent daemon asks to run the agent for you');
+  await expect(alice.locator('#pairing-text')).toContainText('An AI host app asks to run the AI for you');
   await expect(alice.locator('body')).not.toContainText('alice-laptop');
   await expect(alice.locator('#pairing-text')).toContainText(pairing.code);
   await expect(alice).toHaveURL(`/r/${room.id}`);
   // 008-AC17: one of Alice's apps is already connected; the notice waits for one more.
   await alice.evaluate(() => { agent.daemons = [{ participant_id: Number(myID), can_host: true }]; renderAgent(); });
   await alice.getByRole('button', { name: 'Approve' }).click();
-  await expect(alice.locator('#pairing-text')).toHaveText('Daemon paired. Its page shows it connected within a few seconds.');
+  await expect(alice.locator('#pairing-text')).toHaveText('AI host app paired. It shows the room connected within a few seconds.');
   await expect(alice.locator('#pairing')).toBeVisible();
 
   const answer = await poll();

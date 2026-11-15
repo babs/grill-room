@@ -35,6 +35,8 @@ test('starter library: duplicate, share, delete, /admin', async ({ browser, requ
   // Its row menu's keyboard: Escape closes it and gives the focus back to ⋯.
   const more = mine.getByRole('button', { name: 'More actions for Retro' });
   await more.click();
+  await expect(alice.getByRole('menuitem', { name: 'Create a room from this' })).toBeFocused();
+  await alice.keyboard.press('ArrowDown');
   await expect(alice.getByRole('menuitem', { name: 'Duplicate to yours' })).toBeFocused();
   await alice.keyboard.press('ArrowDown');
   await expect(alice.getByRole('menuitem', { name: 'Edit' })).toBeFocused();
@@ -52,9 +54,9 @@ test('starter library: duplicate, share, delete, /admin', async ({ browser, requ
   await bob.reload();
   const shared = bob.locator('#starters-instance li', { hasText: me });
   await expect(shared).toContainText('Retro');
-  // Not his to share or delete: his menu only duplicates.
+  // Not his to share or delete: his menu only starts a room from it and duplicates.
   await shared.getByRole('button', { name: 'More actions for Retro' }).click();
-  await expect(bob.getByRole('menuitem')).toHaveText(['Duplicate to yours']);
+  await expect(bob.getByRole('menuitem')).toHaveText(['Create a room from this', 'Duplicate to yours']);
   await bob.keyboard.press('Escape');
 
   const page = await (await browser.newContext()).newPage();
@@ -150,6 +152,24 @@ for (const vp of widths) {
   });
 }
 
+// 038-AC5: a starter row's ⋯ starts a room from it, the New room sheet opening with it picked.
+test('create a room from a starter row', async ({ browser, request }) => {
+  const { pages: [page] } = await roomWith(browser, request, ['Rex' + uniq()]);
+  await page.goto('/profile#starters');
+  const more = page.locator('#starters-builtin li', { hasText: 'Retro' }).getByRole('button', { name: 'More actions for Retro' });
+  await more.click();
+  await expect(page.getByRole('menuitem').first()).toHaveText('Create a room from this');
+  await page.getByRole('menuitem', { name: 'Create a room from this' }).click();
+  const sheet = page.locator('#room-create-sheet');
+  await expect(sheet.locator('#room-create-title')).toHaveText('New room');
+  await sheet.locator('#starter-fields').getByLabel('Team').fill('Ops');
+  await sheet.getByRole('button', { name: 'Create room' }).click();
+  await expect(page.locator('#room-name')).toHaveText('Retro: Ops');
+  await page.locator('#invites').getByRole('button', { name: 'Close' }).click();
+  await page.goto(page.url().split('?')[0] + '#manage');
+  await expect(page.locator('#created-from')).toHaveText(/^Created from the starter Retro v\d+\.$/);
+});
+
 // 033-AC2 033-AC4 035-AC16: a room from Retro has the Timekeeper as its time keeper, speaking over
 // after 20 s; its Identity tab says it came with the starter.
 test('a room from Retro keeps time', async ({ browser, request }) => {
@@ -222,7 +242,9 @@ test('save a room as a starter, share it, create a room from it', async ({ brows
   await sheet.getByLabel('Default room name').fill('Kickoff for {{owner}}');
   await save.click();
   await expect(sheet).toBeHidden();
-  await expect(page.locator('.toast')).toContainText('to your starters');
+  // 038-AC4: the toast links to where the starter went.
+  const saved = page.locator('.toast', { hasText: `Saved "${title}" to your starters` });
+  await expect(saved.getByRole('link', { name: 'Open' })).toHaveAttribute('href', '/profile#starters');
 
   await page.goto('/profile#starters');
   const mine = page.locator('#starters-personal li', { hasText: title });
@@ -235,7 +257,7 @@ test('save a room as a starter, share it, create a room from it', async ({ brows
   await page.locator('#tab-rooms').click();
   await page.getByRole('button', { name: 'New room' }).click();
   await page.getByLabel('Search starters').fill(me);
-  await page.getByRole('button', { name: 'Shared with everyone: ' + title }).click();
+  await page.getByRole('button', { name: 'Shared with everyone on this server: ' + title }).click();
   await expect(page.locator('#starter-preview .starter-personas li')).toHaveText([/Grill/, /Secretary/, /Rodin/]);
   await page.getByRole('button', { name: 'Use this starter' }).click();
   await expect(page.getByRole('button', { name: 'Create room' })).toBeDisabled();

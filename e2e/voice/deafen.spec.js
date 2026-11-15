@@ -19,11 +19,11 @@ test('deafen', async ({ request }) => {
     await expect.poll(() => inboundAudio(bob), { timeout: 30_000 }).toBeGreaterThan(0);
 
     // One toggle (005-AC49): pressed while deafened, pressed again to hear the room.
-    const deafen = { click: () => audioItem(bob, 'Mute the room') };
+    const deafen = { click: () => audioItem(bob, 'Stop hearing the call') };
     const deaf = bob.locator('#voice-deaf');
     await deafen.click();
     await expect(deaf).toHaveAttribute('aria-pressed', 'true');
-    await expect(deaf).toHaveAttribute('data-tip', /Press to hear them again/);
+    await expect(deaf).toHaveAttribute('data-tip', /Press to hear the others again/);
     await expect(bobRow).toHaveClass(/deaf/);
     await expect(state).toHaveAttribute('data-state', 'muted');
     await expect.poll(() => bob.evaluate(() => [...voice.remoteParticipants.values()]
@@ -45,7 +45,7 @@ test('deafen', async ({ request }) => {
 
     // Keep my mic on: deafened, still live, so still transcribed.
     await bob.getByRole('button', { name: 'Audio options' }).click();
-    await bob.getByLabel('Keep my mic on while the room is muted').check();
+    await bob.getByLabel('Keep my mic on while I stop hearing the call').check();
     await bob.keyboard.press('Escape');
     await deafen.click();
     await expect(bobRow).toHaveClass(/deaf/);

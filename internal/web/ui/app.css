@@ -180,6 +180,11 @@ body.room { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: 1
 #device-stt-status:empty { display: none; }
 #device-stt-status.error { display: flex; gap: var(--sp-2); align-items: flex-start; color: var(--danger); }
 #device-stt-status svg { flex: none; width: 16px; height: 16px; margin-top: 2px; }
+/* A disabled menu item's reason, under it, its text on the items' text column (038-AC10). */
+.menu > .menu-note { margin: 0; padding: 0 var(--sp-3) 0 calc(var(--sp-3) + 16px + var(--sp-2)); color: var(--text-muted); font-size: var(--fs-sm); }
+/* A link in a menu's line of text is 44 px high inside its own line: an overhang would take taps from the items beside it. */
+.menu > :is(.menu-note, .menu-head:has(a)) { padding-block: 0; }
+.menu > :is(.menu-note, .menu-head) a { display: inline-flex; align-items: center; min-height: 44px; }
 #stt-credit { margin: 0; padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--border); color: var(--text-muted); font-size: var(--fs-sm); }
 /* The user menu's button: initials in a ring, the name beside them on a wide screen. */
 .avatar { gap: var(--sp-2); padding: 0 var(--sp-2) 0 0; border: 0; background: transparent; color: var(--chrome-text); }
@@ -598,12 +603,15 @@ body.docs-window #chat-fold, body.docs-window #chat-unfold { display: none; }
 #filter-empty { display: none; }
 #messages[data-filter=written]:not(:has(> .msg:not(.voice))) ~ #filter-empty, #messages[data-filter=voice]:not(:has(> .msg.voice)) ~ #filter-empty { display: block; }
 :is(#chat-empty, #filter-empty) { margin: 0 var(--sp-4) var(--sp-3); }
+/* Show all takes its 44 px inside the hint's own row, not over the filter's segments above it. */
+#filter-hidden { display: flex; align-items: center; gap: var(--sp-1); min-height: 44px; max-width: none; margin: 0; padding: 0 var(--sp-4); border-bottom: 1px solid var(--border); }
+#filter-show-all { display: inline-flex; align-items: center; min-height: 44px; }
 /* Transcription pane (020-AC8): room.js sets .transcript-room while it fits, .fold-transcript folded. */
 #transcript { display: none; }
 #transcript .pane-head { flex-wrap: wrap; min-height: 44px; padding: var(--sp-1) var(--sp-4); }
 /* The title keeps its whole width: "Voice-to-text is off" wraps under it rather than over it. */
 #transcript-title { flex: 1 0 auto; }
-#text-size .text-steps { display: flex; gap: var(--sp-4); }
+.text-steps { display: flex; gap: var(--sp-4); }
 #transcript-off { margin-left: auto; color: var(--text-muted); font-size: var(--fs-xs); }
 #transcript-count:empty { display: none; }
 #voice-lines { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: var(--sp-3) var(--sp-4); }
@@ -612,8 +620,9 @@ body.docs-window #chat-fold, body.docs-window #chat-unfold { display: none; }
 body.transcript-room #transcript { display: flex; flex-direction: column; min-height: 0; }
 body.transcript-room:not(.fold-transcript) #chat-filter { display: none; }
 /* Beside the chat: areas, not auto-placement, as the chat's hidden children would shift the rows. */
-body.transcript-room:has(#viewer[hidden]) .chat { display: grid; grid-template: "filter pane" auto "msgs pane" minmax(0, 1fr) "fempty pane" auto "cempty pane" auto "send pane" auto / minmax(0, 1fr) auto; }
+body.transcript-room:has(#viewer[hidden]) .chat { display: grid; grid-template: "filter pane" auto "fhidden pane" auto "msgs pane" minmax(0, 1fr) "fempty pane" auto "cempty pane" auto "send pane" auto / minmax(0, 1fr) auto; }
 .chat > #chat-filter { grid-area: filter; }
+.chat > #filter-hidden { grid-area: fhidden; }
 .chat > #messages { grid-area: msgs; }
 .chat > #filter-empty { grid-area: fempty; }
 .chat > #chat-empty { grid-area: cempty; }
@@ -650,6 +659,8 @@ body.room :is(.msg:not(.system) .body, #send textarea) { font-size: calc(var(--f
 .msg .body blockquote { border-left: 3px solid var(--border); padding-left: var(--sp-2); color: var(--text-muted); }
 .msg.deleted .body { color: var(--text-muted); font-style: italic; }
 .msg.deleting { opacity: .45; }
+/* A button that reads as a link inside a sentence; .link is taken by room.js button() and the panel labels. */
+button.text-link { display: inline; min-height: 0; padding: 0; border: 0; background: none; color: var(--primary-text); font: inherit; text-decoration: underline; cursor: pointer; }
 .msg .meta button.link { display: inline; min-height: 0; padding: 0; border: 0; background: none; color: var(--text-muted); font-size: var(--fs-xs); font-weight: 400; text-decoration: underline; }
 /* One actions button per message: on hover or focus on a desktop, always on a phone (005-AC35). */
 .msg .msg-more { position: absolute; top: 0; right: 0; border-color: transparent; background: transparent; color: var(--text-muted); opacity: 0; }

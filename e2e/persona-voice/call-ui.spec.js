@@ -38,7 +38,7 @@ async function alice(browser, request, viewport) {
 // shown with it, are there by then.
 async function joinAudio(page) {
   const inAudio = page.waitForResponse((r) => r.url().endsWith('/presence') && r.request().postDataJSON().audio === true);
-  await page.getByRole('button', { name: 'Join audio' }).click();
+  await page.getByRole('button', { name: 'Join the call' }).click();
   expect((await inAudio).status()).toBe(204);
   await expect(page.getByRole('button', { name: 'Audio options' })).toBeVisible();
 }

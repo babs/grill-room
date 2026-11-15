@@ -96,7 +96,7 @@ test('participant list shows audio states and transcription', async ({ browser, 
   await expect(alice.locator('#participants [title], #participants-away [title]')).toHaveCount(0);
   await expect(state('Bob')).toHaveAttribute('data-state', 'muted');
   await expect(state('Carol')).toHaveAttribute('data-state', 'listening');
-  await expect(state('Carol')).toHaveAttribute('data-tip', 'Listening only, deafened: hears nobody');
+  await expect(state('Carol')).toHaveAttribute('data-tip', 'Listening only, stopped hearing the call');
   await expect(state('Carol')).toHaveAttribute('data-icon', 'deafened');
   await expect(state('Dan')).toHaveAttribute('data-state', 'none');
   for (const [name, n] of [['Alice', 1], ['Bob', 1], ['Carol', 0], ['Dan', 0]]) {
@@ -327,3 +327,47 @@ for (const [label, size, side] of [['260 px panel', { width: 1440, height: 900 }
     await expect(alice.locator('#person-card')).toContainText('Can ask the AI');
   });
 }
+
+// 038-AC10: the avatar menu has Leave room…; a room admin's is disabled with the reason in words
+// and a way to step down, the last room admin's says to hand the role on first. On a phone.
+test('Leave room from the avatar menu, with the room admin reason', async ({ browser, request }) => {
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  const ids = await alice.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()).then((d) => d.participants.map((p) => p.id)), room.id);
+  expect((await request.put(`/api/rooms/${room.id}/admins/${ids[0]}`, { headers: admin })).status()).toBe(204);
+  await alice.setViewportSize({ width: 390, height: 844 });
+  await alice.reload();
+  const menu = alice.locator('#me-menu');
+  const leave = menu.getByRole('button', { name: 'Leave room…' });
+  await alice.locator('#me').click();
+  await expect(leave).toHaveAttribute('aria-disabled', 'true');
+  await expect(alice.locator('#leave-why')).toHaveText('Make someone else room admin, then step down. Step down');
+  await expect(alice.locator('#leave-why a')).toHaveAttribute('href', '#manage/admins');
+  expect(await smallTargets(alice), 'avatar menu at 390 px').toEqual([]);
+  // Disabled, it keeps the menu open on its reason.
+  await leave.click({ force: true });
+  await expect(menu).toBeVisible();
+  await alice.keyboard.press('Escape');
+  // People's ⋯ gives the same reason.
+  await alice.locator('#tabbar').getByRole('button', { name: /People/ }).click();
+  await alice.locator('#participants li').filter({ has: alice.locator('.name', { hasText: 'Alice' }) }).locator('.person-more').click();
+  await expect(alice.locator('#person-menu').getByRole('button', { name: 'Leave room…' })).toHaveAttribute('data-tip', 'Make someone else room admin, then step down.');
+  await alice.keyboard.press('Escape');
+
+  expect((await request.put(`/api/rooms/${room.id}/admins/${ids[1]}`, { headers: admin })).status()).toBe(204);
+  await alice.reload();
+  await alice.locator('#me').click();
+  await expect(alice.locator('#leave-why')).toHaveText('Step down as room admin first. Step down');
+  await menu.getByRole('link', { name: 'Step down' }).click();
+  await expect(alice.locator('#manage')).toBeVisible();
+  await expect(alice.locator('#manage #tab-admins')).toHaveAttribute('aria-current', 'page');
+
+  // A plain member leaves from it, after the same confirm as People's ⋯.
+  expect((await request.delete(`/api/rooms/${room.id}/admins/${ids[1]}`, { headers: admin })).status()).toBe(204);
+  await bob.reload();
+  await bob.locator('#me').click();
+  await expect(bob.locator('#leave-why')).toBeHidden();
+  await bob.locator('#me-menu').getByRole('button', { name: 'Leave room…' }).click();
+  await expect(bob.locator('dialog.confirm')).toContainText('Leave this room?');
+  await bob.locator('dialog.confirm').getByRole('button', { name: 'Leave', exact: true }).click();
+  await expect(bob.locator('#banner')).toBeVisible();
+});

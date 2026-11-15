@@ -1,6 +1,8 @@
 import { test, expect } from './fixtures.js';
 import { createECDH, randomBytes } from 'node:crypto';
-import { roomWith, menuItem } from './helpers.js';
+import { fileURLToPath } from 'node:url';
+import { roomWith, menuItem, noOverflow, smallTargets } from './helpers.js';
+import { snoozeKey } from './quiet-push.js';
 
 // The service worker's side of Web Push (005-AC24), without a push service: headless Chrome has
 // none. The specs call the worker's handlers in its own scope; the DevTools protocol's
@@ -159,3 +161,104 @@ for (const [perm, label] of [['granted', 'Turn off notifications'], ['denied', '
     await expect(alice.locator('#push-toggle')).toHaveText(label);
   });
 }
+
+// 038-AC14: /profile › Account shows each room's notifications in this browser and turns them on
+// with the room's flow, the explainer before the browser's prompt; on in one place reads on in
+// the other after a reload, and off likewise.
+test('notifications on /profile and in the room', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await fakePush(alice);
+  // Not asked yet, until the prompt answers granted.
+  await alice.context().addInitScript(() => {
+    window.permissionCalls = 0;
+    Object.defineProperty(Notification, 'permission', { get: () => localStorage.getItem('fake-perm') || 'default', configurable: true });
+    Notification.requestPermission = async () => { window.permissionCalls++; localStorage.setItem('fake-perm', 'granted'); return 'granted'; };
+  });
+  const prof = await alice.context().newPage();
+  await prof.goto('/profile#account');
+  const row = prof.locator('#push-rooms li', { hasText: 'Docs room' });
+  await expect(row.locator('.hint')).toHaveText('· off');
+  await row.getByRole('button', { name: 'Turn on notifications for Docs room' }).click();
+  const explain = prof.locator('#push-explain');
+  await expect(explain.getByRole('heading')).toHaveText('Turn on notifications?');
+  await expect(explain.locator('#push-explain-text')).toHaveText('Get notified when someone mentions you directly in Docs room, even when the room is closed.');
+  expect(await prof.evaluate(() => window.permissionCalls)).toBe(0);
+  const [put] = await Promise.all([
+    prof.waitForResponse((r) => r.url().endsWith(`/api/rooms/${room.id}/push`) && r.request().method() === 'PUT'),
+    explain.getByRole('button', { name: 'Turn on notifications' }).click(),
+  ]);
+  expect(put.status()).toBe(204);
+  expect(await prof.evaluate(() => window.permissionCalls)).toBe(1);
+  await expect(prof.locator('#push-status')).toHaveText('Notifications on for Docs room.');
+  await expect(row.locator('.hint')).toHaveText('· on');
+  await expect(row.getByRole('button', { name: 'Turn off notifications for Docs room' })).toBeVisible();
+
+  const shots = fileURLToPath(new URL('./test-results/038-captures/', import.meta.url));
+  for (const width of [390, 1440]) {
+    await prof.setViewportSize({ width, height: 900 });
+    expect(await noOverflow(prof), `${width} px`).toEqual([]);
+    if (width === 390) expect(await smallTargets(prof)).toEqual([]);
+    await prof.screenshot({ path: `${shots}profile-account-${width}.png`, fullPage: true });
+  }
+
+  await alice.reload();
+  await menuItem(alice, 'Notifications', 'me');
+  await expect(alice.locator('#push-toggle')).toHaveText('Turn off notifications');
+  await alice.locator('#push-toggle').click();
+  await expect(alice.locator('#push-status')).toHaveText('Notifications off for this room.');
+  await prof.reload();
+  await expect(row.locator('.hint')).toHaveText('· off');
+  await expect(row.getByRole('button', { name: 'Turn on notifications for Docs room' })).toBeVisible();
+});
+
+// 038-AC14 008-AC11: on /profile, "Not now" on the explainer asks the browser nothing, snoozes the
+// rooms' unprompted offer as a room's does, and leaves the room off.
+test('not now on /profile snoozes the offer', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.context().addInitScript(() => {
+    window.permissionCalls = 0;
+    Object.defineProperty(Notification, 'permission', { get: () => 'default', configurable: true });
+    Notification.requestPermission = async () => { window.permissionCalls++; return 'default'; };
+  });
+  const prof = await alice.context().newPage();
+  await prof.goto('/profile#account');
+  await prof.evaluate((k) => localStorage.removeItem(k), snoozeKey);
+  const row = prof.locator('#push-rooms li', { hasText: 'Docs room' });
+  await row.getByRole('button', { name: 'Turn on notifications for Docs room' }).click();
+  const explain = prof.locator('#push-explain');
+  await explain.getByRole('button', { name: 'Not now' }).click();
+  await expect(explain).toBeHidden();
+  await expect.poll(() => prof.evaluate((k) => Number(localStorage.getItem(k)) - Date.now(), snoozeKey)).toBeGreaterThan(14 * 24 * 3600e3 - 60e3);
+  expect(await prof.evaluate(() => window.permissionCalls)).toBe(0);
+  await expect(row.locator('.hint')).toHaveText('· off');
+  await expect(row.getByRole('button', { name: 'Turn on notifications for Docs room' })).toBeVisible();
+});
+
+// 038-AC14: a /profile row acts on the state it shows, and follows a room turned on or off in
+// another tab of this browser.
+test('a /profile row follows the room and keeps its intent', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await fakePush(alice);
+  const prof = await alice.context().newPage();
+  await prof.goto('/profile#account');
+  const row = prof.locator('#push-rooms li', { hasText: 'Docs room' });
+  await expect(row.locator('.hint')).toHaveText('· off');
+  // Turned on behind the row's back, with no storage event in its own page: Turn on still turns on.
+  await prof.evaluate((id) => localStorage.setItem('grill-room-push:' + id, '1'), room.id);
+  await row.getByRole('button', { name: 'Turn on notifications for Docs room' }).click();
+  await expect(prof.locator('#push-status')).toHaveText('Notifications on for Docs room.');
+  await expect(row.locator('.hint')).toHaveText('· on');
+  // Turned off in the room's tab: the row follows.
+  await alice.reload();
+  await menuItem(alice, 'Notifications', 'me');
+  await expect(alice.locator('#push-toggle')).toHaveText('Turn off notifications');
+  await alice.locator('#push-toggle').click();
+  await expect(alice.locator('#push-status')).toHaveText('Notifications off for this room.');
+  await expect(row.locator('.hint')).toHaveText('· off');
+  // And on again there: the row reads on, and its button turns off.
+  await alice.locator('#push-toggle').click();
+  await expect(alice.locator('#push-status')).toHaveText('Notifications on for this room.');
+  await expect(row.locator('.hint')).toHaveText('· on');
+  await row.getByRole('button', { name: 'Turn off notifications for Docs room' }).click();
+  await expect(prof.locator('#push-status')).toHaveText('Notifications off for Docs room.');
+});

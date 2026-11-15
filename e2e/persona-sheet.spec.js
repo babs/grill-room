@@ -153,9 +153,11 @@ for (const [size, viewport] of Object.entries(sizes)) {
 }
 
 // 009-AC3: Save sends every tab at once, and an invalid field on a hidden tab opens that tab.
+// 038-AC12: without speech on the server, the call's place says so.
 test('persona sheet: one Save for every tab', async ({ browser, request }) => {
   const { pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   const sheet = await personaSheet(alice, 'Grill', 'Identity');
+  await expect(sheet.locator('section[data-tab=identity] .persona-voice .unavailable')).toHaveText('Not available on this server');
   await sheet.getByLabel('Name').fill('');
   await sheet.getByRole('link', { name: 'Model', exact: true }).click();
   await sheet.getByLabel('Effort').selectOption('high');

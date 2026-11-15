@@ -2,7 +2,7 @@ import { request as pwRequest } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import { readFileSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
-import { signIn, noOverflow, skillZip, confirmSheet, rowAction, uniq } from './helpers.js';
+import { signIn, noOverflow, skillZip, confirmSheet, rowAction, uniq, unfoldTabs } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -68,6 +68,8 @@ for (const vp of widths) {
     await expect(page).toHaveURL(new RegExp(`#rooms/${room.id}$`));
     const panel = page.locator('#room-panel');
     const tab = async (label) => {
+      // 038-AC9: the longer tab names fold the bar on a phone.
+      await unfoldTabs(panel.locator('nav.tabs'));
       await panel.getByRole('link', { name: label, exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`#rooms/${room.id}/${label.toLowerCase()}$`));
     };
@@ -101,7 +103,8 @@ for (const vp of widths) {
 
     // Invites, from a deep link: a new link shown once, then revoked.
     await page.goto(`/admin#rooms/${room.id}/invites`);
-    await expect(panel.getByRole('link', { name: 'Invites', exact: true })).toHaveAttribute('aria-current', 'page');
+    // By id: on a phone the bar may be folded, its links hidden in the closed menu (038-AC9).
+    await expect(panel.locator('nav.tabs #tab-invites')).toHaveAttribute('aria-current', 'page');
     const invites = panel.locator('#invites-all .list-row:not(.head)');
     await expect(invites).toHaveCount(1);
     await panel.getByRole('button', { name: 'New invite link' }).click();
@@ -142,7 +145,8 @@ for (const vp of widths) {
     const page = await (await browser.newContext({ viewport: vp })).newPage();
     expect(await signIn(page, adminToken, 'rooms')).toBe(201);
     await page.locator('#room-' + room.id).getByRole('link', { name: 'Manage ' + name }).click();
-    await page.locator('#room-panel').getByRole('link', { name: 'Admins', exact: true }).click();
+    await unfoldTabs(page.locator('#room-panel nav.tabs'));
+    await page.locator('#room-panel').getByRole('link', { name: 'Members and admins', exact: true }).click();
     const admins = page.locator('#room-panel #room-admins');
     await expect(admins.locator('> li')).toHaveCount(1);
     await admins.getByRole('button', { name: 'Make Alice a room admin' }).click();

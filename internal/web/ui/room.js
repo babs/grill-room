@@ -16,6 +16,10 @@ const chatMode = location.pathname.split('/')[3] === 'chat';
 if (chatMode) document.body.classList.add('chat-window');
 const narrow = matchMedia('(max-width: 40rem)');
 const phone = () => narrow.matches;
+const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+// A phone or tablet by its OS, not its pointer: a touch laptop can still run the AI host (038-AC2).
+// ponytail: an Android tablet in Chrome's desktop mode sends a Linux UA and sees the computer sheet; no reliable OS signal exists.
+const mobileOS = ios || /Android/.test(navigator.userAgent);
 const messages = $('messages');
 // Voice lines move here while the Transcription pane shows (020-AC8): a line is in one list or
 // the other, so lookups go through lineSel.
@@ -106,7 +110,7 @@ function end(text) {
   $('upload-open').hidden = true;
   for (const el of document.querySelectorAll('.dropping')) el.classList.remove('dropping');
   document.body.classList.remove('drag-files');
-  for (const id of ['manage-open', 'invite-open', 'personas-open', 'links-open']) $(id).hidden = true;
+  for (const id of ['manage-open', 'invite-open', 'personas-open', 'links-open', 'leave-open', 'leave-why', 'room-proposed-in']) $(id).hidden = true;
   $('room-open').disabled = true;
   delete $('room-open').dataset.tip;
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
@@ -172,6 +176,8 @@ async function loadRoom() {
   departed = data.departed || {};
   uploadRules = data.upload;
   $('doc-delete').hidden = !meAdmin;
+  showLeave();
+  showProposedIn(data.room.proposed_in);
   renameSenders();
   renderBlocked();
   renderProposals();
@@ -196,7 +202,7 @@ async function loadRoom() {
   return true;
 }
 
-// showLinks names the rooms linked to this one in the room menu, once there is one (023-AC8), and
+// showLinks names the rooms linked to this one in the room menu, or offers a room admin to link one (023-AC8, 038-AC8), and
 // hands the list to Room settings › Links (admin/room-admin.js), which reloads through it.
 async function showLinks() {
   let links;
@@ -212,8 +218,9 @@ async function showLinks() {
   }
   // One room linked both ways is one linked room.
   const n = new Set(links.map((l) => (l.reader_room === roomID ? l.read_room : l.reader_room))).size;
-  $('links-count').textContent = String(n);
-  $('links-open').hidden = n === 0;
+  // 038-AC8: at zero, a room admin gets the way to link one; a plain member has nothing to do there.
+  $('links-label').textContent = n ? 'Linked rooms (' + n + ')' : 'Link a room…';
+  $('links-open').hidden = !n && !meAdmin;
   window.grillLinks = links;
   window.dispatchEvent(new CustomEvent('grill:links', { detail: links }));
 }
@@ -243,6 +250,40 @@ function showMe() {
   $('me').dataset.initials = initials(myName);
   $('me').hidden = false;
   $('me-head').textContent = myName;
+}
+
+// leaveBlocked is why the viewer may not leave, '' when they may: the server refuses a room admin,
+// and refuses the last one stepping down. Admin rights are the profile's: self marks its seats.
+function leaveBlocked() {
+  if (!meAdmin) return '';
+  return participants.some((p) => p.admin && !p.self) ? 'Step down as room admin first' : 'Make someone else room admin, then step down.';
+}
+
+// showLeave offers Leave room in the avatar menu (038-AC10), its reason in words with a way to the
+// admins tab. Redrawn only on a change: a reload must not drop the focus on its link.
+function showLeave() {
+  const why = leaveBlocked();
+  const el = $('leave-why');
+  $('leave-open').hidden = false;
+  $('leave-open').setAttribute('aria-disabled', String(!!why));
+  el.hidden = !why;
+  if (el.dataset.key === why) return;
+  el.dataset.key = why;
+  el.replaceChildren(...(why ? [why.replace(/\.?$/, '.') + ' ', Object.assign(document.createElement('a'), { href: '#manage/admins', textContent: 'Step down' })] : []));
+}
+// Disabled, the menu stays open on its reason.
+$('leave-open').addEventListener('click', (e) => { if (leaveBlocked()) e.stopPropagation(); else leaveRoom(); });
+
+// showProposedIn names the room this one was proposed in at the head of the room menu, linked for
+// its members (038-AC7).
+function showProposedIn(pi) {
+  const el = $('room-proposed-in');
+  el.hidden = !pi;
+  const key = pi ? JSON.stringify([pi.name, pi.member && pi.room]) : '';
+  if (!pi || el.dataset.key === key) return;
+  el.dataset.key = key;
+  const name = pi.member && pi.room ? Object.assign(document.createElement('a'), { href: '/r/' + encodeURIComponent(pi.room), textContent: pi.name }) : pi.name;
+  el.replaceChildren('Proposed in ', name);
 }
 
 // initials takes the first letter of the first two words, "Ana María" → "AM".
@@ -433,7 +474,28 @@ function showFilter() {
     const n = filterCounts[b.dataset.filter];
     if (n !== undefined) b.querySelector('.count').textContent = n ? ' · ' + n : '';
   }
+  queueHidden();
 }
+
+// The filter says how many lines it hides now (038-AC11): counted from the list, as the segment
+// counts reset once seen. Once a frame, as the history comes a line at a time.
+let hiddenQueued = false;
+function queueHidden() {
+  if (hiddenQueued) return;
+  hiddenQueued = true;
+  requestAnimationFrame(() => {
+    hiddenQueued = false;
+    const f = shownFilter();
+    const n = f === 'all' ? 0 : messages.querySelectorAll(f === 'written' ? ':scope > li.msg.voice' : ':scope > li.msg:not(.voice)').length;
+    $('filter-hidden').hidden = !n;
+    if (n) $('filter-hidden-text').textContent = n + (f === 'written' ? ' voice' : ' written') + (n === 1 ? ' line' : ' lines') + ' hidden';
+  });
+}
+// The hint goes with its button: the focus moves to the segment now pressed.
+$('filter-show-all').addEventListener('click', () => {
+  setFilter('all');
+  $('chat-filter').querySelector('[data-filter=all]').focus();
+});
 
 // setFilter shows f; keep, for a segment click only, makes it the stored choice.
 function setFilter(f, keep) {
@@ -555,6 +617,7 @@ function addMessage(m) {
   const list = m.kind === 'voice' && paneShows() ? voiceLines : messages;
   const li = renderMessage(m);
   list.append(li);
+  if (filterHides(m.kind)) queueHidden();
   stick(list);
   hear(m, li);
   if (m.id === jumpTo) jump(m.id);
@@ -1021,10 +1084,13 @@ function agentError(text) {
   if (!r.width || r.left < z.left - 0.5 || r.right > z.right + 0.5) showNotice(text);
 }
 
-function explain(title, text) {
+function explain(title, text, ask = false) {
   $('why-title').textContent = title;
   $('why-text').textContent = text;
-  $('why').showModal();
+  $('why-ask').hidden = !ask;
+  // The hand-off's fallback replaces the reason already shown: its hidden button held the focus.
+  if ($('why').open) $('why').querySelector('[type=submit]').focus();
+  else $('why').showModal();
 }
 
 function showNotice(text) {
@@ -1292,13 +1358,13 @@ $('msg-edit').addEventListener('click', () => {
 });
 $('msg-delete').addEventListener('click', () => { if (menuFor) deleteMessage(menuFor.m); });
 
-// The Preact panels say what they did through a toast too (006-AC15).
-addEventListener('grill:toast', (e) => toast(e.detail));
+// The Preact panels say what they did through a toast too (006-AC15); open is a link to where it went.
+addEventListener('grill:toast', (e) => (typeof e.detail === 'string' ? toast(e.detail) : toast(e.detail.text, e.detail.open ? { text: 'Open', href: e.detail.open } : undefined)));
 // A revoke from Room settings may have cut people off: People and the empty-chat card follow.
 addEventListener('grill:revoked', () => loadRoom().catch(console.error));
 
-// toast says what an action did, with at most one action of its own (005-AC39); onEnd runs when it
-// goes, undone or not.
+// toast says what an action did, with at most one action of its own (005-AC39), a button or a
+// {text, href} link; onEnd runs when it goes, undone or not.
 function toast(text, action, onEnd) {
   const el = document.createElement('div');
   el.className = 'toast';
@@ -1310,7 +1376,8 @@ function toast(text, action, onEnd) {
     if (!$('toasts').children.length && $('toasts').matches(':popover-open')) $('toasts').hidePopover();
     if (onEnd) onEnd(undone);
   };
-  if (action) {
+  if (action?.href) el.append(Object.assign(document.createElement('a'), { className: 'btn btn-ghost', href: action.href, textContent: action.text }));
+  else if (action) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'btn-ghost';
@@ -1429,6 +1496,15 @@ function copyField(input) {
   navigator.clipboard.writeText(input.value).then(() => toast('Copied'), () => input.select());
 }
 
+// askToRun copies the hand-off message (038-AC3).
+function askToRun() {
+  const text = 'Can you run the AI for our grill-room room? Open ' + $('host-room-link').value + ', then click the room\'s name › Run the AI on my computer.';
+  // A refused clipboard shows the message to copy by hand.
+  (navigator.clipboard?.writeText(text) ?? Promise.reject()).then(() => toast('Message copied.'), () => explain('Ask someone to run it', text));
+}
+$('why-ask').addEventListener('click', askToRun);
+$('host-ask').addEventListener('click', askToRun);
+
 // The join page leaves the recovery link of a profile it just created. This tab keeps it for the
 // user menu's "Use on another device" until its holder says they saved it (005-AC32); the server
 // keeps only its hash, so once gone it is gone.
@@ -1495,7 +1571,7 @@ const textScales = { s: 0.875, m: 1, l: 1.125, xl: 1.25 };
 const textSizeKey = 'grill-room-text-size';
 let textSizes = {};
 function applyTextSizes(sizes) {
-  textSizes = sizes && typeof sizes === 'object' ? sizes : {};
+  textSizes = sizes && typeof sizes === 'object' && !Array.isArray(sizes) ? sizes : {};
   for (const area of ['chat', 'transcript']) document.body.style.setProperty(`--${area}-scale`, String(textScales[textSizes[area]] || 1));
   for (const r of $('text-size').querySelectorAll('input')) r.checked = (textSizes[r.name] || 'm') === r.value;
   fitBody();
@@ -2029,7 +2105,7 @@ async function loadAnnotations() {
   if (!d) return;
   const res = await netFetch(docURL(d.id, '/annotations'));
   if (res.status === 401) return;
-  if (!res.ok) throw new Error('annotations: HTTP ' + res.status);
+  if (!res.ok) throw new Error('notes: HTTP ' + res.status);
   const list = await res.json();
   // The viewer moved on while this was in flight.
   if (!openDoc || openDoc.id !== d.id) return;
@@ -2686,11 +2762,15 @@ function personaState(p) {
   return { cls: 'on', word: 'ready', label: p.name + ' ready' };
 }
 
+// noOneRuns is when the room has no AI host at all, not one whose app is away.
+const noOneRuns = () => !agent.online && !participants.some((x) => x.id === agent.host_participant_id);
+
 // whyNot says why a pill does nothing on a press, or '' when it asks (005-AC35): a title tooltip
 // never shows on touch, so a press opens the reason instead.
 function whyNot(p, st) {
   const host = participants.find((x) => x.id === agent.host_participant_id);
-  if (!agent.online) return host ? host.name + '\'s AI host app is not connected: ' + p.name + ' answers once it is.' : 'No one runs the AI for this room yet. Anyone can: click the room\'s name › Run the AI on my computer.';
+  if (noOneRuns()) return 'No one runs the AI for this room yet. Anyone can: click the room\'s name › Run the AI on my computer.';
+  if (!agent.online) return host.name + '\'s AI host app is not connected: ' + p.name + ' answers once it is.';
   if (!canPress()) return 'Only ' + (host ? host.name : 'the AI host') + ' can let you ask ' + p.name + '. Ask them to tick "Can ask the AI" next to your name. You can still mention @' + p.name + ' in a message.';
   if (st.cls === 'pending') return p.name + ' waits for the AI host\'s approval.';
   if (st.cls === 'queued') return p.name + ' already waits for its turn.';
@@ -2771,7 +2851,7 @@ function askPersona(id) {
   const p = personaByID(id);
   if (!p) return;
   const why = whyNot(p, personaState(p));
-  if (why) return explain(p.badge + ' ' + p.name, why);
+  if (why) return explain(p.badge + ' ' + p.name, why, noOneRuns());
   pressPersona(id, false);
 }
 
@@ -2874,6 +2954,12 @@ function renderPersonaCard() {
   ask.id = 'persona-card-ask';
   edit.id = 'persona-card-edit';
   foot.append(ask, edit);
+  if (noOneRuns()) {
+    // A pill's tip is a tooltip: its card carries the hand-off instead (038-AC3).
+    const handOff = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-secondary', id: 'persona-card-handoff', textContent: 'Ask someone to run it' });
+    handOff.addEventListener('click', askToRun);
+    foot.append(handOff);
+  }
   parts.push(foot);
   card.replaceChildren(...parts);
   if (focused) $(focused)?.focus();
@@ -2904,7 +2990,7 @@ async function loadVoices() {
 function renderAgent() {
   hidePairingOnceConnected();
   // The app's page is on this computer only when one of my apps is connected (daemon-r2).
-  $('host-app-open').hidden = docsMode || !agent.daemons.some((d) => String(d.participant_id) === myID);
+  $('host-app-open').hidden = docsMode || mobileOS || !agent.daemons.some((d) => String(d.participant_id) === myID);
   const bar = $('persona-buttons');
   const kept = new Map([...bar.children].map((b) => [b.dataset.id, b]));
   const buttons = agent.personas.map((p) => {
@@ -3303,7 +3389,7 @@ function personaForm(p) {
     grid(field('Name', input('name', p.name, { maxLength: 30, required: true })),
       field('Badge', input('badge', p.badge, { maxLength: 8, required: true })),
       field('Colour', input('colour', p.colour, { type: 'color' }))),
-    field('Persona text', text), ...(ttsOn ? [voiceBlock(p, input)] : []));
+    field('Persona text', text), ttsOn ? voiceBlock(p, input) : voiceUnavailable());
   const use = contextUse(p);
   const model = panel('model',
     grid(field('Model', picker('model', agent.models, p.model)), field('Effort', picker('effort', agent.efforts, p.effort)),
@@ -3585,7 +3671,9 @@ function skillsBlock(p) {
   }
   const offered = skillLib.skills.filter((x) => !(p.skills || []).some((k) => k.skill_id === x.id));
   if (!offered.length) {
-    box.append(Object.assign(document.createElement('p'), { className: 'hint', textContent: 'Upload skills from your profile page.' }));
+    const hint = Object.assign(document.createElement('p'), { className: 'hint' });
+    hint.append('Add a skill on ', Object.assign(document.createElement('a'), { href: '/profile#skills', textContent: 'your profile page' }), '.');
+    box.append(hint);
     return box;
   }
   const add = document.createElement('div');
@@ -3707,7 +3795,9 @@ function pluginsBlock(p) {
   }
   box.append(legend);
   if (!plugins.length) {
-    box.append(Object.assign(document.createElement('p'), { className: 'empty', textContent: 'No plugins in this room yet. A room admin adds them in Room settings › Plugins.' }));
+    const empty = Object.assign(document.createElement('p'), { className: 'empty' });
+    empty.append('No plugins in this room yet. A room admin adds them in ', Object.assign(document.createElement('a'), { href: '#manage/plugins', textContent: 'Room settings › Plugins' }), '.');
+    box.append(empty);
     return box;
   }
   box.append(list);
@@ -3720,6 +3810,14 @@ function pluginsBlock(p) {
 
 // voiceBlock is the persona in the call (013-AC26, AC27, AC37): whether it speaks, its voice, each
 // with a sample and its credit, and its rate.
+// voiceUnavailable keeps the call's place on a server without speech (038-AC12); voiceFields then sends nothing.
+function voiceUnavailable() {
+  const box = Object.assign(document.createElement('fieldset'), { className: 'persona-voice' });
+  box.append(Object.assign(document.createElement('legend'), { textContent: 'In the call' }),
+    Object.assign(document.createElement('p'), { className: 'empty unavailable', textContent: 'Not available on this server' }));
+  return box;
+}
+
 function voiceBlock(p, input) {
   const box = document.createElement('fieldset');
   box.className = 'persona-voice';
@@ -4029,7 +4127,7 @@ $('personas-close').addEventListener('click', () => $('personas').close());
 // The persona library picker (035-AC14): Yours, Shared with everyone, Built-in, and what the chosen one does.
 const pickSections = [['Yours', (t) => t.section === 'personal' && t.mine, () => (hasProfile ? 'No personas of yours yet. Save one from a persona\'s ⋯ in a room.'
   : 'Saving personas of your own needs a profile.')],
-  ['Shared with everyone', (t) => t.section === 'instance', () => 'Nobody has shared a persona yet.'], ['Built-in', (t) => t.section === 'builtin', () => '']];
+  ['Shared with everyone on this server', (t) => t.section === 'instance', () => 'Nobody has shared a persona yet.'], ['Built-in', (t) => t.section === 'builtin', () => '']];
 let pickOpener = null;
 
 // renderRoomFull marks the sheet's Add a persona and the picker's Add at the room's limit (035-AC15):
@@ -4225,7 +4323,7 @@ function audioState(id) {
   const pr = presence.get(id);
   const vp = voiceParticipant(id);
   const audio = !!(pr && pr.audio) || !!vp;
-  if (!audio) return { key: 'none', icon: '', text: 'Not in the audio' };
+  if (!audio) return { key: 'none', icon: '', text: 'Not in the call' };
   const mic = vp ? vp.isMicrophoneEnabled : !!(pr && pr.mic);
   const muted = !mic && (vp ? !!vp.getTrackPublication(LivekitClient.Track.Source.Microphone) : !!(pr && pr.muted));
   if (mic) return { key: 'live', icon: 'mic', text: 'Mic live' };
@@ -4265,10 +4363,10 @@ function personTags(p, id, isHere) {
   // Their own browser writes their voice down instead of the server (010-AC12).
   if (presence.get(id)?.device_stt) t.transcribed = ['transcribed-device', 'Their device transcribes this voice', 'Their device transcribes this voice'];
   else if (transcribed.has(id)) t.transcribed = ['transcribed', 'The transcription hears this voice', 'The transcription hears this voice'];
-  const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the audio' };
+  const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the call' };
   const deaf = isHere && !!presence.get(id)?.deaf;
   // One icon per square: deafened shows its own alone, its audio state in the tooltip.
-  t.audio = [deaf ? 'deafened' : st.icon, '', st.text + (deaf ? ', deafened: hears nobody' : ''), st.key, deaf];
+  t.audio = [deaf ? 'deafened' : st.icon, '', st.text + (deaf ? ', stopped hearing the call' : ''), st.key, deaf];
   return t;
 }
 
@@ -4302,7 +4400,7 @@ function personActions(p, id) {
   if (other && meAdmin) {
     acts.push({ label: 'Remove from room…', disabled: p.admin ? 'Remove their room admin role first' : '', run: () => removePerson(p) });
   }
-  if (!other) acts.push({ label: 'Leave room…', disabled: meAdmin ? 'Step down as room admin first' : '', run: leaveRoom });
+  if (!other) acts.push({ label: 'Leave room…', disabled: leaveBlocked(), run: leaveRoom });
   return acts;
 }
 
@@ -4429,8 +4527,8 @@ function personRoles(p, id) {
 }
 
 function cardAudio(id) {
-  if (id !== myID && !presence.get(id)?.here) return 'not in the audio';
-  if (presence.get(id)?.deaf) return 'room muted';
+  if (id !== myID && !presence.get(id)?.here) return 'not in the call';
+  if (presence.get(id)?.deaf) return 'stopped hearing the call';
   return audioState(id).text.toLowerCase();
 }
 
@@ -4651,7 +4749,7 @@ function askHand(up) {
 $('hand-raise').addEventListener('click', () => askHand($('hand-raise').getAttribute('aria-pressed') !== 'true'));
 
 // tagSpan is one badge square, or an empty one keeping its column. The audio one is always there
-// with its state, for the people that are not in the audio too.
+// with its state, for the people that are not in the call too.
 // el, when given, is the column's square from the last render, updated in place: an open tip stays
 // on it.
 function tagSpan(col, t, el = document.createElement('span')) {
@@ -4738,13 +4836,10 @@ function showSTT(st) {
   sttButton();
   sttEngines = st.engines || [];
   showCredit();
-  if (sttGlossary !== !!st.glossary) {
-    sttGlossary = !!st.glossary;
-    showManage();
-  }
-  // The Room settings sheet (admin/room-admin.js) shows its glossary tab from the same state, and
+  sttGlossary = !!st.glossary;
+  // The Room settings sheet (admin/room-admin.js) fills its glossary tab from the same state, and
   // stt/device.js offers device transcription from it, the credit included (010-AC8).
-  window.grillSTT = { glossary: sttGlossary, device: st.device || null };
+  window.grillSTT = { glossary: sttGlossary, available: !!st.available, device: st.device || null };
   window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
 }
 let sttDown = false;
@@ -4759,8 +4854,7 @@ window.addEventListener('grill:device-stt', showCredit);
 // sttGlossary is true while a transcription worker reads room glossaries (007-AC14).
 let sttGlossary = false;
 
-// showManage offers Room settings to every member: each reads the room's plugins there (009-AC5),
-// and the glossary while one is in use (005-AC23).
+// showManage offers Room settings to every member: each reads the room's plugins there (009-AC5).
 function showManage() {
   $('manage-open').hidden = false;
 }
@@ -4844,8 +4938,8 @@ function voiceButtons() {
   $('voice-screen').setAttribute('aria-label', screen ? 'Stop sharing my screen' : 'Share my screen');
   if (!on && $('voice-menu').matches(':popover-open')) $('voice-menu').hidePopover();
   iconToggle('voice-deaf', on && deaf, on && deaf ? 'volume-off' : 'volume', on && deaf
-    ? "Room muted: you don't hear the others. Press to hear them again."
-    : 'Mute the room: stop hearing the others.');
+    ? "You stopped hearing the call. Press to hear the others again."
+    : 'Stop hearing the call: the others go silent for you.');
   sttButton();
   const muted = on && !voice.localParticipant.isMicrophoneEnabled;
   // stt/device.js taps the live mic only: muted, or deafened without keeping it, it hears nothing (010-AC9).
@@ -4892,82 +4986,36 @@ window.addEventListener('pagehide', () => { if (events) beat(true); });
 for (const ev of ['focus', 'blur']) window.addEventListener(ev, () => { if (events) beat(); });
 document.addEventListener('visibilitychange', () => { if (events) beat(); });
 
-// Web Push (005-AC24): one browser subscription, registered for each room where the participant
-// turns notifications on. Turning them off here leaves the other rooms' alone.
-const pushKey = 'grill-room-push:' + roomID;
-const pushable = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
-const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const homeScreen = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+// Web Push (005-AC24), shared with /profile in push.js. Turning notifications off here leaves the
+// other rooms' alone.
+const { pushable } = window.grillPush;
+const pushKey = window.grillPush.key(roomID);
 
 function pushStatus(text) {
   $('push-status').textContent = text;
 }
 
-// pushOn: turned on here, and the browser still allows notifications; revoked in its settings, the
-// toggle offers to turn them on again.
-const pushOn = () => localStorage.getItem(pushKey) === '1' && pushable && Notification.permission === 'granted';
-
-// pushRooms records in Cache Storage the rooms with notifications on and their "every line"
-// choice: the service worker renews the subscription for each (sw.js resubscribe).
-async function pushRooms(edit) {
-  const cache = await caches.open('grill-room-push');
-  const saved = await cache.match('/rooms');
-  const rooms = saved ? await saved.json() : {};
-  edit(rooms);
-  await cache.put('/rooms', Response.json(rooms));
-}
+const pushOn = () => window.grillPush.on(roomID);
 
 function renderPush() {
   const on = pushOn();
-  $('push-hint').hidden = !(ios && !homeScreen) && pushable;
-  $('push-hint').textContent = ios && !homeScreen
-    ? 'On iPhone and iPad, notifications work once the room is on the home screen: Share, Add to Home Screen, then open it from there.'
-    : 'This browser does not support notifications.';
+  $('push-hint').hidden = !window.grillPush.hint;
+  $('push-hint').textContent = window.grillPush.hint;
   $('push-toggle').hidden = !pushable;
   $('push-toggle').textContent = on ? 'Turn off notifications' : 'Turn on notifications';
   $('push-all-label').hidden = !pushable || !on;
   $('push-all').checked = localStorage.getItem(pushKey + ':all') === '1';
 }
 
-async function pushSubscription(create) {
-  const reg = await navigator.serviceWorker.register('/sw.js');
-  await navigator.serviceWorker.ready;
-  const sub = await reg.pushManager.getSubscription();
-  if (!create) return sub;
-  const res = await netFetch(api + '/push');
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  const key = Uint8Array.from(atob((await res.json()).key.replaceAll('-', '+').replaceAll('_', '/')), (c) => c.charCodeAt(0));
-  const held = sub && sub.options.applicationServerKey;
-  if (sub && held && key.join() !== new Uint8Array(held).join()) {
-    // Made with another VAPID key, as after the instance's key changed: push services refuse it.
-    await sendJSON('DELETE', api + '/push', { subscription: { endpoint: sub.endpoint } });
-    await sub.unsubscribe();
-    const fresh = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-    // The other rooms turned on in this browser held the old one too.
-    reg.active.postMessage({ resubscribe: fresh.toJSON() });
-    return fresh;
-  }
-  return sub || reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-}
+const savePush = () => window.grillPush.save(roomID, sendJSON);
 
-async function savePush() {
-  const sub = await pushSubscription(true);
-  const all = $('push-all').checked;
-  const done = await sendJSON('PUT', api + '/push', { subscription: sub.toJSON(), all_messages: all });
-  if (!done) return;
-  localStorage.setItem(pushKey, '1');
-  await pushRooms((rooms) => { rooms[roomID] = all; });
-}
-
-const pushDenied = 'The browser did not allow notifications: allow them in its site settings, then try again.';
+const pushDenied = window.grillPush.denied;
 // The explainer comes before the browser's permission request (008-AC10), and once, unprompted, after the
 // first message of a page load (008-AC11). Dismissing it snoozes the offer for 14 days in this
 // browser; the Notifications sheet still reaches it.
-const pushSnoozeKey = 'grill-room-push-snooze';
-const pushSnooze = 14 * 24 * 3600e3;
 let pushAccepted = false;
 let pushOffered = false;
-const snoozePush = () => localStorage.setItem(pushSnoozeKey, String(Date.now() + pushSnooze));
+const { snooze: snoozePush, snoozeKey: pushSnoozeKey } = window.grillPush;
 
 // pushReport says how turning on went: in the Notifications sheet, and in a toast when the
 // explainer came unprompted.
@@ -4985,13 +5033,8 @@ function turnOnPush() {
 $('push-toggle').addEventListener('click', () => {
   pushStatus('');
   if (pushOn()) {
-    (async () => {
-      const sub = await pushSubscription(false);
-      if (sub) await sendJSON('DELETE', api + '/push', { subscription: { endpoint: sub.endpoint } });
-      localStorage.removeItem(pushKey);
-      await pushRooms((rooms) => { delete rooms[roomID]; });
-      pushStatus('Notifications off for this room.');
-    })().catch((err) => pushStatus('Notifications: ' + err.message)).finally(renderPush);
+    window.grillPush.off(roomID, sendJSON).then(() => pushStatus('Notifications off for this room.'))
+      .catch((err) => pushStatus('Notifications: ' + err.message)).finally(renderPush);
   } else if (Notification.permission === 'granted') {
     // Allowed already, from another room: nothing to ask.
     turnOnPush();
@@ -5024,7 +5067,7 @@ $('push-explain').addEventListener('close', () => {
 function offerPush() {
   if (pushOffered) return;
   pushOffered = true;
-  if (!pushable || docsMode || chatMode || (ios && !homeScreen) || Notification.permission !== 'default') return;
+  if (window.grillPush.hint || docsMode || chatMode || Notification.permission !== 'default') return;
   if (localStorage.getItem(pushKey) === '1' || Date.now() < Number(localStorage.getItem(pushSnoozeKey) || 0)) return;
   if (!document.querySelector('dialog[open]')) $('push-explain').showModal();
 }
@@ -5283,7 +5326,7 @@ async function joinVoice() {
       if (voice !== room) return;
       cleanupVoice(room);
       // Leaving on purpose is CLIENT_INITIATED; anything else, a kick included, is worth saying.
-      if (reason !== LK.DisconnectReason.CLIENT_INITIATED) voiceError('You were disconnected from the audio.');
+      if (reason !== LK.DisconnectReason.CLIENT_INITIATED) voiceError('You were disconnected from the call.');
     });
     voice = room;
     await room.connect(url, token);
@@ -5325,7 +5368,7 @@ async function joinVoice() {
     // A Leave pressed while connecting rejects connect(): nothing to report then.
     if (room && voice !== room) return;
     leaveVoice();
-    voiceError('Could not join the audio: ' + err.message);
+    voiceError('Could not join the call: ' + err.message);
   } finally {
     $('voice-join').disabled = false;
   }
@@ -5588,7 +5631,7 @@ window.grillDiag = {
     return { identity: p.identity, source: pub.source, subscribed: pub.isSubscribed, width };
   }))),
   voice: async () => {
-    if (!voice) return { state: 'not in the audio', stats: null };
+    if (!voice) return { state: 'not in the call', stats: null };
     const lp = voice.localParticipant;
     // A track's own report holds its transport and the candidate pair in use.
     const track = lp.getTrackPublication(LivekitClient.Track.Source.Microphone)?.track
@@ -6240,8 +6283,8 @@ async function showPairing(id) {
     return;
   }
   const p = await res.json();
-  text.textContent = 'An agent daemon asks to run the agent for you in this room, with your Claude subscription. ' +
-    'Approve only if your daemon page shows the code ' + p.code + '.';
+  text.textContent = 'An AI host app asks to run the AI for you in this room, with your Claude subscription. ' +
+    'Approve only if your AI host app shows the code ' + p.code + '.';
   const answer = async (approve) => {
     $('pairing-actions').hidden = true;
     // Before the request: the approved app may announce itself before the answer is read.
@@ -6253,7 +6296,7 @@ async function showPairing(id) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) text.textContent = data.error || 'Pairing failed: HTTP ' + r.status;
-    else text.textContent = approve ? 'Daemon paired. Its page shows it connected within a few seconds.' : 'Pairing denied.';
+    else text.textContent = approve ? 'AI host app paired. It shows the room connected within a few seconds.' : 'Pairing denied.';
     pairingApproved = approve && r.ok;
     hidePairingOnceConnected();
   };
@@ -6292,7 +6335,7 @@ async function showHostAgent() {
     const target = ($('host-os').value === 'darwin' ? 'darwin' : 'linux') + '-' + $('host-arch').value;
     const link = $('host-download');
     link.href = '/download/grill-room-daemon-' + target;
-    link.textContent = 'Download grill-room-daemon ' + rel.version + ' (' + target + ')';
+    link.textContent = 'Download the AI host app ' + rel.version + ' (' + target + ')';
     $('host-sha').textContent = 'sha256 ' + (rel.sha256[target] || '');
     $('host-wsl').hidden = $('host-os').value !== 'wsl';
     const file = '~/Downloads/grill-room-daemon-' + target;
@@ -6315,6 +6358,12 @@ async function showHostAgent() {
 $('host-room-link').value = location.origin + roomPath;
 $('host-room-copy').addEventListener('click', () => copyField($('host-room-link'), $('host-room-copy')));
 $('host-open').hidden = docsMode;
+// No download and no loopback page on a phone or tablet: only the hand-off (038-AC2).
+if (mobileOS) {
+  $('host-intro').textContent = 'Running the AI needs a computer with Docker.';
+  $('host-has-app').hidden = true;
+  $('diag-host-app').closest('section').hidden = true;
+}
 
 function fitViewport() {
   const s = document.body.style;
@@ -6364,7 +6413,7 @@ firstLoad().then((ok) => {
     history.replaceState(null, '', location.pathname + (query.size ? '?' + query : '') + location.hash);
     $('invite-open').click();
   }
-  showHostAgent().catch(console.error);
+  if (!mobileOS) showHostAgent().catch(console.error);
   const pair = new URLSearchParams(location.search).get('pair');
   if (pair) showPairing(pair).catch(console.error);
 }).catch(console.error);

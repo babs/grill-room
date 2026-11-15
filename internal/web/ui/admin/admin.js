@@ -5,7 +5,7 @@ import { render } from 'preact';
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
-import { RoomPanel, AdminRows, RowMenu, Meter, TabBar, fetchJSON, roomTabs, size, when, ago, onInput, formAction, icon, uaName } from './room-panel.js';
+import { RoomPanel, AdminRows, Blocked, RowMenu, Meter, TabBar, fetchJSON, roomTabs, size, when, ago, onInput, formAction, icon, uaName } from './room-panel.js';
 
 /**
  * @typedef {{id: number, created_at: string, last_used_at: string, expires_at: string, user_agent: string, ip: string,
@@ -329,13 +329,13 @@ function Rooms() {
           <span class="cell">${hostPill(r)}</span>
           <span class="cell storage"><${Meter} used=${r.used} max=${r.quota} label=${size(r.used) + ' of ' + size(r.quota)}/> <span class="used">${size(r.used)} / ${size(r.quota)}</span></span></div>
         <div class="actions"><${RowMenu} id=${'room-menu-' + r.id} label=${'More actions on ' + r.name} items=${[
-          ['Manage', go(r, 'general')], ['Invites', go(r, 'invites')], ['Admins', go(r, 'admins')], ['Export', go(r, 'export')]]}/></div>
+          ['Manage', go(r, 'general')], ['Invites', go(r, 'invites')], [roomTabs.admins, go(r, 'admins')], ['Export', go(r, 'export')]]}/></div>
       </li>`)}</ul></div>${q && !rooms.length && html`<p class="hint" id="rooms-none">No room matches "${search.trim()}".</p>`}` : html`<p class="empty">No room yet.</p>`}`;
 }
 
 /**
  * RoomAdmins appoints and removes room admins among the room's participants with a profile: a room
- * the super-admin created starts with none (004-AC8). Same rows as the room's own Admins tab.
+ * the super-admin created starts with none (004-AC8). Same rows as the room's own Members and admins tab.
  * @param {{base: string}} props
  */
 function RoomAdmins({ base }) {
@@ -350,12 +350,13 @@ function RoomAdmins({ base }) {
   return html`
     <p class="hint">Room admins rename the room and its participants, manage its invites, appoint other admins, export and delete it. Only participants with a profile can be appointed. Make AI host, in a row's ⋯, shows for those whose AI host app is connected and can host.</p>
     ${list && (list.length ? html`<${AdminRows} people=${list} base=${base} api=${api} show=${show} done=${load} makeHost=${makeHost}/>`
-      : html`<p class="empty">No participant yet.</p>`)}`;
+      : html`<p class="empty">No participant yet.</p>`)}
+    <${Blocked} base=${base} api=${api} show=${show} people=${list}/>`;
 }
 
 /** @type {[string, string][]} */
 const importKinds = [['participants', 'Participants'], ['messages', 'Lines'], ['message_versions', 'Earlier versions'],
-  ['documents', 'Documents'], ['revisions', 'Revisions'], ['uploads', 'Uploads'], ['annotations', 'Annotations'],
+  ['documents', 'Documents'], ['revisions', 'Revisions'], ['uploads', 'Uploads'], ['annotations', 'Notes'],
   ['annotation_messages', 'Thread messages'], ['attachments', 'Attachments'], ['mentions', 'Mentions'], ['personas', 'Personas'], ['skills', 'Skills'],
   ['plugins', 'Plugins'], ['sessions', 'Agent sessions']];
 
@@ -448,7 +449,7 @@ function Profiles() {
   };
   /** @param {Profile} p */
   const unbind = (p) => {
-    window.grillConfirm(`Unbind ${p.name || p.uuid} from the provider?`, 'This signs the person out everywhere: browsers, API tokens, room seats, paired daemons. They come back as a guest through their recovery link or an invite. Delete the profile to keep them out.', 'Unbind')
+    window.grillConfirm(`Unbind ${p.name || p.uuid} from the provider?`, 'This signs the person out everywhere: browsers, API tokens, room seats, paired AI host apps. They come back as a guest through their recovery link or an invite. Delete the profile to keep them out.', 'Unbind')
       .then((yes) => { if (yes) api('DELETE', `/api/admin/profiles/${p.id}/oidc`).then(() => { toast('Profile unbound'); load(); }).catch(show); });
   };
   // Restricted mode adds the sign-in column, and Unbind on a bound profile (021-AC10).
@@ -621,7 +622,7 @@ function MergeSheet({ profiles, from, done }) {
         <div><dt>Room admin, moved</dt><dd>${listed(p.room_admin.merge)}</dd></div>
         <div><dt>API tokens, revoked</dt><dd id="merge-tokens">${p.api_tokens}</dd></div>
       </dl>
-      ${unbound && html`<p id="merge-bound" class="warn">The result is an organisation account: devices signed into ${unbound.name || 'the other profile'} are signed out, its paired daemons removed and their running turn failed.</p>`}
+      ${unbound && html`<p id="merge-bound" class="warn">The result is an organisation account: devices signed into ${unbound.name || 'the other profile'} are signed out, its paired AI host apps removed and their running turn failed.</p>`}
       ${p.over_limits.length > 0 && html`<ul id="merge-limits" class="warn">${p.over_limits.map((o) => html`<li>
         ${limitKinds[o.kind] || o.kind}: ${o.after} after the merge, over the limit of ${o.limit}. The profile keeps them all and adds no more until under it.</li>`)}</ul>`}
     </section>`}

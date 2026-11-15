@@ -102,7 +102,7 @@ test('the toggle shows on a capable desktop only', async ({ browser, request }) 
       continue;
     }
     await expect(toggle(page)).toBeVisible();
-    // Chosen but not in the audio: no engine yet.
+    // Chosen but not in the call: no engine yet.
     expect(await page.evaluate(() => window.grillDeviceSTT.state)).toBe('off');
     await expect(toggle(page).getByRole('checkbox', { name: 'Transcribe on this device' })).not.toBeChecked();
     await expect(said(page)).toHaveText('Downloads 432 MB once');

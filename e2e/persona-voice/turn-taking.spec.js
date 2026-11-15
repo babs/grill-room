@@ -163,7 +163,7 @@ async function join(browser, inv, name, mic) {
   await page.getByRole('button', { name: 'Join the room' }).click();
   await expect(page.locator('#me')).toHaveText(name);
   const inAudio = page.waitForResponse((r) => r.url().endsWith('/presence') && r.request().postDataJSON().audio === true);
-  await page.getByRole('button', { name: 'Join audio' }).click();
+  await page.getByRole('button', { name: 'Join the call' }).click();
   await inAudio;
   return { ctx, page };
 }

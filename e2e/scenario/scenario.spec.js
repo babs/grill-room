@@ -191,8 +191,8 @@ test(plan.name, async ({ request }) => {
           } else {
             // One at a time, as people do: the audio room never empties.
             for (const name of plan.speakers) {
-              await audioItem(pages[name], 'Leave audio');
-              await expect(pages[name].getByRole('button', { name: 'Join audio' })).toBeVisible();
+              await audioItem(pages[name], 'Leave the call');
+              await expect(pages[name].getByRole('button', { name: 'Join the call' })).toBeVisible();
               await joinAudio(pages[name]);
             }
           }

@@ -58,7 +58,7 @@ test('a room admin and the super-admin move the AI host', async ({ browser, requ
 
 // 016-AC9: a room admin removes the AI host; the first other eligible app takes the role, with its
 // line, and the removed host's page ends. 016-AC14, Q2: the super-admin removes from /admin's room
-// view, blocked, and lifts the block from its Invites tab.
+// view, blocked, and lifts the block under the member list (038-AC9).
 test('removing the AI host hands the role to the standby app', async ({ browser, request, baseURL }) => {
   const { room, pages: [alice, bob, carol] } = await roomWith(browser, request, ['Alice', 'Bob', 'Carol']);
   await appointAdmin(alice, request, room.id);
@@ -81,7 +81,6 @@ test('removing the AI host hands the role to the standby app', async ({ browser,
     await confirmSheet(admin, 'Remove');
     await expect(list.locator('> li', { hasText: 'Carol' })).toHaveCount(0);
     await expect(alice.locator('#messages')).toContainText('The admin removed Carol from the room and blocked them from rejoining');
-    await admin.goto(`/admin#rooms/${room.id}/invites`);
     const blocked = admin.locator('#room-panel #blocked');
     await expect(blocked).toContainText('Carol');
     await blocked.getByRole('button', { name: 'Unblock Carol' }).click();

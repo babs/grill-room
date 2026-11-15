@@ -174,7 +174,7 @@ test('persona library: add a library persona with its skill and plugin', async (
     await plus.click();
     const picker = alice.locator('#persona-picker');
     await expect(picker.getByRole('heading', { name: 'Add a persona' })).toBeVisible();
-    await expect(picker.locator('legend')).toHaveText(['Yours', 'Shared with everyone', 'Built-in']);
+    await expect(picker.locator('legend')).toHaveText(['Yours', 'Shared with everyone on this server', 'Built-in']);
     await expect(picker.locator('#persona-preview-none')).toHaveText('Choose a persona to see what it does.');
     await expect(picker.getByRole('button', { name: 'Add', exact: true })).toHaveAttribute('aria-disabled', 'true');
     const mine = picker.getByRole('group', { name: 'Yours' }).getByRole('radio', { name: `${kit}, v1` });

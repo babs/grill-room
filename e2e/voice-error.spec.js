@@ -151,7 +151,7 @@ test('the audio bar: icon toggles with their tips below', async ({ browser, requ
   const me = Number(await page.evaluate(() => myID));
   // A worker transcribes Alice: the transcription toggle carries its dot.
   await playSTT(page, room, { listening: true, transcribed: [me], engines: ['parakeet'] });
-  // By keyboard: a click would leave the pointer over whichever icon takes Join audio's place.
+  // By keyboard: a click would leave the pointer over whichever icon takes Join the call's place.
   await page.locator('#voice-join').focus();
   await page.keyboard.press('Enter');
   for (const sel of bar) {
@@ -186,10 +186,10 @@ test('the audio bar: icon toggles with their tips below', async ({ browser, requ
   await expect(page.locator('#voice-screen')).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(deaf).toBeFocused();
-  await tipUnder(page, deaf, 'Mute the room: stop hearing the others.');
+  await tipUnder(page, deaf, 'Stop hearing the call: the others go silent for you.');
   await page.keyboard.press('Enter');
   await expect(deaf).toHaveAttribute('aria-pressed', 'true');
-  await expect(deaf).toHaveAttribute('data-tip', /Press to hear them again/);
+  await expect(deaf).toHaveAttribute('data-tip', /Press to hear the others again/);
   await page.keyboard.press('Enter');
   await expect(deaf).toHaveAttribute('aria-pressed', 'false');
   await page.keyboard.press('Tab');
@@ -213,7 +213,7 @@ test('the audio bar: icon toggles with their tips below', async ({ browser, requ
   await expect(page.locator('#voice-join')).toBeVisible();
   for (const sel of bar) await expect(page.locator(sel)).toBeHidden();
 
-  // On a phone the bar fits the header row, every target 44 px; Leave audio and the transcription
+  // On a phone the bar fits the header row, every target 44 px; Leave the call and the transcription
   // toggle move into ⋯ so the room's name keeps its first word (030-AC14).
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator('#voice-join').click();
@@ -236,7 +236,7 @@ test('the audio bar: icon toggles with their tips below', async ({ browser, requ
   }
   await page.locator('#voice-more').click();
   await expect(menu.getByRole('checkbox', { name: 'Transcribe my voice', exact: true })).toBeChecked();
-  await menu.getByRole('button', { name: 'Leave audio', exact: true }).click();
+  await menu.getByRole('button', { name: 'Leave the call', exact: true }).click();
   await expect(page.locator('#voice-join')).toBeVisible();
 });
 

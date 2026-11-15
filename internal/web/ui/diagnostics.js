@@ -68,7 +68,7 @@ export function where(i, mode) {
     : i.failed ? 'the engine failed on this device, until the page reloads'
     : !i.on ? 'transcription on this device is off'
     : i.untapped ? "this browser can't pass your microphone to the engine"
-    : !i.inAudio ? 'you are not in the audio'
+    : !i.inAudio ? 'you are not in the call'
     : i.delayed ? 'waiting a few seconds after the page reload'
     : i.live && mode === 'slow' ? 'this device is too slow right now'
     : 'starting on this device';

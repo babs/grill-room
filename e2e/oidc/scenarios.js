@@ -347,7 +347,7 @@ export function restricted(provider, db) {
     await page.goto('/admin#profiles');
     await rowAction(page.locator('#profile-' + lena), /^Merge Lena into another profile/);
     const sheet = page.locator('#merge-sheet');
-    const warning = 'The result is an organisation account: devices signed into Lena are signed out, its paired daemons removed and their running turn failed.';
+    const warning = 'The result is an organisation account: devices signed into Lena are signed out, its paired AI host apps removed and their running turn failed.';
     await sheet.locator('#merge-keep').selectOption(String(kira));
     await expect(sheet.locator('#merge-bound')).toHaveText(warning);
     await sheet.locator('#merge-swap').click();

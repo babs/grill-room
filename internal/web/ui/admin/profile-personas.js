@@ -18,7 +18,7 @@ import { RowMenu, triggers, triggerOf, triggerText } from './starters.js';
  */
 
 /** The sections in the order the tab lists them (035-AC1). */
-const sections = /** @type {const} */ ([['personal', 'Yours'], ['instance', 'Shared with everyone'], ['builtin', 'Built-in']]);
+const sections = /** @type {const} */ ([['personal', 'Yours'], ['instance', 'Shared with everyone on this server'], ['builtin', 'Built-in']]);
 /** @type {Record<string, string>} */
 const emptyText = {
   personal: 'No personas of yours yet. Save one from a room, or duplicate one below.',
@@ -57,7 +57,7 @@ function actionsFor(t, say, reload, gone = reload) {
   // 035-AC5: sharing asks first; stopping does not, rooms keep their copies either way.
   out.push(t.section === 'personal'
     ? ['Share with everyone', () => window.grillConfirm('Share ' + t.title + ' with everyone?',
-      'Everyone on this server will see ' + t.title + ' and can add it to their rooms. Rooms keep their copies if you stop sharing.', 'Share')
+      'Every profile on this server will see ' + t.title + ' and can add it to their rooms. Rooms keep their copies if you stop sharing.', 'Share')
       .then((yes) => { if (yes) fetchJSON('POST', base + '/share').then(() => { say('Shared ' + t.title + ' with everyone.'); reload(); }).catch(fail); })]
     : ['Stop sharing', () => fetchJSON('POST', base + '/unshare').then(() => { say('Stopped sharing ' + t.title + '.'); reload(); }).catch(fail)]);
   out.push(['Delete…', () => window.grillConfirm('Delete ' + t.title + '?', 'Rooms keep the personas they added from it.', 'Delete')
@@ -243,7 +243,8 @@ function Edit({ v, latest, done, cancel, conflict, reopen, reopened }) {
       <label>Description<input name="description" maxlength="200" value=${f.description} onInput=${text('description')} aria-describedby="persona-lib-desc-hint"/></label>
       <p class="hint" id="persona-lib-desc-hint">One line, shown in the library and the room's picker.</p>
       <label>Persona text<textarea name="text" rows="6" required maxlength="8000" value=${f.text} onInput=${text('text')}></textarea></label>
-      ${/* Without speech on this server the call fields hide, as on the room's persona sheet (035-AC3). */ ''}
+      ${/* Without speech on this server the call fields say so, as on the room's persona sheet (038-AC12). */ ''}
+      ${!v.tts && html`<fieldset class="persona-voice"><legend>In the call</legend><p class="empty unavailable">Not available on this server</p></fieldset>`}
       ${v.tts && html`<fieldset class="persona-voice"><legend>In the call</legend>
         <label class="check"><input type="checkbox" name="speaks" checked=${f.speaks} onChange=${check('speaks')}/> Speaks in the call</label>
         <p class="hint">After its turns it says a short line while someone is in the call. Each listener can mute it for themselves.</p>
