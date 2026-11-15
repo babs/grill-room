@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, fakeDaemon, appointAdmin, agentState, patchPersona, noOverflow, smallTargets, patchJSON } from './helpers.js';
+import { roomWith, fakeDaemon, appointAdmin, agentState, patchPersona, noOverflow, smallTargets, patchJSON, openMenu } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const lines = {
@@ -24,8 +24,7 @@ const can = (page) => page.locator('#help-can [data-row]').evaluateAll((els) => 
 }));
 
 async function openHelp(page) {
-  await page.locator('#me').click();
-  await page.locator('#me-menu').getByRole('link', { name: 'Help', exact: true }).click();
+  await (await openMenu(page, 'me')).getByRole('link', { name: 'Help', exact: true }).click();
   await expect(sheet(page)).toBeVisible();
   await expect(page).toHaveURL(/#help$/);
   await expect(sheet(page).getByRole('heading', { name: 'Help', exact: true })).toBeVisible();

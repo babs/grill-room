@@ -828,6 +828,7 @@ CI also runs a flake gate, `tools/flake-gate.sh`: on Linux and Windows, the Go t
 - Repeat runs happen in CI, never on a workstation.
 - The browsers of `e2e/playwright.config.js`, and of the configs that import it (anon, oidc, twopod, keycloak), see only the DejaVu and Noto Color Emoji fonts in `e2e/fonts/` (`fonts.conf`, through `FONTCONFIG_FILE`): a width measures the same on every machine. `e2e/fonts.spec.js` checks it.
 - After a `goto` or a `reload`, assert something the page draws before asserting an absence: `toHaveCount(0)` or `toBeHidden()` holds before the page has drawn anything.
+- A header menu opens through `openMenu` or `menuItem` (`e2e/helpers.js`): a click on its button while the page is still drawing the room can leave it shut.
 - The first `fill` on a persona sheet just opened goes through `editPersona` (`e2e/helpers.js`): the form is redrawn once when the skills read comes back, and a fill caught by that redraw is lost.
 - A route that rewrites the server's JSON answer goes through `patchJSON` (`e2e/helpers.js`): a reload can drop the request or dispose its answer mid-body. A state the room's answer carries (a profile, upload rules) is set through that answer, never in a page variable: each room event reloads the room and sets it back.
 - A spec whose AI host app runs agent turns goes in `sandboxSpecs` in `e2e/playwright.config.js`. Chrome fails the requests it is opening whenever the host's interfaces change, and each sandbox adds and removes Docker networks, so those specs run one at a time, after the others.

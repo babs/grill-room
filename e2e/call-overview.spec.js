@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, fakeCall, appointAdmin, agentState, patchPersona, noOverflow, smallTargets, editPersona } from './helpers.js';
+import { roomWith, fakeCall, appointAdmin, agentState, patchPersona, noOverflow, smallTargets, editPersona, openMenu } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const absent = 'Not available on this server: the server admin turns it on.';
@@ -13,8 +13,7 @@ const lines = (page, list) => page.locator(`#ov-${list} [data-row]`).evaluateAll
 
 // openFrom opens the overview from the room menu or the Audio options menu.
 async function openFrom(page, which = 'room') {
-  await page.locator(which === 'room' ? '#room-open' : '#voice-more').click();
-  await page.locator(which === 'room' ? '#room-menu' : '#voice-menu').getByRole('link', { name: 'Call and voice-to-text…' }).click();
+  await (await openMenu(page, which === 'room' ? 'room' : 'voice')).getByRole('link', { name: 'Call and voice-to-text…' }).click();
   await expect(sheet(page)).toBeVisible();
   await expect(page).toHaveURL(/#call-overview$/);
   await expect(sheet(page).getByRole('heading', { name: 'Call and voice-to-text' })).toBeVisible();

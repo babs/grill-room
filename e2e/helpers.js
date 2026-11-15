@@ -348,11 +348,21 @@ export async function unfoldTabs(nav) {
   if ((await menu.isVisible()) && (await menu.getAttribute('aria-expanded')) === 'false') await menu.click();
 }
 
-// menuItem picks an item of a header menu (005-AC32): the room's name (room), the user's initials (me)
-// or the audio options (voice).
-export async function menuItem(page, name, which = 'room') {
-  await page.locator({ room: '#room-open', me: '#me', voice: '#voice-more' }[which]).click();
+// openMenu opens a header menu (005-AC32): the room's name (room), the user's initials (me) or the
+// audio options (voice), and returns it. A click on its button while the page is still drawing the
+// room can leave the menu shut: it clicks again until the menu shows.
+export async function openMenu(page, which = 'room') {
   const menu = page.locator({ room: '#room-menu', me: '#me-menu', voice: '#voice-menu' }[which]);
+  await expect(async () => {
+    if (!(await menu.evaluate((m) => m.matches(':popover-open')))) await page.locator({ room: '#room-open', me: '#me', voice: '#voice-more' }[which]).click();
+    await expect(menu).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
+  return menu;
+}
+
+// menuItem picks an item of a header menu (openMenu).
+export async function menuItem(page, name, which = 'room') {
+  const menu = await openMenu(page, which);
   await menu.getByRole(['My rooms and profile', 'Open documents in a new window', 'Open chat in a new window'].includes(name) ? 'link' : 'button', { name, exact: true }).click();
 }
 
