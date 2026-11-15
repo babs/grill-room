@@ -206,7 +206,7 @@ test('a persona proposes a room; a member creates it from the card', async ({ br
     await expect(card(bob).getByRole('button', { name: 'Create…' })).toBeVisible();
     await expect(card(bob).getByRole('button', { name: 'Dismiss' })).toHaveCount(0);
     // The card's buttons keep their control height: a page-wide .link style once shrank them (038).
-    // Measured until it holds: each room reload redraws the open cards (renderProposals).
+    // The card redraws on each room reload: a single read can catch a button already replaced.
     await expect.poll(async () => (await card(bob).getByRole('button', { name: 'Create…' }).boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(36);
     await card(bob).getByRole('button', { name: 'Create…' }).click();
     let sheet = bob.locator('#proposal-sheet');
