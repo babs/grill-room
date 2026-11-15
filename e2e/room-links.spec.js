@@ -234,6 +234,13 @@ test('a persona proposes a room; a member creates it from the card', async ({ br
     await sheet.getByRole('button', { name: 'Stay here' }).click();
     await expect(sheet).toBeHidden();
     await expect(link).toBeFocused();
+    // The room's next state may redraw the card after the sheet closed: the focus follows its new link.
+    await link.evaluate((a) => a.replaceWith(a.cloneNode(true)));
+    await expect(link).toBeFocused();
+    // Once the user moved the focus, a redraw leaves it there.
+    await ana.locator('#body').focus();
+    await link.evaluate((a) => a.replaceWith(a.cloneNode(true)));
+    await expect(ana.locator('#body')).toBeFocused();
     await expect(card(ana).getByRole('button')).toHaveCount(0);
     // A second room created in the same page load links too, though the page fetched its rooms
     // before. No link: no line in this room makes the page reload its state meanwhile.

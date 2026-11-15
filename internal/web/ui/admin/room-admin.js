@@ -466,26 +466,26 @@ function ProposalSheet({ data, m, done }) {
   const shown = name.trim() || m.proposal.name;
   const brief = useMemo(() => headingsUnder(m.html || '', 3), [m.html]);
   // Its Create… button was replaced by a link to the room: the focus goes there, not to the page.
-  // The link comes with the room's next state, which may land after the sheet closes: wait for it,
-  // unless the user has put the focus somewhere else meanwhile.
+  // The card redraws with the room's next state, after the sheet closes or soon after: the focus
+  // follows its newest link for a few seconds, unless the user has put it somewhere else.
   const closed = () => {
     if (made) {
       const sel = `#messages li[data-id="${m.id}"] a`;
-      const link = () => /** @type {HTMLElement | null} */ (document.querySelector(sel));
       const was = document.activeElement;
-      const a = link();
-      if (a) a.focus();
-      else {
-        const watch = new MutationObserver(() => {
-          const l = link();
-          if (!l) return;
-          watch.disconnect();
-          const now = document.activeElement;
-          if (!now || now === document.body || now === was || !now.isConnected) l.focus();
-        });
-        watch.observe(/** @type {HTMLElement} */ (document.getElementById('messages')), { childList: true, subtree: true });
-        setTimeout(() => watch.disconnect(), 10000);
-      }
+      /** @type {Element | null} */
+      let ours = null;
+      const follow = () => {
+        const l = /** @type {HTMLElement | null} */ (document.querySelector(sel));
+        const now = document.activeElement;
+        if (!l || l === now) return;
+        if (now && now !== document.body && now !== was && now !== ours && now.isConnected) { watch.disconnect(); return; }
+        l.focus();
+        ours = l;
+      };
+      const watch = new MutationObserver(follow);
+      watch.observe(/** @type {HTMLElement} */ (document.getElementById('messages')), { childList: true, subtree: true });
+      setTimeout(() => watch.disconnect(), 5000);
+      follow();
     }
     done();
   };
