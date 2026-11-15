@@ -2778,8 +2778,8 @@ const noOneRuns = () => !agent.online && !participants.some((x) => x.id === agen
 // so the queue check is taken out and whatever whyNot says before it decides.
 const cannotAnswer = (p, st = personaState(p)) => !!whyNot(p, st.cls === 'queued' ? { ...st, cls: '' } : st);
 
-// missingLine is the chat line's link that opened the AI sheet: the line's redraw replaces it.
-let missingLine = null;
+// missingLine is the id of the chat line whose link opened the AI sheet: the line's redraw replaces it.
+let missingLine = '';
 
 // missingLink opens the AI sheet from wherever a persona cannot answer (039-AC9).
 function missingLink() {
@@ -2798,7 +2798,7 @@ function missingLink() {
     // Inside a sheet, the sheet's opener stays.
     if (!a.closest('dialog')) {
       const line = !a.closest('#persona-card, #approvals') && a.closest('#messages > li[data-id]');
-      missingLine = line ? a : null;
+      missingLine = line ? line.dataset.id : '';
       focusBefore = a.closest('#persona-card') ? document.querySelector('.persona-pill[data-id="' + personaCardFor + '"] button.persona')
         : a.closest('#approvals') ? $('approvals') : line ? a : $('body');
     }
@@ -4357,13 +4357,32 @@ followAI();
 // Closed by Escape, a click outside or ✕: the deep link goes too, without a history entry.
 $('ai').addEventListener('close', (e) => {
   if (location.hash === '#ai') history.replaceState(null, '', location.pathname + location.search);
-  // After the page's focus return: a chat line redrawn meanwhile hands it to its new link, an
-  // opener gone otherwise to the composer.
-  const fresh = missingLine && !missingLine.isConnected
-    && document.querySelector(`#messages > li[data-id="${missingLine.closest('li').dataset.id}"] a[href="#ai"]`);
-  missingLine = null;
-  if (fresh) fresh.focus();
-  else focusLost(e);
+  // After the page's focus return: a chat line redraws with the room's state, while the sheet is
+  // open or soon after it closed, and its new link takes the focus for a few seconds, unless the
+  // user has put it somewhere else. An opener gone otherwise hands it to the composer.
+  const id = missingLine;
+  missingLine = '';
+  if (!id) {
+    focusLost(e);
+    return;
+  }
+  let ours = document.activeElement;
+  const follow = () => {
+    const l = /** @type {HTMLElement | null} */ (document.querySelector(`#messages > li[data-id="${id}"] a[href="#ai"]`));
+    const now = document.activeElement;
+    if (!l || l === now) return;
+    if (now && now !== document.body && now !== ours && now.isConnected) {
+      watch.disconnect();
+      return;
+    }
+    l.focus();
+    ours = l;
+  };
+  const watch = new MutationObserver(follow);
+  watch.observe($('messages'), { childList: true, subtree: true });
+  setTimeout(() => watch.disconnect(), 5000);
+  follow();
+  if (!document.querySelector(`#messages > li[data-id="${id}"]`)) focusLost(e);
 });
 
 async function loadTemplates() {

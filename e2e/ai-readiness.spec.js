@@ -352,6 +352,12 @@ test('AI in this room: "What\'s missing?" links', async ({ browser, request, bas
     // The line redraws while the sheet is open: the focus goes to its new link.
     const blockedLine = bob.locator(`#messages > li[data-id="${blocked.id}"]`);
     await missing(bob, blockedLine, blockedLine.locator('a[href="#ai"]'), () => bob.evaluate(() => renderBlocked()));
+    // It may redraw just after the sheet closed too: the focus still follows; once moved, it stays.
+    await bob.evaluate(() => renderBlocked());
+    await expect(blockedLine.locator('a[href="#ai"]')).toBeFocused();
+    await bob.locator('#body').focus();
+    await bob.evaluate(() => renderBlocked());
+    await expect(bob.locator('#body')).toBeFocused();
 
     const plugins = { plugins: [{ id: 1, name: 'opt', url: 'https://example.com/opt.git', ref: 'main', ref_name: 'main', entry: '', personas: [], running: 1,
       needs_setup: true, why: 'needs host setup on the AI host\'s computer', versions: [{ id: 1, n: 1, state: 'ok', short_commit: 'abcdef1', commit: 'abcdef1234' }] }] };
