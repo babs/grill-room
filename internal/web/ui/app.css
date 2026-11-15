@@ -335,6 +335,8 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); }
   .persona-rows { margin-inline: calc(-1 * var(--sp-2)); }
   .persona-row { gap: var(--sp-1); padding-left: var(--sp-2); }
   .persona-row :is(.pr-long, .pr-state) { display: none; }
+  /* With the ⋯ in the row, wide system fonts cut the settings at 390 px. */
+  .persona-row .pr-meta { font-size: var(--fs-xs); }
 }
 /* A persona's sheet (009-AC2): ⋯ and ✕ in its head, its tabs, one form under them. */
 .sheet-tools { display: flex; flex: none; gap: var(--sp-1); }
