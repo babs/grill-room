@@ -40,3 +40,4 @@
 | [035](035-persona-library.md) | Persona library: whole personas in Yours, Shared with everyone and Built-in, a picker in the room | shipped |
 | [036](036-announcements.md) | What screen readers hear in a room: quiet lists, one log of new lines, transcription read aloud on request | shipped |
 | [037](037-room-layout.md) | A room that fits tablets and phones: side panel folds for a document, one-row composer, compact pills on their own row | shipped |
+| [038](038-quick-wins-features-ia.md) | Quick wins: dead ends, wording, places (UX audit B) | approved |
