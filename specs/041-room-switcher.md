@@ -3,7 +3,7 @@
 **Status**: shipped (v4, council consensus)
 **Requested by**: babs
 **Date**: 2026-11-15
-**Context**: UX audit part B, direction S4 (journeys 3, 6, 12). Builds on 005 (room menu, `/profile` Rooms, the tab title's unread count 005-AC27), 019 (anonymous rooms), 020 (written and voice lines), 023 (linked rooms), 038 (room menu entries), 040 (room menu order). Council review (Codex, Fable) on 2026-11-15; unread counts added at the product owner's request.
+**Context**: UX audit part B, direction S4 (journeys 3, 6, 12). Builds on 005 (room menu, `/profile` Rooms, the tab title's unread count 005-AC27), 019 (anonymous rooms), 020 (written and voice lines), 023 (linked rooms), 038 (room menu entries), 040 (room menu order). Council review on 2026-11-15; unread counts added at the product owner's request.
 
 ## Problem
 
@@ -71,15 +71,15 @@ A PM in two or three rooms a day goes avatar › "My rooms and profile" › Room
 
 ## Decisions
 
-- The list sits behind "Switch room…". Because the room menu opens on shared screens during calls, and five other room names would show each time (Fable).
-- The browser's profile, not the seat's, owns the list. Because `GET /api/profile` answers for the profile cookie, and the two can differ (Codex, Fable).
-- No new fetch: the page already reads the profile on load and on return. Because a third cache of the same answer would drift (Codex, Fable).
-- No switcher in an ended room, no sign-in return to `#rooms/new`. Because the way out exists already and the sign-in links drop the hash (both reviewers).
+- The list sits behind "Switch room…". Because the room menu opens on shared screens during calls, and five other room names would show each time (council review).
+- The browser's profile, not the seat's, owns the list. Because `GET /api/profile` answers for the profile cookie, and the two can differ (council review).
+- No new fetch: the page already reads the profile on load and on return. Because a third cache of the same answer would drift (council review).
+- No switcher in an ended room, no sign-in return to `#rooms/new`. Because the way out exists already and the sign-in links drop the hash (council review).
 - Unread counts written lines and persona answers, not system or voice lines. Because voice lines would flood the count during a call (product owner, 2026-11-15).
 - "@" marks a mention among unread lines (product owner, 2026-11-15); unlike the tab title, voice lines never count.
-- One marker per profile and room, shared across devices (product owner, 2026-11-15); per profile, not per seat, so a merge or two seats cannot leave a count that never clears (both reviewers, second pass).
-- The mention flag reads at most the newest 100 unread lines, prefiltered on "@", with the existing `named()` rule. Because storing every mention at write time is a larger change, and the flag only needs "is there one" (Fable over Codex: bounded and exact on what it reads, its limit stated).
-- Upgrade and joins start the marker at the newest line. Because a null marker would show every room as "99+" on deploy day (Fable).
+- One marker per profile and room, shared across devices (product owner, 2026-11-15); per profile, not per seat, so a merge or two seats cannot leave a count that never clears (council review).
+- The mention flag reads at most the newest 100 unread lines, prefiltered on "@", with the existing `named()` rule. Because storing every mention at write time is a larger change, and the flag only needs "is there one" (bounded and exact on what it reads, its limit stated).
+- Upgrade and joins start the marker at the newest line. Because a null marker would show every room as "99+" on deploy day (council review).
 - Until the page's first read of the profile answers, "Switch room…" shows when the seat has a profile, so "Loading your rooms…" can show; after it, the browser's profile decides (implementation).
 - A row is one menu line, the name ending in an ellipsis and its activity after it. Because the menus keep one row height (009-AC38) (implementation).
 - One profile read at a time, a call meanwhile reading once more after it, each read bounded at 10 s. Because a dropped read left a return to the tab on stale state and a hung one held the text size save (implementation, review).
