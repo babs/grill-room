@@ -1,7 +1,7 @@
 import { request as pwRequest } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, menuItem, appointAdmin, signIn, noOverflow, rowAction } from './helpers.js';
+import { roomWith, menuItem, appointAdmin, signIn, noOverflow, rowAction, sheetTab } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -370,6 +370,11 @@ test('invite names, rename and the seats still in', async ({ browser, request })
   await aRow.getByLabel('New name for Carol link').fill('Renamed by Alice');
   await aRow.getByRole('button', { name: 'Save' }).click();
   await expect(aRow.locator('.name')).toHaveText('Renamed by Alice');
+  // A rename writes no room event: Members, read when the sheet opened, shows the new name all the same.
+  const carolInvite = alice.locator('#room-admins > li', { hasText: 'Carol' }).locator('.cell.invite');
+  await sheetTab(alice, 'manage', 'Members');
+  await expect(carolInvite).toHaveText('Renamed by Alice');
+  await sheetTab(alice, 'manage', 'Invites');
   await rowAction(aRow, 'Stop new joins through Renamed by Alice');
   const sheet = alice.locator('#revoke-sheet');
   await expect(sheet.locator('#revoke-title')).toHaveText('Stop new joins through this link?');
@@ -385,6 +390,9 @@ test('invite names, rename and the seats still in', async ({ browser, request })
   await aRow.getByLabel('New name for Renamed by Alice').fill('');
   await aRow.getByRole('button', { name: 'Save' }).click();
   await expect(aRow.locator('.name')).toHaveText('Link ' + id);
+  // Members shown again after a cleared name: its id, not the name it showed last.
+  await sheetTab(alice, 'manage', 'Members');
+  await expect(carolInvite).toHaveText('Link ' + id);
   const log = await (await request.get(`/api/admin/audit?action=invite.rename&target=${room.id}`, { headers: admin })).json();
   expect(log.entries.map((e) => [e.details.from, e.details.to])).toEqual([['Renamed by Alice', ''], ['Carol link', 'Renamed by Alice']]);
 

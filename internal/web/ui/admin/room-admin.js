@@ -103,6 +103,8 @@ function Manage({ data, tab, tabs }) {
   const load = () => fetchJSON('GET', base + '/overview').then(setRoom).catch(show);
   // The room answer changes with every system line: a rename, an appointment, a join.
   useEffect(() => { load(); }, [data]);
+  // An invite's rename writes none: Members reads the overview again when shown.
+  useEffect(() => { if (tab === 'admins' && room) load(); }, [tab]);
   /** @param {number} id */
   const byName = (id) => data.participants.find((p) => p.id === id)?.name || 'a former participant';
   // 040-AC10: one row per seat, its invite from the admin-only overview, never the room payload.
