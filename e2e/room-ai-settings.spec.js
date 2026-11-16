@@ -239,7 +239,7 @@ test('a room reload while the AI sheet closes keeps it closed', async ({ browser
 
 // 040-AC5: each sheet's bar, as a room admin, at 390, 640, 820 and 1440 px, at the default text
 // size and at XL (028's XL and the browser's text at 20 px): every tab whole inside the bar, or the
-// bar folded into its menu.
+// bar folded into its menu. At the default size both bars are whole at 1440 px and folded at 390.
 test('both tab bars fold whenever they overflow', async ({ browser, request }) => {
   test.setTimeout(120_000);
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
@@ -264,6 +264,7 @@ test('both tab bars fold whenever they overflow', async ({ browser, request }) =
         const nav = alice.locator(`#${sheet} nav.tabs`);
         await expect(nav.locator('#tab-' + tab)).toHaveAttribute('aria-current', 'page');
         const name = `${sheet} at ${width} px${xl ? ', XL' : ''}`;
+        const want = xl || ![390, 1440].includes(width) ? /^(folded|whole)$/ : width === 390 ? /^folded$/ : /^whole$/;
         await expect.poll(() => nav.evaluate((n) => {
           if ('menu' in n.dataset) {
             const b = n.querySelector('.tabs-menu').getBoundingClientRect();
@@ -276,7 +277,7 @@ test('both tab bars fold whenever they overflow', async ({ browser, request }) =
             return r.left < box.left - 0.5 || r.right > box.right + 0.5;
           }).map((a) => a.textContent);
           return cut.length || n.scrollWidth > n.clientWidth + 0.5 ? 'cut: ' + cut.join(', ') : 'whole';
-        }), name).toMatch(/^(folded|whole)$/);
+        }), name).toMatch(want);
         await alice.screenshot({ path: `${shots}${sheet}-${width}${xl ? '-xl' : ''}.png` });
         await closeSheet(alice, sheet);
       }
@@ -328,18 +329,13 @@ test('AI tabs: an error goes with its tab and its opening', async ({ browser, re
 
 // 040-AC6: Status's own link to another tab hides the panel that held the focus: the focus goes to
 // the tab shown, or to the bar's menu once the bar folds (040-AC5), never to the page. The six
-// tabs fold in the 44rem sheet at any viewport: a sheet widened to the window shows them whole.
+// tabs show whole on a desktop and fold on a phone.
 test('a Status link hands the focus to the tab it shows', async ({ browser, request, baseURL }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   const host = await fakeDaemon(alice, baseURL, room.id, 'Alice laptop');
-  // The page's CSP refuses an injected style: only this page bypasses it, Alice's session with it.
-  const wide = await (await browser.newContext({ bypassCSP: true, storageState: await alice.context().storageState() })).newPage();
-  await wide.goto(alice.url().split('#')[0]);
-  await expect(wide.locator('#me')).toHaveText('Alice');
-  await wide.addStyleTag({ content: '#ai.sheet { width: 100vw !important; max-width: 100vw !important }' });
   try {
-    for (const [page, width, folded] of [[alice, 1280, true], [alice, 390, true], [wide, 1280, false]]) {
-      const at = `${width} px${folded ? '' : ', widened'}`;
+    for (const [page, width, folded] of [[alice, 1280, false], [alice, 390, true]]) {
+      const at = `${width} px`;
       await page.setViewportSize({ width, height: 800 });
       await menuItem(page, 'AI in this room');
       await shows(page, 'ai', 'status', '#ai');
@@ -483,10 +479,10 @@ test('AI › Personas: the persona sheet returns to its row', async ({ browser, 
   await shows(alice, 'ai', 'status', '#ai');
   await alice.goForward();
   await shows(alice, 'ai', 'personas', '#ai/personas');
-  // Forward reopens it with the focus on the bar, folded at any viewport (040-AC5): closing still lands on the row.
-  await expect(alice.locator('#ai nav.tabs')).toHaveAttribute('data-menu');
-  await alice.locator('#ai nav.tabs > .tabs-menu').focus();
-  await expect(alice.locator('#ai nav.tabs > .tabs-menu')).toBeFocused();
+  // Forward reopens it with the focus on a tab, whole at 1280 px (040-AC5): closing still lands on the row.
+  await expect(alice.locator('#ai nav.tabs')).not.toHaveAttribute('data-menu');
+  await alice.locator('#ai #tab-personas').focus();
+  await expect(alice.locator('#ai #tab-personas')).toBeFocused();
   await alice.goForward();
   await expect(sheet).toBeVisible();
   await expect(sheet.locator('#persona-sheet-title')).toHaveText('🔥 Grill');

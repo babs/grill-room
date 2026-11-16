@@ -297,9 +297,9 @@ button.persona .pstate { color: var(--text-muted); font-weight: 400; font-size: 
 .meta .capped { color: var(--warning); }
 
 /* Sheets and dialogs */
-dialog#manage { width: min(64rem, calc(100vw - 1rem)); }
-/* Room settings is full screen on a phone (005-AC15). */
-@media (max-width: 40rem) { dialog#manage { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; border-radius: 0; } }
+dialog#manage, dialog#ai { width: min(64rem, calc(100vw - 1rem)); }
+/* Both sheets are full screen on a phone (005-AC15, 040-AC8). */
+@media (max-width: 40rem) { dialog#manage, dialog#ai { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; border-radius: 0; } }
 .sheet h2 { font-size: var(--fs-lg); }
 .sheet > label, .sheet details label { display: flex; flex-direction: column; gap: var(--sp-1); margin: var(--sp-2) 0; font-size: var(--fs-sm); font-weight: 600; }
 .sheet > label:has(> input[type=checkbox]) { flex-direction: row; font-weight: 400; }
