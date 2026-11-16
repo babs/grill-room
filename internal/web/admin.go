@@ -43,6 +43,7 @@ const (
 	ActionRoomSpeech     = "room.speech"
 	ActionInviteCreate   = "invite.create"
 	ActionInviteRevoke   = "invite.revoke"
+	ActionInviteRename   = "invite.rename"
 	ActionProfileDelete  = "profile.delete"
 	ActionTemplateRemove = "template.remove"
 	ActionSkillRemove    = "skill.remove"
@@ -64,7 +65,7 @@ const (
 )
 
 // AuditActions lists every action, for the audit view's filter.
-var AuditActions = []string{ActionRoomCreate, ActionRoomRename, ActionRoomDelete, ActionRoomQuota, ActionRoomSpeech, ActionRoomExport, ActionRoomImport, ActionInviteCreate, ActionInviteRevoke,
+var AuditActions = []string{ActionRoomCreate, ActionRoomRename, ActionRoomDelete, ActionRoomQuota, ActionRoomSpeech, ActionRoomExport, ActionRoomImport, ActionInviteCreate, ActionInviteRevoke, ActionInviteRename,
 	ActionRoomAdminAdd, ActionRoomAdminRemove, ActionRoomSkillRemove, ActionRename, ActionDocumentDelete, ActionDocumentRestore, ActionHostTransfer, ActionParticipantRemove, ActionParticipantUnblock, ActionRoomLinkCreate, ActionRoomLinkDelete, ActionProposalDismiss, ActionProfileDelete, ActionProfileRecoveryLink, ActionProfileRecoveryUsed, ActionProfileMerge, ActionProfilePurge, ActionProfileOIDCBind, ActionProfileOIDCUnbind, ActionProfileMaxRooms, ActionTemplateRemove, ActionTemplateShare, ActionTemplateUnshare, ActionSkillRemove, ActionStarterPublish, ActionStarterDelete, ActionSettings,
 	ActionLexiconAdd, ActionLexiconEdit, ActionLexiconDelete,
 	ActionAPITokenCreate, ActionAPITokenRevoke, ActionPersonaRemove, store.ActionEgressAllow, store.ActionEgressRevoke, store.ActionEgressDelegate,

@@ -2,7 +2,7 @@ import { devices } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import http from 'node:http';
 import { adminToken } from './playwright.config.js';
-import { roomWith, menuItem, personaRow, personaSheet, closePersonas, line, live, smallTargets, playEvents, messageAction, addFromLibrary, patchJSON } from './helpers.js';
+import { roomWith, personaRow, personaSheet, closePersonas, line, live, smallTargets, playEvents, messageAction, addFromLibrary, patchJSON, openPersonas } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -270,8 +270,8 @@ for (const name of ['iPhone 15', 'Pixel 7']) {
       expect(b.x + b.width).toBeLessThanOrEqual(width + 1);
     };
 
-    await menuItem(page, 'Personas');
-    const panel = page.locator('#personas');
+    await openPersonas(page);
+    const panel = page.locator('#ai');
     await addFromLibrary(page, 'Secretary');
     await expect(panel.locator('.persona-row')).toHaveCount(2);
     await inside(panel);

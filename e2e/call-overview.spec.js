@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, fakeCall, appointAdmin, agentState, patchPersona, noOverflow, smallTargets, editPersona, openMenu } from './helpers.js';
+import { roomWith, fakeCall, appointAdmin, agentState, patchPersona, noOverflow, smallTargets, editPersona, openMenu, sheetTab } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const absent = 'Not available on this server: the server admin turns it on.';
@@ -97,7 +97,7 @@ test('call overview: the viewer, the room and the server, live', async ({ browse
   await expect(row(alice, 'room', 'glossary').locator('.ai-who')).toHaveText('Who: any member');
   await expect(row(alice, 'room', 'voices').locator('.meta').first()).toHaveText('pause 1 s, resume 20 s, queue 40 s, up to 60 words');
   await expect(row(alice, 'room', 'voices').locator('.ai-who')).toHaveText('Who: room admins');
-  await expect(row(alice, 'room', 'voices').getByRole('link', { name: 'Open Call voices' })).toHaveAttribute('href', '#manage/voices');
+  await expect(row(alice, 'room', 'voices').getByRole('link', { name: 'Open Call voices' })).toHaveAttribute('href', '#ai/voices');
 
   // No worker on the voice, the server's voice-to-text up: not "off", which "This server" would contradict.
   await expect(you('stt')).toHaveText('Transcription is on, waiting: voice-to-text is in the call but not writing down your voice');
@@ -164,13 +164,13 @@ test('call overview: the viewer, the room and the server, live', async ({ browse
   await openFrom(bob);
   await expect(row(bob, 'room', 'voices').locator('.meta').first()).toHaveText('pause 1 s, resume 20 s, queue 40 s, up to 60 words');
   await expect(row(bob, 'room', 'voices').locator('a')).toHaveCount(0);
-  await expect(row(bob, 'room', 'glossary').getByRole('link', { name: 'Open Words to recognise' })).toHaveAttribute('href', '#manage/glossary');
+  await expect(row(bob, 'room', 'glossary').getByRole('link', { name: 'Open Words to recognise' })).toHaveAttribute('href', '#ai/glossary');
 
   // 042-AC1: the entry follows "Personas" in the room menu and the toggles in Audio options.
   await alice.keyboard.press('Escape');
   await expect(sheet(alice)).toBeHidden();
   await alice.locator('#room-open').click();
-  await expect(alice.locator('#room-menu > :is(a, button):visible')).toHaveText(['Invite people', 'Room settings', 'Link a room…', 'Personas', 'Call and voice-to-text…', 'AI in this room',
+  await expect(alice.locator('#room-menu > :is(a, button):visible')).toHaveText(['Invite people', 'Room settings', 'Link a room…', 'AI in this room', 'Personas', 'Call and voice-to-text…',
     'Open documents in a new window', 'Open chat in a new window', 'Run the AI on my computer', 'Switch room…']);
   await alice.keyboard.press('Escape');
   // In markup order: the phone-only and the device toggles count, hidden or not.
@@ -309,65 +309,59 @@ test('call overview: links out and back', async ({ browser, request }) => {
   const glossaryLink = row(alice, 'room', 'glossary').getByRole('link', { name: 'Open Words to recognise' });
   await openFrom(alice);
   await glossaryLink.click();
-  await expect(alice.locator('#manage')).toBeVisible();
+  await expect(alice.locator('#ai')).toBeVisible();
   await expect(sheet(alice)).toBeHidden();
-  await expect(alice).toHaveURL(/#manage\/glossary$/);
+  await expect(alice).toHaveURL(/#ai\/glossary$/);
   await alice.keyboard.press('Escape');
   await expect(sheet(alice)).toBeVisible();
   await expect(alice).toHaveURL(/#call-overview$/);
   await expect(glossaryLink).toBeFocused();
   await alice.goForward();
-  await expect(alice.locator('#manage')).toBeVisible();
+  await expect(alice.locator('#ai')).toBeVisible();
   await expect(sheet(alice)).toBeHidden();
   await alice.goBack();
   await expect(sheet(alice)).toBeVisible();
-  await expect(alice.locator('#manage')).toBeHidden();
+  await expect(alice.locator('#ai')).toBeHidden();
   await expect(glossaryLink).toBeFocused();
 
-  // Call voices, then the Invites tab inside Room settings, then ✕.
+  // Call voices, then the Plugins tab inside AI in this room, then ✕.
   const voicesLink = row(alice, 'room', 'voices').getByRole('link', { name: 'Open Call voices' });
   await voicesLink.click();
-  await expect(alice).toHaveURL(/#manage\/voices$/);
-  await alice.locator('#manage').getByRole('link', { name: 'Invites' }).click();
-  await expect(alice).toHaveURL(/#manage\/invites$/);
-  await expect(alice.locator('#manage #tab-invites')).toHaveAttribute('aria-current', 'page');
-  await alice.locator('#manage-close').click();
+  await expect(alice).toHaveURL(/#ai\/voices$/);
+  await sheetTab(alice, 'ai', 'Plugins');
+  await expect(alice).toHaveURL(/#ai\/plugins$/);
+  await expect(alice.locator('#ai #tab-plugins')).toHaveAttribute('aria-current', 'page');
+  await alice.locator('#ai .close').click();
   await expect(sheet(alice)).toBeVisible();
   await expect(voicesLink).toBeFocused();
 
-  // A reload on Room settings keeps the way back, through a tab switch after it.
+  // A reload on AI in this room keeps the way back, through a tab switch after it.
   await voicesLink.click();
-  await expect(alice.locator('#manage')).toBeVisible();
+  await expect(alice.locator('#ai')).toBeVisible();
   await alice.reload();
-  await expect(alice.locator('#manage')).toBeVisible();
-  await alice.locator('#manage').getByRole('link', { name: 'Invites' }).click();
-  await expect(alice.locator('#manage #tab-invites')).toHaveAttribute('aria-current', 'page');
+  await expect(alice.locator('#ai')).toBeVisible();
+  await sheetTab(alice, 'ai', 'Plugins');
+  await expect(alice.locator('#ai #tab-plugins')).toHaveAttribute('aria-current', 'page');
   await alice.keyboard.press('Escape');
   await expect(sheet(alice)).toBeVisible();
   await expect(voicesLink).toBeFocused();
 
-  // Room settings › Personas › a persona: its close returns to Room settings, whose close returns here.
+  // AI in this room › Personas › a persona, over the AI sheet: its close returns to AI in this room,
+  // whose close returns here.
   await voicesLink.click();
-  await alice.locator('#manage').getByRole('link', { name: 'Personas' }).click();
-  await expect(alice.locator('#manage #tab-personas')).toHaveAttribute('aria-current', 'page');
-  await alice.locator('#manage-personas a').first().click();
+  await sheetTab(alice, 'ai', 'Personas');
+  await expect(alice.locator('#ai #tab-personas')).toHaveAttribute('aria-current', 'page');
+  await alice.locator('#persona-list .persona-row').first().click();
   await expect(alice.locator('#persona-sheet')).toBeVisible();
+  await expect(alice.locator('#ai')).toBeVisible();
   await alice.keyboard.press('Escape');
-  await expect(alice.locator('#manage')).toBeVisible();
-  await expect(alice).toHaveURL(/#manage\/personas$/);
+  await expect(alice.locator('#ai')).toBeVisible();
+  await expect(alice).toHaveURL(/#ai\/personas$/);
   await alice.keyboard.press('Escape');
   await expect(sheet(alice)).toBeVisible();
   await expect(voicesLink).toBeFocused();
-
-  // Room settings hands over to the Personas sheet: that one closes to the room, not here.
-  await voicesLink.click();
-  await alice.locator('#manage').getByRole('link', { name: 'Personas' }).click();
-  await alice.locator('#manage').getByRole('button', { name: 'Open the Personas sheet' }).click();
-  await expect(alice.locator('#personas')).toBeVisible();
-  await expect(alice).not.toHaveURL(/#/);
+  // Opened afresh from the room menu: its close at the end hands the focus back to the menu's button.
   await alice.keyboard.press('Escape');
-  await expect(alice.locator('#personas')).toBeHidden();
-  await expect.poll(() => alice.evaluate(() => [location.hash, history.state])).toEqual(['', null]);
   await expect(sheet(alice)).toBeHidden();
   await openFrom(alice);
 
@@ -443,9 +437,27 @@ test('call overview: links out and back', async ({ browser, request }) => {
   await alice.keyboard.press('Escape');
   await expect(alice.locator('#voice-join')).toBeFocused();
 
-  // Loaded directly, Room settings has no origin: closing it drops the hash, as before.
-  await alice.goto(`/r/${room.id}#manage/glossary`);
-  await expect(alice.locator('#manage')).toBeVisible();
+  // A reload on a stamped entry keeps the way back through each hand-off of history.state: the
+  // moved-tab redirects (room-admin.js's, and room.js's for the skills), and the fallback to a tab the
+  // viewer has, in AI in this room and Room settings.
+  for (const [page, hash, target, to] of [[alice, '#manage/glossary', '#ai', /#ai\/glossary$/], [alice, '#manage/skills', '#ai', /#ai\/personas$/],
+    [bob, '#ai/voices', '#ai', /#ai\/status$/],
+    [bob, '#manage/general', '#manage', /#manage\/invites$/]]) {
+    await openFrom(page);
+    await page.evaluate((h) => history.pushState({ origin: '#call-overview', steps: 1 }, '', h), hash);
+    await page.reload();
+    await expect(page.locator(target)).toBeVisible();
+    await expect(page).toHaveURL(to);
+    await page.keyboard.press('Escape');
+    await expect(sheet(page)).toBeVisible();
+    await expect(page).toHaveURL(/#call-overview$/);
+    await page.keyboard.press('Escape');
+    await expect(sheet(page)).toBeHidden();
+  }
+
+  // Loaded directly, AI in this room has no origin: closing it drops the hash, as before.
+  await alice.goto(`/r/${room.id}#ai/glossary`);
+  await expect(alice.locator('#ai')).toBeVisible();
   await alice.keyboard.press('Escape');
   await expect(alice).not.toHaveURL(/#/);
   await expect(sheet(alice)).toBeHidden();

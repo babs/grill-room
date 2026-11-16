@@ -1,7 +1,8 @@
-// The room's Manage sheet (004-AC8, 004-AC19, 005-AC15): Preact, htm and signals, like /admin.
-// room.js, vanilla, hands over the room, the agent state and the transcription state it loads as
-// window.grillRoom, window.grillAgent and window.grillSTT, each followed by an event. Each tab is a
-// deep link, #manage/<tab>.
+// The room's Room settings sheet (004-AC8, 004-AC19, 005-AC15) and the AI in this room tabs but
+// Status and Personas (040-AC6): Preact, htm and signals, like /admin. room.js, vanilla, hands over the room, the
+// agent state and the transcription state it loads as window.grillRoom, window.grillAgent and
+// window.grillSTT, each followed by an event. Each tab is a deep link, #manage/<tab> or #ai/<tab>;
+// room.js opens and closes the AI sheet.
 import { render } from 'preact';
 import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { signal } from '@preact/signals';
@@ -14,15 +15,15 @@ import { PluginsTab, mountReview } from './plugins.js';
  * @typedef {{id: number, name: string, admin: boolean}} Participant
  * @typedef {{quiet_ms: number, resume_s: number, queue_s: number, words: number}} Speech
  * @typedef {{room: {id: string, name: string, speech?: Speech}, me: Participant, participants: Participant[], tts?: boolean, voice?: boolean}} RoomData
- * @typedef {{id: number, name: string, version: number, author: string, pending?: boolean}} RoomSkill
  * @typedef {{id: number, name: string, badge: string, model: string, effort: string, pending?: boolean}} Persona
- * @typedef {{room_skills?: RoomSkill[], personas?: Persona[], host_participant_id?: number, you_host?: boolean, egress_admins_allow?: boolean,
- *   connectors?: {name: string, actions?: boolean}[]}} AgentState
+ * @typedef {{personas?: Persona[], host_participant_id?: number, you_host?: boolean, egress_admins_allow?: boolean,
+ *   connectors?: {name: string, actions?: boolean}[], can_trigger?: number[]}} AgentState
  * @typedef {{glossary: string, prompt: string, used: number, total: number, capacity: number}} Glossary
  * @typedef {{glossary: boolean, available?: boolean, listening?: boolean}} STTState
  */
 
-const w = /** @type {Window & {grillRoom?: RoomData, grillAgent?: AgentState, grillSTT?: STTState, grillLinks?: RoomLink[], grillShowLinks?: () => void, grillSheetBack?: () => boolean}} */ (window);
+const w = /** @type {Window & {grillRoom?: RoomData, grillAgent?: AgentState, grillSTT?: STTState, grillLinks?: RoomLink[], grillShowLinks?: () => void, grillSheetBack?: () => boolean,
+  grillMembershipActions?: (p: import('./room-panel.js').Member) => import('./room-panel.js').MembershipAction[]}} */ (window);
 const roomData = signal(w.grillRoom);
 const agentState = signal(w.grillAgent);
 // The glossary tab works only while a transcription worker reads it (007-AC14); its data stays.
@@ -36,21 +37,46 @@ const roomLinks = signal(/** @type {RoomLink[] | null | undefined} */ (w.grillLi
 addEventListener('grill:links', (e) => { roomLinks.value = /** @type {CustomEvent<RoomLink[] | null>} */ (e).detail; });
 const reloadLinks = () => w.grillShowLinks?.();
 
-const allTabs = [...Object.entries(roomTabs).slice(0, 3), ['links', 'Links'], ['personas', 'Personas'], ['skills', 'Skills'], ['plugins', 'Plugins'],
-  ['network', 'Websites and connectors'], ['documents', 'Deleted documents'], ['export', roomTabs.export], ['glossary', 'Words to recognise'],
-  ['voices', 'Call voices']];
-// The tabs a plain member gets; a room admin gets them all. Every member reads the room's plugins
-// (009-AC5), its websites (014), its links (023-AC1) and manages their own invites (011-AC27).
-const memberTabs = ['invites', 'links', 'plugins', 'network', 'glossary'];
+// Room settings' tabs (040-AC1). /admin names the Members tab "Members and admins".
+const allTabs = [['general', roomTabs.general], ['admins', 'Members'], ['invites', roomTabs.invites], ['links', 'Links'],
+  ['documents', 'Deleted documents'], ['export', roomTabs.export]];
+// The tabs a plain member gets; a room admin gets them all. Every member reads the room's links
+// (023-AC1) and manages their own invites (011-AC27).
+const memberTabs = ['invites', 'links'];
+// The tabs that moved to AI in this room (040-AC2); skills lives in its Personas tab.
+const moved = /^#manage\/(personas|plugins|network|glossary|voices|skills)$/;
 
 // tab is the open tab from #manage/<tab>, '' when the sheet is closed.
 /** @param {string} hash */
 // #links is the Links tab's own deep link (023-AC1).
-const tabOf = (hash) => (hash === '#manage' ? 'general' : hash === '#links' ? 'links' : hash.startsWith('#manage/') ? hash.slice(8) : '');
+const tabOf = (hash) => (hash === '#manage' ? 'general' : hash === '#links' ? 'links' : hash.startsWith('#manage/') && !moved.test(hash) ? hash.slice(8) : '');
 const tab = signal(tabOf(location.hash));
+// aiTab is the tab the AI sheet shows, as room.js says, '' when closed; this module mounts all but Status.
+const aiTab = signal(w.grillAITab || '');
+// opening counts the AI sheet's openings: each starts its tab afresh, an error of the last one gone.
+let opening = 0;
+addEventListener('grill:ai-tab', (e) => {
+  const t = /** @type {CustomEvent<string>} */ (e).detail;
+  if (t && !aiTab.value) opening++;
+  aiTab.value = t;
+});
 const dialog = /** @type {HTMLDialogElement} */ (document.getElementById('manage'));
+// shownHash is the hash the open sheet shows: its close drops that one, not a link followed since.
+let shownHash = '';
 const follow = () => {
+  const m = moved.exec(location.hash);
+  // room.js takes #manage/skills itself: it scrolls the Personas tab to the room skills.
+  if (m) {
+    if (m[1] !== 'skills') {
+      // location.replace drops history.state: it carries the return to the overview or Help (042-AC7).
+      const s = history.state;
+      location.replace('#ai/' + m[1]);
+      if (s) history.replaceState(s, '');
+    }
+    return;
+  }
   tab.value = tabOf(location.hash);
+  if (tab.value) shownHash = location.hash;
   if (tab.value && !dialog.open) dialog.showModal();
   else if (!tab.value && dialog.open) dialog.close();
 };
@@ -60,38 +86,33 @@ document.getElementById('manage-open')?.addEventListener('click', () => { locati
 document.getElementById('manage-close')?.addEventListener('click', () => dialog.close());
 // Closed by Escape, a click outside or Close: the deep link goes too, without a history entry.
 dialog.addEventListener('close', () => {
-  // The close event is queued: a Back then Forward may have reopened the sheet meanwhile.
+  // The close event comes a task late: a link followed meanwhile may have opened the sheet again.
   if (dialog.open) return;
   // Opened from a link of the overview or Help, it goes back there (042-AC7).
-  if (tabOf(location.hash) && !w.grillSheetBack?.()) history.replaceState(null, '', location.pathname + location.search);
+  if (location.hash === shownHash && !w.grillSheetBack?.()) history.replaceState(null, '', location.pathname + location.search);
   tab.value = '';
 });
 
 /** @param {{data: RoomData, tab: string, tabs: string[][]}} props */
 function Manage({ data, tab, tabs }) {
   const base = '/api/rooms/' + encodeURIComponent(data.room.id);
-  const [room, setRoom] = useState(/** @type {import('./room-panel.js').Room | null} */ (null));
+  const [room, setRoom] = useState(/** @type {(import('./room-panel.js').Room & {seats?: {participant_id: number, invite_id: number, invite_name?: string}[]}) | null} */ (null));
   const [said, setSaid] = useState('');
   /** @param {unknown} err */
   const show = (err) => setSaid(/** @type {Error} */ (err).message);
   const load = () => fetchJSON('GET', base + '/overview').then(setRoom).catch(show);
   // The room answer changes with every system line: a rename, an appointment, a join.
   useEffect(() => { load(); }, [data]);
+  // An invite's rename writes none: Members reads the overview again when shown.
+  useEffect(() => { if (tab === 'admins' && room) load(); }, [tab]);
   /** @param {number} id */
   const byName = (id) => data.participants.find((p) => p.id === id)?.name || 'a former participant';
-  /** @param {RoomSkill} k */
-  const removeSkill = (k) => {
-    window.grillConfirm(`Remove the room skill ${k.name}?`, 'Personas that have it on lose it.', 'Remove')
-      .then((yes) => { if (yes) fetchJSON('DELETE', `${base}/skills/${k.id}`).catch(show); });
-  };
-  const skills = agentState.value?.room_skills || [];
-  const personas = agentState.value?.personas || [];
-  const openPersonas = () => {
-    // The Personas sheet replaces Room settings: its close must not go back to the overview (042-AC7).
-    history.replaceState(null, '', location.pathname + location.search);
-    dialog.close();
-    document.getElementById('personas-open')?.click();
-  };
+  // 040-AC10: one row per seat, its invite from the admin-only overview, never the room payload.
+  const ag = agentState.value;
+  const members = data.participants.map((p) => {
+    const seat = room?.seats?.find((s) => s.participant_id === p.id);
+    return { ...p, host: ag?.host_participant_id === p.id, can_ask: !!ag?.can_trigger?.includes(p.id), invite_id: seat?.invite_id, invite_name: seat?.invite_name };
+  });
   return html`
     <p class="said" role="alert">${said}</p>
     ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${base} api=${fetchJSON} show=${show} reload=${load} byName=${byName} me=${data.me.id}
@@ -101,24 +122,43 @@ function Manage({ data, tab, tabs }) {
         <div class="row"><button type="button" class="btn-secondary" id="save-starter" onClick=${() => saveAsStarter(base, setSaid)}>Save as starter</button></div>
         <p class="hint">The server's audit log records what room admins do here.</p>`}>
       ${tab === 'admins' && html`
-        <p class="hint">Room admins rename the room and its participants, manage every invite, appoint other admins and delete the room. The room keeps at least one.</p>
-        <${AdminRows} people=${data.participants} base=${base} api=${fetchJSON} show=${show} done=${() => setSaid('')} me=${data.me.id}/>
+        <p class="hint">Every seat in the room and the invite it joined through. Room admins rename the room and its participants, manage every invite, appoint other admins and delete the room. The room keeps at least one.</p>
+        <${AdminRows} people=${members} base=${base} api=${fetchJSON} show=${show} done=${() => setSaid('')} me=${data.me.id}
+          actions=${(/** @type {import('./room-panel.js').Member} */ p) => w.grillMembershipActions?.(p) || []}/>
         <${Blocked} base=${base} api=${fetchJSON} show=${show} people=${data.participants}/>`}
-      ${tab === 'personas' && html`
-        <p class="hint">Every member adds and edits the room's personas in the Personas sheet. A persona's name opens its own sheet.</p>
-        <ul id="manage-personas">${personas.map((p) => html`<li key=${p.id}><span><span class="badge persona-badge">${p.badge}</span> <a href=${'#personas/' + p.id + '/identity'}
-          aria-label=${p.badge + ' ' + p.name}>${p.name}</a> <span class="hint">${p.model} · effort ${p.effort}${p.pending ? ' · waits for the AI host' : ''}</span></span></li>`)}</ul>
-        <button type="button" class="btn-primary" onClick=${openPersonas}>Open the Personas sheet</button>`}
-      ${tab === 'skills' && (skills.length ? html`<ul id="room-admin-skills">${skills.map((k) => html`<li key=${k.id}>${k.name} v${k.version}, copied by ${k.author}
-          ${' '}<button type="button" class="btn-secondary" onClick=${() => removeSkill(k)} aria-label=${'Remove the room skill ' + k.name}>Remove</button></li>`)}</ul>`
-        : html`<p class="empty">None yet. Members copy their personal skills in from <button type="button" class="text-link" onClick=${openPersonas}>the Personas sheet</button>.</p>`)}
       ${tab === 'links' && html`<${LinksTab} data=${data} base=${base} show=${show}/>`}
-      ${tab === 'plugins' && html`<${PluginsTab} base=${base} admin=${true} host=${approves(data)} personas=${personas}/>`}
-      ${tab === 'network' && html`<${NetworkTab} base=${base} host=${isHost(data)} show=${show}/>`}
       ${tab === 'documents' && html`<${DeletedDocuments} base=${base} show=${show}/>`}
-      ${tab === 'glossary' && (sttState.value?.glossary ? html`<${STTGlossary} data=${data}/>` : glossaryNone(data))}
-      ${tab === 'voices' && (data.tts ? html`<${CallVoices} data=${data} base=${base} show=${show}/>` : unavailable())}
     <//>`}`;
+}
+
+/**
+ * AISettings is the open AI in this room tab other than Status and Personas, which are room.js's
+ * (040-AC6), in the sheet room.js opens. Every member reads the room's plugins (009-AC5) and its websites (014) and edits the
+ * glossary; Call voices is a room admin's.
+ */
+function AISettings() {
+  const data = roomData.value;
+  const t = aiTab.value;
+  if (!data || !['plugins', 'network', 'glossary', 'voices'].includes(t)) return null;
+  return html`<${AITab} key=${opening + '/' + t} data=${data} t=${t}/>`;
+}
+
+/**
+ * AITab is one tab of AISettings, for one opening of the sheet: its error line goes with it.
+ * @param {{data: RoomData, t: string}} props
+ */
+function AITab({ data, t }) {
+  const [said, setSaid] = useState('');
+  const base = '/api/rooms/' + encodeURIComponent(data.room.id);
+  /** @param {unknown} err */
+  const show = (err) => setSaid(/** @type {Error} */ (err).message);
+  return html`${said && html`<p class="said" role="alert">${said}</p>`}
+    <div class="tab-panel" id=${'panel-' + t}>
+      ${t === 'plugins' && html`<${PluginsTab} base=${base} admin=${!!data.me.admin} host=${approves(data)} personas=${agentState.value?.personas || []}/>`}
+      ${t === 'network' && html`<${NetworkTab} base=${base} host=${isHost(data)} show=${show}/>`}
+      ${t === 'glossary' && (sttState.value?.glossary ? html`<${STTGlossary} data=${data}/>` : glossaryNone(data))}
+      ${t === 'voices' && (data.tts ? html`<${CallVoices} data=${data} base=${base} show=${show}/>` : unavailable())}
+    </div>`;
 }
 
 // A setting whose engine this server lacks keeps its place and says so (038-AC12).
@@ -250,22 +290,27 @@ function App() {
   /** @param {unknown} err */
   const show = (err) => setSaid(/** @type {Error} */ (err).message);
   const data = roomData.value;
+  const mine = !data ? [] : data.me.admin ? allTabs : allTabs.filter(([id]) => memberTabs.includes(id));
+  // A link to a tab the viewer lacks opens the first one, and the hash says so (040-AC2).
+  const asked = tab.value;
+  const t = !data || !asked ? '' : mine.some(([id]) => id === asked) ? asked : mine[0][0];
+  useEffect(() => {
+    // Effects run after the paint: a tab followed meanwhile wins over this render's.
+    if (!t || t === asked || tab.value !== asked || !dialog.open) return;
+    history.replaceState(history.state, '', '#manage/' + t);
+    shownHash = location.hash;
+    tab.value = t;
+  }, [t, asked]);
   if (data) title.textContent = 'Room settings · ' + data.room.name;
-  if (!tab.value || !data) return null;
-  if (data.me.admin) return html`<${Manage} data=${data} tabs=${allTabs} tab=${allTabs.some(([id]) => id === tab.value) ? tab.value : 'general'}/>`;
-  const mine = allTabs.filter(([id]) => memberTabs.includes(id));
-  // A link to an admin's tab opens the first one.
-  const t = mine.some(([id]) => id === tab.value) ? tab.value : mine[0][0];
+  if (!t || !data) return null;
+  if (data.me.admin) return html`<${Manage} data=${data} tabs=${allTabs} tab=${t}/>`;
   const base = '/api/rooms/' + encodeURIComponent(data.room.id);
   /** @param {number} id */
   const byName = (id) => data.participants.find((p) => p.id === id)?.name || 'a former participant';
   return html`<${TabBar} tabs=${mine} active=${t} href=${(/** @type {string} */ id) => '#manage/' + id} label="Room settings"/>
     ${said && html`<p class="said" role="alert">${said}</p>`}
-    <div class="tab-panel" id=${'panel-' + t}>${t === 'glossary' && (sttState.value?.glossary ? html`<${STTGlossary} data=${data}/>` : glossaryNone(data))}
-      ${t === 'invites' && html`<${Invites} base=${base} api=${fetchJSON} show=${show} byName=${byName} me=${data.me.id}/>`}
-      ${t === 'links' && html`<${LinksTab} data=${data} base=${base} show=${show}/>`}
-      ${t === 'plugins' && html`<${PluginsTab} base=${base} admin=${false} host=${approves(data)} personas=${agentState.value?.personas || []}/>`}
-      ${t === 'network' && html`<${NetworkTab} base=${base} host=${isHost(data)} show=${show}/>`}</div>`;
+    <div class="tab-panel" id=${'panel-' + t}>${t === 'invites' && html`<${Invites} base=${base} api=${fetchJSON} show=${show} byName=${byName} me=${data.me.id}/>`}
+      ${t === 'links' && html`<${LinksTab} data=${data} base=${base} show=${show}/>`}</div>`;
 }
 
 /**
@@ -527,5 +572,6 @@ const isHost = (data) => agentState.value?.host_participant_id === data.me.id;
 const approves = (data) => isHost(data) || !!agentState.value?.you_host;
 
 render(html`<${App}/>`, /** @type {HTMLElement} */ (document.getElementById('room-admin')));
+render(html`<${AISettings}/>`, /** @type {HTMLElement} */ (document.getElementById('ai-settings')));
 render(html`<${Proposals}/>`, document.body.appendChild(document.createElement('div')));
 mountReview(roomData, agentState);

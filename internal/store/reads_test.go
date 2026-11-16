@@ -28,7 +28,7 @@ func (f *readsFixture) room(id string) {
 	if _, err := f.s.CreateRoom(f.t.Context(), id, "Room "+id); err != nil {
 		f.t.Fatal(err)
 	}
-	if _, err := f.s.CreateInvite(f.t.Context(), id, "inv-"+id, 0); err != nil {
+	if _, err := f.s.CreateInvite(f.t.Context(), id, "inv-"+id, 0, ""); err != nil {
 		f.t.Fatal(err)
 	}
 }

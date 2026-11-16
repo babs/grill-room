@@ -18,6 +18,8 @@ type roomOverview struct {
 	// Used is what counts against Quota.
 	Used       int64 `json:"used"`
 	HostOnline bool  `json:"host_online"`
+	// Seats, the room's own overview only, holds the invite each seat joined through (040-AC10).
+	Seats []store.SeatInvite `json:"seats,omitempty"`
 }
 
 type roomsResp struct {

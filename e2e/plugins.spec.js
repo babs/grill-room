@@ -150,8 +150,8 @@ test('plugins: private repo through the host, options, allowlist', async ({ brow
   try {
     const admin = await pairDaemon(alice, daemon);
 
-    await alice.goto(`/r/${room.id}#manage/plugins`);
-    const tab = alice.locator('#manage');
+    await alice.goto(`/r/${room.id}#ai/plugins`);
+    const tab = alice.locator('#ai');
     await tab.locator('#plugin-add-open').click();
     const add = alice.locator('#plugin-add');
     await add.locator('#plugin-url').fill(url);
@@ -172,7 +172,7 @@ test('plugins: private repo through the host, options, allowlist', async ({ brow
     await expect(tab.locator('#plugin-fetches')).toHaveCount(0);
     await expect(admin.locator('.fetch-request')).toHaveCount(0);
 
-    await alice.locator('#manage-close').click();
+    await alice.locator('#ai .sheet-head .close').click();
     expect((await ask(alice, room.id, 'FAKE_HOOKS unset')).trim()).toBe('Hooks: none.');
     let caps = (await personaSheet(alice, 'Grill', 'Capabilities')).locator('.persona-plugins');
     await expect(caps.locator('li[data-plugin="opt"]')).toContainText("needs host setup on the AI host's computer");

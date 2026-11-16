@@ -20,7 +20,7 @@ func joinWithProfile(t *testing.T, s *Store, room, name string, prof JoinProfile
 	if _, err := s.CreateRoom(ctx, room, "Room "+room); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateInvite(ctx, room, "inv-"+room, 0); err != nil {
+	if _, err := s.CreateInvite(ctx, room, "inv-"+room, 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	p, _, err := s.Join(ctx, "inv-"+room, name, "tok-"+room, prof)
@@ -290,11 +290,11 @@ func TestInvitesRecordTheirCreator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mine, err := s.CreateInvite(ctx, "a", "mine", p.ID)
+	mine, err := s.CreateInvite(ctx, "a", "mine", p.ID, "")
 	if err != nil || mine.CreatedBy != p.ID {
 		t.Fatalf("create: %+v %v", mine, err)
 	}
-	if _, err := s.CreateInvite(ctx, "a", "bobs", bob.ID); err != nil {
+	if _, err := s.CreateInvite(ctx, "a", "bobs", bob.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if invs, err := s.Invites(ctx, "a", p.ID); err != nil || len(invs) != 1 || invs[0].ID != mine.ID {
@@ -353,7 +353,7 @@ func TestProfileCallsFailOnAClosedStore(t *testing.T) {
 		"CreateRecoveryLink": func() error { _, err := s.CreateRecoveryLink(ctx, 1, "t", time.Now()); return err },
 		"UseRecoveryLink":    func() error { _, err := s.UseRecoveryLink(ctx, "t", "x", time.Now(), ""); return err },
 		"RenameRoom":         func() error { _, err := s.RenameRoom(ctx, "a", "x", p); return err },
-		"CreateInvite":       func() error { _, err := s.CreateInvite(ctx, "a", "h", p.ID); return err },
+		"CreateInvite":       func() error { _, err := s.CreateInvite(ctx, "a", "h", p.ID, ""); return err },
 		"Invite":             func() error { _, err := s.Invite(ctx, "a", 1); return err },
 		"Invites":            func() error { _, err := s.Invites(ctx, "a", 0); return err },
 		"Join": func() error {
@@ -377,7 +377,7 @@ func TestRevokeInviteCascadesToInvitesItsJoinersMade(t *testing.T) {
 	chain := []int64{alice.InviteID}
 	by := alice
 	for i, name := range []string{"Carol", "Dave"} {
-		inv, err := s.CreateInvite(ctx, "a", fmt.Sprintf("chain-%d", i), by.ID)
+		inv, err := s.CreateInvite(ctx, "a", fmt.Sprintf("chain-%d", i), by.ID, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -386,7 +386,7 @@ func TestRevokeInviteCascadesToInvitesItsJoinersMade(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	other, err := s.CreateInvite(ctx, "a", "other", 0)
+	other, err := s.CreateInvite(ctx, "a", "other", 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +394,7 @@ func TestRevokeInviteCascadesToInvitesItsJoinersMade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobs, err := s.CreateInvite(ctx, "a", "bobs", bob.ID)
+	bobs, err := s.CreateInvite(ctx, "a", "bobs", bob.ID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,10 +415,10 @@ func TestRevokeInviteCascadesToInvitesItsJoinersMade(t *testing.T) {
 		t.Errorf("rejoin through her own invite: %v", err)
 	}
 	// Nor can a revoked member mint a new one, whatever the HTTP layer checked before.
-	if _, err := s.CreateInvite(ctx, "a", "late", alice.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := s.CreateInvite(ctx, "a", "late", alice.ID, ""); !errors.Is(err, ErrNotFound) {
 		t.Errorf("invite by a revoked member: %v", err)
 	}
-	if _, err := s.CreateInvite(ctx, "b", "elsewhere", bob.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := s.CreateInvite(ctx, "b", "elsewhere", bob.ID, ""); !errors.Is(err, ErrNotFound) {
 		t.Errorf("invite into a room the member is not in: %v", err)
 	}
 	if _, err := s.ParticipantByToken(ctx, "tok-bob"); err != nil {
@@ -436,7 +436,7 @@ func TestProfileRoomsCarryPeopleActivityAndAdmin(t *testing.T) {
 	ctx := context.Background()
 	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
 	joinWithProfile(t, s, "b", "Ali", JoinProfile{ID: a.ProfileID})
-	if _, err := s.CreateInvite(ctx, "a", "inv-a2", 0); err != nil {
+	if _, err := s.CreateInvite(ctx, "a", "inv-a2", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.Join(ctx, "inv-a2", "Bob", "tok-a2", JoinProfile{}); err != nil {

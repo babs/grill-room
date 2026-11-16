@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures.js';
 import { mkdirSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, upload, startDaemon, openDaemonPage, smallTargets, menuItem, playSTT, newRoomEditor, personaAction, unfoldTabs, dropFiles } from './helpers.js';
+import { roomWith, signIn, upload, startDaemon, openDaemonPage, smallTargets, menuItem, playSTT, newRoomEditor, personaAction, unfoldTabs, dropFiles, openPersonas } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const desktop = { width: 1440, height: 900 };
@@ -80,11 +80,11 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
   const me = await alice.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()), room.id);
   expect((await request.put(`/api/rooms/${room.id}/admins/${me.me.id}`, { headers: admin })).status()).toBe(204);
   await playSTT(alice, room.id, { engines: ['whisper'], glossary: true });
-  for (const tab of ['general', 'invites', 'admins', 'glossary']) {
-    await alice.goto(`/r/${room.id}#manage/${tab}`);
-    await expect(alice.locator('#manage #room-panel')).toBeVisible();
+  for (const tab of ['manage/general', 'manage/invites', 'manage/admins', 'ai/glossary']) {
+    await alice.goto(`/r/${room.id}#${tab}`);
+    await expect(alice.locator(`#panel-${tab.split('/')[1]}`)).toBeVisible();
     expect(await smallTargets(alice), 'settings ' + tab).toEqual([]);
-    await shot(alice, 'after-phone-settings-' + tab);
+    await shot(alice, 'after-phone-settings-' + tab.split('/')[1]);
   }
 
   const docs = await alice.context().newPage();
@@ -275,7 +275,7 @@ test('header menus, wording and empty states', async ({ browser, request }) => {
   await alice.keyboard.press('Escape');
   await alice.locator('#room-open').click();
   await expect(alice.locator('#room-menu').getByRole('button', { name: 'Invite people' })).toBeVisible();
-  await expect(alice.locator('#room-menu').getByRole('button', { name: 'Personas' })).toBeVisible();
+  await expect(alice.locator('#room-menu').getByRole('link', { name: 'Personas' })).toBeVisible();
   await expect(alice.locator('#room-menu').getByRole('link', { name: 'Open documents in a new window' })).toBeVisible();
   // The room menu hangs under the room's name, on the left (005-AC32).
   expect((await alice.locator('#room-menu').boundingBox()).x).toBeLessThan(16);
@@ -543,8 +543,8 @@ test('participant names never break mid-word', async ({ browser, request }) => {
   expect(lines).toBe(1);
   expect(clipped).toBe(true);
   await expect(name).toHaveCSS('text-overflow', 'ellipsis');
-  await menuItem(alice, 'Personas');
-  await expect(alice.locator('#personas')).toBeVisible();
+  await openPersonas(alice);
+  await expect(alice.locator('#ai')).toBeVisible();
 });
 
 // 008-AC12: the new controls at 1440 px share the one control height, the handles show the focus

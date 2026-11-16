@@ -241,7 +241,7 @@ func TestSweepExpired(t *testing.T) {
 	if _, err := s.CreateRoom(ctx, "r", "R"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateInvite(ctx, "r", "inv-r", 0); err != nil {
+	if _, err := s.CreateInvite(ctx, "r", "inv-r", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	p, _, err := s.Join(ctx, "inv-r", "Alice", "tok-r", JoinProfile{})
@@ -453,7 +453,7 @@ func TestCapsExactUnderConcurrency(t *testing.T) {
 	if _, err := pods[0].CreateRoom(ctx, "r", "R"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pods[0].CreateInvite(ctx, "r", "inv-r", 0); err != nil {
+	if _, err := pods[0].CreateInvite(ctx, "r", "inv-r", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	p, _, err := pods[0].Join(ctx, "inv-r", "Alice", "tok-a", JoinProfile{})

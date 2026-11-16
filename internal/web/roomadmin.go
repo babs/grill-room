@@ -158,6 +158,9 @@ type adminParticipant struct {
 	// Host is the AI host; CanHost, a connected daemon of theirs can take the role (009-AC33).
 	Host    bool `json:"host"`
 	CanHost bool `json:"can_host"`
+	// InviteID and InviteName are the invite the seat joined through (040-AC10, 040-AC17).
+	InviteID   int64  `json:"invite_id"`
+	InviteName string `json:"invite_name,omitempty"`
 }
 
 // roomParticipants lists a room's participants for the super-admin, who appoints room admins among
@@ -183,9 +186,19 @@ func (s *Server) roomParticipants(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "room_participants_failed", err)
 		return
 	}
+	seats, err := s.bus.Store.SeatInvites(r.Context(), room)
+	if err != nil {
+		s.serverError(w, "room_participants_failed", err)
+		return
+	}
+	names := make(map[int64]string, len(seats))
+	for _, si := range seats {
+		names[si.InviteID] = si.InviteName
+	}
 	out := make([]adminParticipant, len(ps))
 	for i, p := range ps {
-		out[i] = adminParticipant{ID: p.ID, Name: p.Name, Admin: p.Admin, HasProfile: p.ProfileID != 0, Host: p.ID == rm.HostParticipantID}
+		out[i] = adminParticipant{ID: p.ID, Name: p.Name, Admin: p.Admin, HasProfile: p.ProfileID != 0, Host: p.ID == rm.HostParticipantID,
+			InviteID: p.InviteID, InviteName: names[p.InviteID]}
 		out[i].CanHost = s.canHostDaemon(room, p.ID) != nil
 		if c, ok := cs[p.ID]; ok {
 			out[i].Client = &c
@@ -210,6 +223,10 @@ func (s *Server) roomOverview(w http.ResponseWriter, r *http.Request, sess sessi
 	}
 	v := roomOverview{RoomOverview: *o, Used: o.Volume.Counted()}
 	v.HostOnline = o.HostParticipantID != 0 && s.onlineHosts()[o.ID][o.HostParticipantID]
+	if v.Seats, err = s.bus.Store.SeatInvites(r.Context(), o.ID); err != nil {
+		s.serverError(w, "room_overview_failed", err)
+		return
+	}
 	writeJSON(w, http.StatusOK, v)
 }
 

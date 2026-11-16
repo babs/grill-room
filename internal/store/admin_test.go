@@ -213,7 +213,7 @@ func TestAuditWriteFailureRollsBackTheChange(t *testing.T) {
 		{"delete room", func() error { _, err := s.DeleteRoom(audited(TargetRoom, "a"), "a"); return err }, `SELECT count(*) FROM rooms WHERE id = 'a'`, nil, "1"},
 		{"rename room", func() error { _, err := s.RenameRoom(audited(TargetRoom, "a"), "a", "Z", nil); return err }, `SELECT name FROM rooms WHERE id = 'a'`, nil, "Room a"},
 		{"room quota", func() error { return s.SetRoomQuota(audited(TargetRoom, "a"), "a", 5) }, `SELECT quota_bytes FROM rooms WHERE id = 'a'`, nil, ""},
-		{"create invite", func() error { _, err := s.CreateInvite(audited(TargetRoom, "a"), "a", "ix", 0); return err }, `SELECT count(*) FROM invites WHERE token_hash = 'ix'`, nil, "0"},
+		{"create invite", func() error { _, err := s.CreateInvite(audited(TargetRoom, "a"), "a", "ix", 0, ""); return err }, `SELECT count(*) FROM invites WHERE token_hash = 'ix'`, nil, "0"},
 		{"revoke invite", func() error {
 			_, err := s.RevokeInvite(audited(TargetRoom, "a"), "a", invs[0].ID, true, "Admin")
 			return err

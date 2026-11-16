@@ -260,7 +260,7 @@ func TestSkillPinning(t *testing.T) {
 	if _, err := r.s.RevokeInvite(ctx, "a", r.alice.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.s.CreateInvite(ctx, "a", "inv-2", 0); err != nil {
+	if _, err := r.s.CreateInvite(ctx, "a", "inv-2", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	dave, _, err := r.s.Join(ctx, "inv-2", "Dave", "tok-dave", JoinProfile{})
@@ -469,7 +469,7 @@ func TestRoomSkill(t *testing.T) {
 	if err := r.s.RemoveSkill(ctx, r.bobOwn.ID, r.bob.ProfileID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.s.CreateInvite(ctx, "a", "inv-2", 0); err != nil {
+	if _, err := r.s.CreateInvite(ctx, "a", "inv-2", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	if r.alice, _, err = r.s.Join(ctx, "inv-2", "Alice", "tok-alice-2", JoinProfile{ID: r.alice.ProfileID}); err != nil {

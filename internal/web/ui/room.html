@@ -103,9 +103,9 @@
   <button type="button" id="invite-open" data-icon="invite">Invite people</button>
   <button type="button" id="manage-open" data-icon="settings" hidden>Room settings</button>
   <a id="links-open" href="#manage/links" data-icon="clip" hidden><span id="links-label"></span></a>
-  <button type="button" id="personas-open" data-icon="personas">Personas</button>
-  <a id="overview-open" href="#call-overview" data-icon="transcribe">Call and voice-to-text…</a>
   <a id="ai-open" href="#ai" data-icon="info">AI in this room</a>
+  <a id="personas-open" href="#ai/personas" data-icon="personas">Personas</a>
+  <a id="overview-open" href="#call-overview" data-icon="transcribe">Call and voice-to-text…</a>
   <a id="docs-window-menu" data-icon="external">Open documents in a new window</a>
   <a id="chat-window-menu" data-icon="external">Open chat in a new window</a>
   <button type="button" id="host-open" data-icon="host" hidden>Run the AI on my computer</button>
@@ -171,36 +171,6 @@
 <p id="notice" class="strip" role="status" hidden><span id="notice-text"></span> <button type="button" id="notice-close" class="btn-ghost">OK</button></p>
 <button type="button" id="strip-more" class="btn-ghost" aria-expanded="false" hidden></button>
 </div>
-<dialog id="personas" class="sheet wide full" aria-labelledby="personas-title">
-  <div class="sheet-head">
-    <h2 id="personas-title">Personas</h2>
-    <button type="button" id="personas-close" class="btn-icon btn-ghost" aria-label="Close" data-icon="close"></button>
-  </div>
-  <p class="hint">Each persona is an AI with its own Claude session. Changes apply from its next answer.</p>
-  <p id="personas-status" class="said" role="status"></p>
-  <ul id="persona-list" class="persona-rows" aria-label="AI personas"></ul>
-  <!-- The sheet's one primary action, before the room's limits and skills (035-AC17). -->
-  <div class="row persona-add">
-    <button type="button" id="persona-add" class="btn-primary">Add a persona</button>
-    <span id="personas-full" class="hint" hidden></span>
-  </div>
-  <form id="chain-form" class="row">
-    <label>Auto-turn limit <input id="chain-budget" type="number" min="1" max="1000" required></label>
-    <button type="submit" class="btn-secondary">Set</button>
-  </form>
-  <p class="hint">Answers the personas start one after another (every N answers, or when an answer names another persona) before they pause. A message from a person starts the count over.</p>
-  <label><input id="parallel-turns" type="checkbox"> Personas answer at the same time</label>
-  <p class="hint" id="parallel-hint">Each one in its own sandbox on the AI host's computer. When two edit the same document, the second runs again on the new version. Only the AI host switches it.</p>
-  <section id="room-skills" aria-labelledby="room-skills-title">
-    <h3 id="room-skills-title">Room skills</h3>
-    <p class="hint">The room's own copies of skills, at the version copied. They stay when whoever copied them leaves, and any persona can turn them on.</p>
-    <ul id="room-skill-list"></ul>
-    <form id="room-skill-copy" class="row" hidden>
-      <label>Copy one of your personal skills into the room <select id="room-skill-source" required></select></label>
-      <button type="submit" class="btn-secondary">Copy</button>
-    </form>
-  </section>
-</dialog>
 <!-- The library picker: three sections, then a preview of the one chosen (035-AC14). -->
 <dialog id="persona-picker" class="sheet wide full" aria-labelledby="persona-picker-title">
   <div class="sheet-head">
@@ -243,17 +213,49 @@
   </div>
   <div id="room-admin"></div>
 </dialog>
-<!-- What the personas need to answer, and who acts on it (039). -->
+<!-- What the personas need to answer, who acts on it (039), and the room's AI settings in tabs, #ai/<tab> (040). -->
 <dialog id="ai" class="sheet wide full" aria-labelledby="ai-title">
   <div class="sheet-head">
     <h2 id="ai-title">AI in this room</h2>
     <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
   </div>
-  <ul id="ai-rows" class="list-rows" aria-label="What the AI needs"></ul>
-  <section aria-labelledby="ai-choices-title">
-    <h3 id="ai-choices-title">The AI host's choices</h3>
-    <ul id="ai-choices" class="ai-choices"></ul>
-  </section>
+  <nav id="ai-tabs" class="tabs" aria-label="AI in this room"></nav>
+  <div id="panel-status" class="tab-panel">
+    <ul id="ai-rows" class="list-rows" aria-label="What the AI needs"></ul>
+    <section aria-labelledby="ai-choices-title">
+      <h3 id="ai-choices-title">The AI host's choices</h3>
+      <ul id="ai-choices" class="ai-choices"></ul>
+    </section>
+  </div>
+  <!-- The room's personas, its limits and its skills (005-AC40, 035-AC17, 040-AC7). -->
+  <div id="panel-personas" class="tab-panel" hidden>
+    <p class="hint">Each persona is an AI with its own Claude session. Changes apply from its next answer.</p>
+    <p id="personas-status" class="said" role="status"></p>
+    <ul id="persona-list" class="persona-rows" aria-label="AI personas"></ul>
+    <!-- The tab's one primary action, before the room's limits and skills (035-AC17). -->
+    <div class="row persona-add">
+      <button type="button" id="persona-add" class="btn-primary">Add a persona</button>
+      <span id="personas-full" class="hint" hidden></span>
+    </div>
+    <form id="chain-form" class="row">
+      <label>Auto-turn limit <input id="chain-budget" type="number" min="1" max="1000" required></label>
+      <button type="submit" class="btn-secondary">Set</button>
+    </form>
+    <p class="hint">Answers the personas start one after another (every N answers, or when an answer names another persona) before they pause. A message from a person starts the count over.</p>
+    <label><input id="parallel-turns" type="checkbox"> Personas answer at the same time</label>
+    <p class="hint" id="parallel-hint">Each one in its own sandbox on the AI host's computer. When two edit the same document, the second runs again on the new version. Only the AI host switches it.</p>
+    <section id="room-skills" aria-labelledby="room-skills-title">
+      <h3 id="room-skills-title">Room skills</h3>
+      <p class="hint">The room's own copies of skills, at the version copied. They stay when whoever copied them leaves, and any persona can turn them on.</p>
+      <ul id="room-skill-list"></ul>
+      <form id="room-skill-copy" class="row" hidden>
+        <label>Copy one of your personal skills into the room <select id="room-skill-source" required></select></label>
+        <button type="submit" class="btn-secondary">Copy</button>
+      </form>
+    </section>
+  </div>
+  <!-- admin/room-admin.js mounts the other tabs here. -->
+  <div id="ai-settings"></div>
 </dialog>
 <!-- Read-only (042-AC1): each row says who changes it and links there; no control of its own. -->
 <dialog id="call-overview" class="sheet wide full" aria-labelledby="call-overview-title">
@@ -330,7 +332,7 @@
   </p>
   <p class="hint">Anyone holding this link can join and read the room.</p>
   <p id="invite-status" class="said error" role="status"></p>
-  <p><a href="#manage/invites" id="invite-manage">More links and revoking in Room settings › Invites</a></p>
+  <p><a href="#manage/invites" id="invite-manage">Name, add or stop links in Room settings › Invites</a></p>
 </dialog>
 <dialog id="diag" class="sheet full" aria-labelledby="diag-title">
   <div class="sheet-head">

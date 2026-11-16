@@ -12,7 +12,7 @@ func twoSpeakers(t *testing.T, s *Store) (alice, bob *Participant, text, voice, 
 	t.Helper()
 	ctx := context.Background()
 	alice = seed(t, s, "r")
-	if _, err := s.CreateInvite(ctx, "r", "inv-bob", 0); err != nil {
+	if _, err := s.CreateInvite(ctx, "r", "inv-bob", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	bob, system, err := s.Join(ctx, "inv-bob", "Bob", "tok-bob", JoinProfile{})

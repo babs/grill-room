@@ -27,7 +27,7 @@ export async function roomWith(browser, request, names) {
 
 // playSTT replaces the page's event stream with one "stt" event, as the server sends it from the
 // workers' heartbeats, and reloads. The e2e server has no voice: by default no worker reads the
-// glossary and Room settings has no glossary tab (007-AC14).
+// glossary and AI in this room › Words to recognise says so (007-AC14, 038-AC12).
 export async function playSTT(page, roomID, st) {
   const body = { available: true, listening: false, transcribed: [], engines: [], glossary: false, ...st };
   await playEvents(page, roomID, [['stt', body]]);
@@ -339,13 +339,22 @@ export const noOverflow = (page) => page.evaluate(() => [...document.querySelect
   .filter((e) => !e.parentElement?.closest('.scroll, .tabs') && e.getBoundingClientRect().right > innerWidth + 1)
   .map((e) => `${e.tagName.toLowerCase()}#${e.id}.${e.className}`));
 
-// unfoldTabs opens the list of a tab bar folded on a phone (kit/ui.js), so that its tabs can be clicked.
+// unfoldTabs opens the list of a tab bar folded into its menu (kit/ui.js), so that its tabs can be clicked.
 export async function unfoldTabs(nav) {
   // A page folds its bar after drawing it, and again on a resize.
-  await expect.poll(() => nav.evaluate((n) => 'menu' in n.dataset || n.scrollWidth <= n.clientWidth || !matchMedia('(max-width: 40rem)').matches)).toBe(true);
+  await expect.poll(() => nav.evaluate((n) => 'menu' in n.dataset || n.scrollWidth <= n.clientWidth + 0.5)).toBe(true);
   // A page's own bar folds into its header's ☰.
   const menu = (await nav.evaluate((n) => 'header' in n.dataset)) ? nav.page().locator('.app-header > .tabs-menu') : nav.locator('.tabs-menu');
   if ((await menu.isVisible()) && (await menu.getAttribute('aria-expanded')) === 'false') await menu.click();
+}
+
+// sheetTab follows the tab name of a sheet's bar, ai (AI in this room) or manage (Room settings),
+// folded into its menu or not: a bar still hidden reads as unfolded, so the sheet first.
+export async function sheetTab(page, sheet, name) {
+  await expect(page.locator('#' + sheet)).toBeVisible();
+  const nav = page.locator(`#${sheet} nav.tabs`);
+  await unfoldTabs(nav);
+  await nav.getByRole('link', { name, exact: true }).click();
 }
 
 // openMenu opens a header menu (005-AC32): the room's name (room), the user's initials (me) or the
@@ -363,7 +372,24 @@ export async function openMenu(page, which = 'room') {
 // menuItem picks an item of a header menu (openMenu).
 export async function menuItem(page, name, which = 'room') {
   const menu = await openMenu(page, which);
-  await menu.getByRole(['My rooms and profile', 'Open documents in a new window', 'Open chat in a new window'].includes(name) ? 'link' : 'button', { name, exact: true }).click();
+  await menu.getByRole(['My rooms and profile', 'Open documents in a new window', 'Open chat in a new window', 'Personas', 'AI in this room'].includes(name) ? 'link' : 'button', { name, exact: true }).click();
+}
+
+// skillsAtTop says whether the sheet scrolled to put the room skills at its top: its scroll box
+// moved, and the section starts within its first 80 px, or the box went as far as it goes (040-AC2).
+export const skillsAtTop = (page) => page.locator('#room-skills').evaluate((e) => {
+  let box = e.parentElement;
+  while (box && !(/auto|scroll/.test(getComputedStyle(box).overflowY) && box.scrollHeight > box.clientHeight)) box = box.parentElement;
+  if (!box) return 'no scroll box';
+  const gap = e.getBoundingClientRect().top - box.getBoundingClientRect().top;
+  const end = box.scrollTop >= box.scrollHeight - box.clientHeight - 1;
+  return box.scrollTop > 0 && gap >= 0 && (gap < 80 || end) ? 'at top' : `scrollTop ${box.scrollTop}, ${Math.round(gap)} px down`;
+});
+
+// openPersonas opens AI in this room › Personas from the room menu's Personas (040-AC7).
+export async function openPersonas(page) {
+  await menuItem(page, 'Personas');
+  await expect(page.locator('#panel-personas')).toBeVisible();
 }
 
 // messageAction runs Edit or Delete on a line through its actions button (005-AC35).
@@ -406,7 +432,7 @@ export const personaRow = (page, name) => page.locator('#persona-list .persona-r
 // personaSheet opens name's sheet from its row in the Personas list, on tab (009-AC2), and returns
 // the sheet; the list stays open under it.
 export async function personaSheet(page, name, tab = 'Identity') {
-  if (!(await page.locator('#personas').isVisible())) await menuItem(page, 'Personas');
+  if (!(await page.locator('#panel-personas').isVisible())) await openPersonas(page);
   await personaRow(page, name).click();
   const sheet = page.locator('#persona-sheet');
   await expect(sheet.locator('#persona-sheet-title')).toHaveText(new RegExp(` ${name}$`));
@@ -433,11 +459,15 @@ export async function personaAction(page, name) {
   await page.locator('#persona-menu').getByRole('button', { name, exact: true }).click();
 }
 
-// closePersonas closes the persona sheet, when open, then the Personas list.
+// closePersonas closes the persona sheet, when open, then AI in this room under it. Each close
+// event, a task late, sets the hash: the next step waits for it.
 export async function closePersonas(page) {
-  for (const id of ['#persona-sheet', '#personas']) {
+  for (const [id, gone] of [['#persona-sheet', /^#personas\//], ['#ai', /^#ai(\/|$)/]]) {
     const d = page.locator(id);
-    if (await d.isVisible()) await d.getByRole('button', { name: 'Close' }).first().click();
+    if (!(await d.isVisible())) continue;
+    await d.getByRole('button', { name: 'Close' }).first().click();
+    await expect(d).toBeHidden();
+    await expect.poll(() => page.evaluate(() => location.hash)).not.toMatch(gone);
   }
 }
 
@@ -478,11 +508,11 @@ export async function newRoomEditor(page) {
   await page.getByRole('button', { name: 'Use this starter' }).click();
 }
 
-// addFromLibrary adds title, a library persona of section, with the picker the Personas sheet's
-// Add a persona opens (035-AC14); the Personas sheet stays open.
+// addFromLibrary adds title, a library persona of section, with the picker the Personas tab's
+// Add a persona opens (035-AC14); the Personas tab stays open.
 export async function addFromLibrary(page, title, section = 'Built-in') {
-  const panel = page.locator('#personas');
-  if (!(await panel.isVisible())) await menuItem(page, 'Personas');
+  const panel = page.locator('#panel-personas');
+  if (!(await panel.isVisible())) await openPersonas(page);
   await panel.getByRole('button', { name: 'Add a persona', exact: true }).click();
   const picker = page.locator('#persona-picker');
   await picker.getByRole('group', { name: section }).getByRole('radio', { name: new RegExp(`^${title}, v`) }).check();
@@ -505,7 +535,7 @@ export async function addSecretary(page, fields = {}) {
     // 009-AC1: the row says the trigger in words.
     await expect(personaRow(page, 'Secretary').locator('.pr-meta')).toHaveText(`sonnet · effort medium · every ${fields.everyN} answers`);
   }
-  return page.locator('#personas');
+  return page.locator('#ai');
 }
 
 // commentOnDocument saves a whole-document note on the open document (005-AC37 calls them notes).

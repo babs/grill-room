@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { roomWith, appointAdmin, fakeDaemon, agentState, openStrip, personaSheet, closePersonas, confirmSheet, noOverflow, smallTargets, uniq } from './helpers.js';
+import { roomWith, appointAdmin, fakeDaemon, skillsAtTop, agentState, openStrip, personaSheet, closePersonas, confirmSheet, noOverflow, smallTargets, uniq } from './helpers.js';
 import { gitPort } from './playwright.config.js';
 
 const phone = { width: 390, height: 844 };
@@ -98,9 +98,9 @@ for (const vp of [phone, desktop]) {
       const short1 = repo.first.slice(0, 7);
       const grill = (await agentState(alice, room.id)).personas[0].id;
 
-      // Room settings › Plugins, empty.
-      await alice.goto(`/r/${room.id}#manage/plugins`);
-      const tab = alice.locator('#manage');
+      // AI in this room › Plugins, empty.
+      await alice.goto(`/r/${room.id}#ai/plugins`);
+      const tab = alice.locator('#ai');
       await expect(tab.locator('#plugins-empty')).toHaveText('No plugins yet. Add one from a git repository.');
 
       // 009-AC7: a link with credentials is refused in those words.
@@ -141,7 +141,7 @@ for (const vp of [phone, desktop]) {
       // the approval sheet, with the hook's command, the MCP URL and domain, the warning, the cost.
       await report('rich', 1, inspected);
       await expect(row.locator('.plugin-state')).toHaveText("v1: waiting for the AI host's approval");
-      await alice.locator('#manage-close').click();
+      await alice.locator('#ai .sheet-head .close').click();
       await openStrip(alice);
       await expect(alice.locator('#approval-list li', { hasText: 'plugin rich' })).toContainText(`Alice added the plugin rich, main @ ${short1}.`);
       await openStrip(bob);
@@ -162,9 +162,9 @@ for (const vp of [phone, desktop]) {
       await toast(alice, 'Approved rich v1');
 
       // A member reads the list, gets no write action, and a 403 from every write route (009-AC5).
-      await bob.goto(`/r/${room.id}#manage/plugins`);
-      await expect(bob.locator('#manage #plugin-list li[data-plugin="rich"] .plugin-state')).toHaveText('v1 in use');
-      await expect(bob.locator('#plugin-add-open, #manage button[aria-label^="More actions for the plugin"]')).toHaveCount(0);
+      await bob.goto(`/r/${room.id}#ai/plugins`);
+      await expect(bob.locator('#ai #plugin-list li[data-plugin="rich"] .plugin-state')).toHaveText('v1 in use');
+      await expect(bob.locator('#plugin-add-open, #ai button[aria-label^="More actions for the plugin"]')).toHaveCount(0);
       const rich = (await call(bob, 'GET', base)).body.plugins[0].id;
       for (const [m, p] of [['POST', base + '/check'], ['POST', base], ['POST', `${base}/${rich}/update`], ['DELETE', `${base}/${rich}`],
         ['PUT', `/api/rooms/${room.id}/personas/${grill}/plugins/${rich}`]]) {
@@ -208,7 +208,7 @@ for (const vp of [phone, desktop]) {
       // 009-AC11 009-AC15: Update makes v2, its change against v1 in the sheet, then "Up to date".
       const short2 = repo.commit({ 'plugins/rich/skills/hello/SKILL.md': '---\nname: hello\ndescription: Say hello.\n---\nSay hello twice.\n',
         'plugins/rich/skills/bye/SKILL.md': '---\nname: bye\ndescription: Say bye.\n---\nSay bye.\n' }).slice(0, 7);
-      await alice.goto(`/r/${room.id}#manage/plugins`);
+      await alice.goto(`/r/${room.id}#ai/plugins`);
       const update = async () => {
         await tab.getByRole('button', { name: 'More actions for the plugin rich' }).click();
         await alice.locator('#plugin-menu-' + rich).getByRole('menuitem', { name: 'Update' }).click();
@@ -287,7 +287,7 @@ test('plugins: hostile plugin content renders as text', async ({ browser, reques
       expect(await alice.locator(`${where} img`).count(), where).toBe(0);
       expect(await alice.evaluate(() => window.pwned), where).toBeUndefined();
     };
-    await alice.goto(`/r/${room.id}#manage/plugins`);
+    await alice.goto(`/r/${room.id}#ai/plugins`);
     const row = alice.locator('#plugin-list li[data-plugin="evil"]');
     await expect(row.locator('.plugin-name')).toContainText('evil, main @ ');
     await noMarkup('#plugin-list');
@@ -321,7 +321,7 @@ test('plugins: hostile plugin content renders as text', async ({ browser, reques
 });
 
 // 009-AC19 009-AC21 009-AC25: an ssh link the server cannot fetch offers "Ask the AI host to fetch
-// it"; the request waits in Room settings › Plugins, reaches the host's daemon (a fake AI host app
+// it"; the request waits in AI in this room › Plugins, reaches the host's daemon (a fake AI host app
 // reading the daemon API), and a host whose git cannot reach the repo fails it in those words; a
 // room admin dismisses it. The approval sheet marks the MCP websites off the host's allowlist.
 test('plugins: ask the AI host, and the allowlist marks', async ({ browser, request, baseURL }) => {
@@ -332,8 +332,8 @@ test('plugins: ask the AI host, and the allowlist marks', async ({ browser, requ
   const daemonAPI = (path, init = {}) => fetch(`${baseURL}/api/rooms/${room.id}/daemon/${path}`,
     { ...init, headers: { Authorization: 'Bearer ' + host.token, 'Content-Type': 'application/json' } });
   try {
-    await alice.goto(`/r/${room.id}#manage/plugins`);
-    const tab = alice.locator('#manage');
+    await alice.goto(`/r/${room.id}#ai/plugins`);
+    const tab = alice.locator('#ai');
     await tab.locator('#plugin-add-open').click();
     const add = alice.locator('#plugin-add');
     await add.locator('#plugin-url').fill('git@example.com:team/private.git');
@@ -425,8 +425,8 @@ test('plugins: saved in a starter, pending in a room made from it', async ({ bro
     await expect(alice.locator('#invites')).toBeVisible();
     const copy = new URL(alice.url()).pathname.split('/')[2];
     expect(copy).not.toBe(room.id);
-    await alice.goto(`/r/${copy}#manage/plugins`);
-    const row = alice.locator('#manage #plugin-list li[data-plugin="lint"]');
+    await alice.goto(`/r/${copy}#ai/plugins`);
+    const row = alice.locator('#ai #plugin-list li[data-plugin="lint"]');
     await expect(row.locator('.plugin-name')).toHaveText(label);
     await expect(row).toContainText('On for Grill');
     await expect(row.locator('.plugin-state')).toHaveText('v1: waiting for the AI host to check it');
@@ -438,8 +438,8 @@ test('plugins: saved in a starter, pending in a room made from it', async ({ bro
   }
 });
 
-// 038-AC4: empty Capabilities link to where skills and plugins are added, and an empty Room
-// settings › Skills opens the Personas sheet.
+// 038-AC4: empty Capabilities link to where skills and plugins are added; an empty room skills
+// list (AI in this room › Personas, 040-AC7) says so.
 test('empty capabilities and room skills link to their place', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await appointAdmin(alice, request, room.id);
@@ -448,19 +448,19 @@ test('empty capabilities and room skills link to their place', async ({ browser,
   const caps = await personaSheet(alice, 'Grill', 'Capabilities');
   await expect(caps.locator('.persona-skills .hint')).toHaveText('Add a skill on your profile page.');
   await expect(caps.getByRole('link', { name: 'your profile page' })).toHaveAttribute('href', '/profile#skills');
-  await caps.getByRole('link', { name: 'Room settings › Plugins' }).click();
-  await expect(alice).toHaveURL(/#manage\/plugins$/);
+  // 040-AC9: the hint names the tab's new place.
+  await caps.getByRole('link', { name: 'AI in this room › Plugins' }).click();
+  await expect(alice).toHaveURL(/#ai\/plugins$/);
   await expect(alice.locator('#panel-plugins')).toBeVisible();
-  // A fresh page: the Personas sheet stays open under Room settings.
-  await alice.goto(alice.url().split('#')[0] + '#manage/skills');
-  await alice.reload();
-  // The room first: the sheet is hidden before the page has read anything.
+  // A fresh page: #manage/skills lands on AI › Personas, scrolled to the room skills, which a short
+  // viewport keeps below the fold otherwise.
+  await alice.setViewportSize({ width: 1280, height: 420 });
+  const url = alice.url().split('#')[0];
+  await alice.goto('about:blank');
+  await alice.goto(url + '#manage/skills');
+  // The room first: the page reads it before it opens and scrolls the tab.
   await expect(alice.locator('#me')).not.toBeEmpty();
-  await expect(alice.locator('#personas')).toBeHidden();
-  const toSheet = alice.locator('#panel-skills').getByRole('button', { name: 'the Personas sheet' });
-  // It reads as a link inside the sentence, not on a row of its own: inline computes inline-block for a button.
-  expect(await toSheet.evaluate((b) => getComputedStyle(b).display)).toMatch(/^inline/);
-  await toSheet.click();
-  await expect(alice.locator('#personas')).toBeVisible();
-  await expect(alice.locator('#panel-skills')).toBeHidden();
+  await expect(alice).toHaveURL(/#ai\/personas$/);
+  await expect.poll(() => skillsAtTop(alice)).toBe('at top');
+  await expect(alice.locator('#room-skill-list li')).toHaveText(['None yet.']);
 });

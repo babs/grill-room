@@ -765,7 +765,7 @@ function showTab() {
     if (t === tab) $('tab-' + t).setAttribute('aria-current', 'page');
     else $('tab-' + t).removeAttribute('aria-current');
   }
-  // A bar folded on a phone names its current tab; one that scrolls keeps it in sight (005-AC35).
+  // A bar that overflows folds into its menu, named after the current tab (005-AC35, kit/ui.js).
   window.grillShowTab($('profile-tabs'));
   // The browser jumped to the element the hash names, if any: a tab opens at the page's top, under
   // the identity strip.

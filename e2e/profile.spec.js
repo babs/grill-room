@@ -114,13 +114,13 @@ test('member invites and revokes', async ({ browser, request }) => {
   await alice.locator('#invite-manage').click();
   const rows = alice.locator('#manage #invites-all .list-row:not(.head)');
   await expect(rows).toHaveCount(1);
-  await rowAction(rows, /^Revoke/);
-  // 016-AC3: a member's revoke stops new joins; Carol keeps her seat.
+  await rowAction(rows, /^Stop new joins/);
+  // 016-AC3 040-AC16: a member's Stop new joins keeps Carol's seat.
   await expect(alice.locator('#revoke-stays')).toBeVisible();
   await expect(alice.locator('#revoke-cut')).toHaveCount(0);
-  await alice.locator('#revoke-sheet').getByRole('button', { name: 'Revoke', exact: true }).click();
-  await expect(alice.locator('#toasts .toast')).toHaveText('Revoked. Nobody lost access.');
-  await expect(rows).toContainText('revoked');
+  await alice.locator('#revoke-sheet').getByRole('button', { name: 'Stop new joins', exact: true }).click();
+  await expect(alice.locator('#toasts .toast')).toHaveText('Stopped. Nobody lost access.');
+  await expect(rows).toContainText('Stopped');
   await carol.locator('#body').fill('Carol stays');
   await carol.locator('#body').press('Enter');
   await expect(alice.locator('#messages')).toContainText('Carol stays');

@@ -18,7 +18,7 @@ func linkSetup(t *testing.T, s *Store) (ana, anaL, bob *Participant) {
 	anaL = joinWithProfile(t, s, "l", "Ana L", JoinProfile{ID: ana.ProfileID})
 	makeAdmin(t, s, "p", ana.ProfileID)
 	makeAdmin(t, s, "l", ana.ProfileID)
-	if _, err := s.CreateInvite(t.Context(), "p", "inv-bob", 0); err != nil {
+	if _, err := s.CreateInvite(t.Context(), "p", "inv-bob", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	bob, _, err := s.Join(t.Context(), "inv-bob", "Bob", "tok-bob", JoinProfile{RecoveryHash: "rec-bob", SessionHash: "sess-bob"})

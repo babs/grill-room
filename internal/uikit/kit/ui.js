@@ -534,7 +534,6 @@
     (navigator.clipboard?.writeText(v.dataset.value || '') ?? Promise.reject()).then(() => window.grillToast('Copied'), () => window.grillToast("Couldn't copy: select the text instead"));
   });
 
-  const phone = matchMedia('(max-width: 40rem)');
   // A page's own bar (data-header) folds into a ☰ at the left of its app header: a button in the
   // content repeats the section heading under it. A sheet's bar has no header: its button stays in it.
   /** @param {HTMLElement} nav */
@@ -544,7 +543,7 @@
   /** @param {Element} el @returns {HTMLElement | null} the bar el or its ☰ belongs to */
   const barOf = (el) => (el.closest('.app-header > .tabs-menu') ? document.querySelector('.tabs[data-header]') : el.closest('.tabs'));
   /**
-   * foldTabs turns a tab bar that overflows a phone into one button, the menu icon and the current
+   * foldTabs turns a tab bar that overflows its width, at any viewport, into one button, the menu icon and the current
    * tab's name, that opens the tabs as a list (tokens.css): a bar scrolled sideways hides that more
    * tabs exist. The button lives in the bar, or the page's header, so a page that redraws or drops
    * either takes it along; the next call makes a new one.
@@ -568,7 +567,7 @@
     /** @type {HTMLElement} */ (b.lastChild).textContent = name;
     // Measured unfolded: folded, the tabs take no width.
     delete nav.dataset.menu;
-    if (phone.matches && nav.scrollWidth > nav.clientWidth + 0.5) nav.dataset.menu = '';
+    if (nav.scrollWidth > nav.clientWidth + 0.5) nav.dataset.menu = '';
     else openTabs(nav, false);
   };
   /** @param {HTMLElement} nav @param {boolean} on */
@@ -609,31 +608,18 @@
       if (!(t && (nav.contains(t) || menuOf(/** @type {HTMLElement} */ (nav))?.contains(t)))) openTabs(/** @type {HTMLElement} */ (nav), false);
     }
   });
-  // A turned phone may fit the tabs, or no longer.
+  // A turned phone or a resized window may fit the tabs, or no longer.
   addEventListener('resize', () => { for (const nav of document.querySelectorAll('.tabs')) window.grillShowTab(nav); });
 
   /**
-   * grillShowTab folds a tab bar that overflows a phone into a menu (foldTabs), else scrolls a bar
-   * that overflows so its current tab shows whole, with a whole tab at its left edge: a scroll that
-   * only just reveals the current tab cuts the one before ("ooms" for Rooms). When that tab start lies past the scroll end, an end padding makes it
-   * reachable. Every page calls it when its tab changes.
+   * grillShowTab folds a tab bar that overflows into a menu (foldTabs). Every page calls it when
+   * its tab changes.
    * @param {Element | null} nav
    */
   window.grillShowTab = (nav) => {
     const cur = nav?.querySelector('[aria-current=page]');
     if (!(nav instanceof HTMLElement) || !cur) return;
-    nav.style.paddingInlineEnd = '';
     foldTabs(nav, cur);
-    const max = nav.scrollWidth - nav.clientWidth;
-    if (max <= 0 || 'menu' in nav.dataset) return;
-    const at = (/** @type {Element} */ a) => a.getBoundingClientRect().left - nav.getBoundingClientRect().left - nav.clientLeft + nav.scrollLeft;
-    const [left, right] = [at(cur), at(cur) + cur.getBoundingClientRect().width];
-    const fits = (/** @type {number} */ s) => left >= s - 0.5 && right <= s + nav.clientWidth + 0.5;
-    // Scrolling snaps to whole pixels and the scroll width rounds: a fractional target or padding
-    // stops short and leaves a sliver of the tab before. The nearest pixel stays within half of one.
-    const s = Math.round([...nav.querySelectorAll(':scope > a')].map(at).find((x) => x >= -0.5 && fits(Math.min(x, max))) ?? left);
-    if (s > max) nav.style.paddingInlineEnd = Math.ceil(s - max) + 'px';
-    nav.scrollLeft = s;
   };
 
   // A ⋯ menu (.menu.row-menu) hangs under its button, its right edge on the button's, and above it

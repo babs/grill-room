@@ -3,7 +3,7 @@
 **Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-15
-**Context**: UX audit part B, directions S6 (voice sheet) and S7 (help); journeys 1, 9, 10. Builds on 005-AC23 (words to recognise, any member), 010 (voice-to-text on this device), 013 (call voices, persona voices, pronunciation), 038 (vocabulary, "Not available on this server"), 039 (`#ai` readiness, host and ask derivation), 040 (AI in this room tabs). Council review (Codex, Fable) on 2026-11-15.
+**Context**: UX audit part B, directions S6 (voice sheet) and S7 (help); journeys 1, 9, 10. Builds on 005-AC23 (words to recognise, any member), 010 (voice-to-text on this device), 013 (call voices, persona voices, pronunciation), 038 (vocabulary, "Not available on this server"), 039 (`#ai` readiness, host and ask derivation), 040 (AI in this room tabs). Council review on 2026-11-15.
 
 ## Problem
 
@@ -96,21 +96,21 @@ None.
 
 ## Decisions
 
-- The overview is read-only. Because duplicating the audio bar's controls would need their sync, mic error and device download states in a modal (both reviewers).
-- No `/admin` link. Because the room page cannot tell the server admin: the admin cookie is scoped to `/api/admin` (Fable).
-- The hash is `#call-overview`, not `#voice`. Because `#voice` is the audio bar's id (Fable).
-- Words to recognise: any member. Because 005-AC23 and 040-AC3 say so (both reviewers).
-- Help does not repeat 039's readiness; it links to it, and reuses 039's ask line. Because the "Who runs the AI" row already holds the hand-off and 039 already words every ask case (Fable).
-- The profile line is about a missing email, not a missing profile. Because a seat without a profile lands on `/profile`'s sign-in card, and the page already nudges a profile without an email (Fable, second pass).
-- The transcription line says what is happening, not what is ticked. Because "written down" while muted would be false (Codex, second pass).
+- The overview is read-only. Because duplicating the audio bar's controls would need their sync, mic error and device download states in a modal (council review).
+- No `/admin` link. Because the room page cannot tell the server admin: the admin cookie is scoped to `/api/admin` (council review).
+- The hash is `#call-overview`, not `#voice`. Because `#voice` is the audio bar's id (council review).
+- Words to recognise: any member. Because 005-AC23 and 040-AC3 say so (council review).
+- Help does not repeat 039's readiness; it links to it, and reuses 039's ask line. Because the "Who runs the AI" row already holds the hand-off and 039 already words every ask case (council review).
+- The profile line is about a missing email, not a missing profile. Because a seat without a profile lands on `/profile`'s sign-in card, and the page already nudges a profile without an email (council review).
+- The transcription line says what is happening, not what is ticked. Because "written down" while muted would be false (council review).
 - Rows show the setting on one line and its value on the next ("Words to recognise", "3 words"); the colon in the AC wording is that layout. Because the absent text carries its own colon (implementation).
-- Persona rows stay without persona voices, each saying why, with no link. Because AC3 and AC5 keep every row (Codex, code review).
-- With transcription on, the mic on and no worker on the voice, the reason names the worker state the audio bar has: "voice-to-text is off" only while "This server" reads it off, "voice-to-text is not in the call" while no worker is in this room's audio, else "voice-to-text is in the call but not writing down your voice". Because the two lines must not contradict each other, and a word like "starting" promises an end the state does not know (Fable, code review).
-- Before the first voice-to-text state, Words to recognise shows its count, where its tab reads "Loading…". Because the count does not depend on a worker, and the state comes with the stream's opening (Fable, code review).
-- While the device engine self-tests after its download, the reason reads "this device is testing the model". Because the download is over (Fable, code review).
-- "Open the approvals" and Room settings' "Open the Personas sheet" hand over to another surface: they drop the return, and closing that surface does not reopen the overview or Help. Back still reaches the origin's own entry. Because the hand-over is the action asked for (Fable, code review).
+- Persona rows stay without persona voices, each saying why, with no link. Because AC3 and AC5 keep every row (council review).
+- With transcription on, the mic on and no worker on the voice, the reason names the worker state the audio bar has: "voice-to-text is off" only while "This server" reads it off, "voice-to-text is not in the call" while no worker is in this room's audio, else "voice-to-text is in the call but not writing down your voice". Because the two lines must not contradict each other, and a word like "starting" promises an end the state does not know (council review).
+- Before the first voice-to-text state, Words to recognise shows its count, where its tab reads "Loading…". Because the count does not depend on a worker, and the state comes with the stream's opening (council review).
+- While the device engine self-tests after its download, the reason reads "this device is testing the model". Because the download is over (council review).
+- "Open the approvals" hands over to another surface: it drops the return, and closing that surface does not reopen the overview or Help (040 phase 2 removed Room settings' "Open the Personas sheet": a persona's sheet now opens over AI in this room and returns through the stamp). Back still reaches the origin's own entry. Because the hand-over is the action asked for (council review).
 - The line on where voice-to-text runs reads "on the server" whenever the device does not hold the voice, the server's voice-to-text off included; the line above then says it waits. Because it names where the voice goes, and "This server" says the rest (code review).
-- The device holds the voice only while its pipeline runs in device mode: a ready engine whose pipeline fell back leaves it to the server, which may have no worker. Because a loaded engine is not a transcribing one (Codex, code review).
+- The device holds the voice only while its pipeline runs in device mode: a ready engine whose pipeline fell back leaves it to the server, which may have no worker. Because a loaded engine is not a transcribing one (council review).
 - Pronunciation reads "Not available on this server" without persona voices. Because it only shapes them (implementation).
 - Help's email link reads "Add an email", as the page's nudge, and stays in the tab; Back reopens Help on that row. Because it is a step of the same visit (implementation).
 - The last-admin link reads "Room settings › Members and admins", the tab's name until 040 renames it "Members". Because a link names the place as the page shows it (implementation).

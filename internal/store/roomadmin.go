@@ -343,7 +343,7 @@ func insertProfileRoom(ctx context.Context, tx *txn, v InstanceSettings, used in
 	if _, err := tx.ExecContext(ctx, `UPDATE invites SET created_by = ? WHERE id = ?`, p.ID, inv); err != nil {
 		return nil, fmt.Errorf("create room: %w", err)
 	}
-	if _, err := insertInvite(ctx, tx, id, linkHash, p.ID, link); err != nil {
+	if _, err := insertInvite(ctx, tx, id, linkHash, p.ID, link, ""); err != nil {
 		return nil, fmt.Errorf("create room: shareable invite: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO room_admins(room_id, profile_id, created_at) VALUES(?,?,?)`, id, profileID, now()); err != nil {

@@ -19,7 +19,7 @@ func TestProfileUUIDs(t *testing.T) {
 		}
 	}
 	joinWithProfile(t, s, "room", "Alice", JoinProfile{RecoveryHash: "r3", SessionHash: "s3"})
-	if _, err := s.CreateInvite(ctx, "room", "inv-guest", 0); err != nil {
+	if _, err := s.CreateInvite(ctx, "room", "inv-guest", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.Join(ctx, "inv-guest", "Bob", "tok-guest", JoinProfile{}); err != nil {

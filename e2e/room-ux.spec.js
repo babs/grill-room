@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures.js';
 import { fileURLToPath } from 'node:url';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, playSTT, newRoomEditor, rowAction, unfoldTabs } from './helpers.js';
+import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, newRoomEditor, rowAction, unfoldTabs, fakeDaemon, agentState } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -75,27 +75,30 @@ for (const vp of widths) {
     await expect(bob.locator('#rename-profile-label')).toBeHidden();
   });
 
-  // 005-AC21 005-AC15: a room admin renames Bob from the Members and admins tab of Manage, a wide sheet with
+  // 005-AC21 005-AC15: a room admin renames Bob from the Members tab of Room settings, a wide sheet with
   // deep-linked tabs, full screen on a phone; Bob gets a notice. The super-admin renames him from
   // /admin. Both are audited.
-  test(`admin rename and Manage tabs, ${vp.name}`, async ({ browser, request }) => {
+  test(`admin rename and Room settings tabs, ${vp.name}`, async ({ browser, request }) => {
     const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
     await makeAdmin(request, alice, room);
     await alice.setViewportSize(vp);
-    await playSTT(alice, room.id, { engines: ['whisper'], glossary: true });
+    // Reloaded, the page reads Alice's new role.
+    await alice.reload();
     await alice.goto(`/r/${room.id}#manage/admins`);
     const sheet = alice.locator('#manage');
     await expect(sheet).toBeVisible();
     await expect(sheet.locator('#tab-admins')).toHaveAttribute('aria-current', 'page');
-    await expect(sheet.locator('#tab-general, #tab-invites, #tab-admins, #tab-personas, #tab-skills, #tab-plugins, #tab-documents, #tab-export, #tab-glossary')).toHaveCount(9);
+    await expect(sheet.locator('#tab-general, #tab-invites, #tab-admins, #tab-links, #tab-documents, #tab-export')).toHaveCount(6);
     const box = await sheet.boundingBox();
     if (vp.width < 400) expect(box.width).toBe(vp.width);
     else expect(box.width).toBeGreaterThan(900);
     expect(await noOverflow(alice)).toEqual([]);
 
-    await rowAction(sheet.locator('#room-admins > li', { hasText: 'Bob' }), 'Rename Bob');
-    await sheet.getByLabel('New name for Bob').fill('Robert');
-    await sheet.getByRole('button', { name: 'Save', exact: true }).click();
+    // 040-AC11: the row's ⋯ is People's, Rename opening the same sheet.
+    await rowAction(sheet.locator('#room-admins > li', { hasText: 'Bob' }), /^Rename$/);
+    await expect(alice.locator('#rename-title')).toHaveText('Rename Bob');
+    await alice.locator('#rename').getByLabel('Display name').fill('Robert');
+    await alice.locator('#rename-form').getByRole('button', { name: 'Rename' }).click();
     await expect(bob.locator('#notice')).toHaveText(/Your name in this room is now Robert\./);
     await expect(bob.locator('#me')).toHaveText('Robert');
     await expect(bob.locator('.msg.system').last()).toContainText('Alice renamed Bob to Robert');
@@ -128,10 +131,8 @@ for (const vp of widths) {
   test(`modal dismissal, ${vp.name}`, async ({ browser, request }) => {
     const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
     await alice.setViewportSize(vp);
-    // A plain member gets Room settings while a worker reads the glossary (007-AC14).
-    await playSTT(alice, room.id, { engines: ['whisper'], glossary: true });
     // Each opens from a header menu: focus goes back to that menu's button.
-    for (const [item, which, id] of [['Personas', 'room', '#personas'], ['Room settings', 'room', '#manage'], ['Change my name', 'me', '#rename']]) {
+    for (const [item, which, id] of [['Personas', 'room', '#ai'], ['Room settings', 'room', '#manage'], ['Change my name', 'me', '#rename']]) {
       const opener = alice.locator(which === 'me' ? '#me' : '#room-open');
       const dialog = alice.locator(id);
       await menuItem(alice, item, which);
@@ -351,7 +352,7 @@ for (const vp of widths) {
   });
 }
 
-// wholeTab: the bar's current tab shows whole, folded on a phone as the name on its button.
+// wholeTab: the bar's current tab shows whole, or, the bar folded, as the name on its button.
 const wholeTab = (nav) => nav.evaluate((n) => {
   const cur = n.querySelector('[aria-current=page]');
   const b = 'menu' in n.dataset ? n.querySelector('.tabs-menu') : cur;
@@ -359,10 +360,10 @@ const wholeTab = (nav) => nav.evaluate((n) => {
   return { name: (b.textContent || '').trim(), whole: r.left >= box.left - 0.5 && r.right <= box.right + 0.5 && b.scrollWidth <= b.clientWidth + 0.5 };
 });
 
-// 038-AC9: Room settings names its tabs Members and admins and Deleted documents, their deep links
+// 038-AC9 040-AC1: Room settings names its tabs Members and Deleted documents (/admin: Members and admins), their deep links
 // unchanged; the blocked profiles show under the member list, no longer under Invites. The longer
-// names fold or scroll: no sideways overflow, the current tab whole, at 390, 820 and 1440 px.
-test('Room settings: Members and admins, Deleted documents', async ({ browser, request }) => {
+// names fold the bar when it overflows: no sideways overflow, the current tab whole, at 390, 820 and 1440 px.
+test('Room settings: Members, Deleted documents', async ({ browser, request }) => {
   const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   await makeAdmin(request, alice, room);
   const bobID = await bob.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()).then((d) => d.me.id), room.id);
@@ -375,13 +376,13 @@ test('Room settings: Members and admins, Deleted documents', async ({ browser, r
     await alice.goto('about:blank');
     await alice.goto(`/r/${room.id}#manage/admins`);
     await expect(sheet.locator('#tab-admins')).toHaveAttribute('aria-current', 'page');
-    await expect(sheet.locator('#tab-admins')).toHaveText('Members and admins');
+    await expect(sheet.locator('#tab-admins')).toHaveText('Members');
     const [members, blocked] = [sheet.locator('#room-admins'), sheet.locator('#blocked')];
     await expect(blocked).toContainText('Bob');
     await expect(sheet.getByRole('heading', { name: 'Blocked from rejoining' })).toBeVisible();
     const [m, b] = [await members.boundingBox(), await blocked.boundingBox()];
     expect(b.y, `${width}: blocked under the members`).toBeGreaterThanOrEqual(m.y + m.height);
-    await expect.poll(() => wholeTab(nav), `${width}: admins tab`).toEqual({ name: 'Members and admins', whole: true });
+    await expect.poll(() => wholeTab(nav), `${width}: admins tab`).toEqual({ name: 'Members', whole: true });
     expect(await noOverflow(alice), `${width} px`).toEqual([]);
     if (width !== 820) await alice.screenshot({ path: `${shots}room-settings-members-${width}.png` });
 
@@ -409,4 +410,198 @@ test('Room settings: Members and admins, Deleted documents', async ({ browser, r
   expect(await signIn(page, undefined, `rooms/${room.id}/admins`)).toBe(201);
   await expect(page.locator('#room-panel #tab-admins')).toHaveText('Members and admins');
   await expect(page.locator('#room-panel #blocked')).toContainText('Bob');
+});
+
+// menuItems reads a menu's buttons as [label, checked, disabled, reason], '' for an absent attribute.
+const menuItems = (menu) => menu.locator('button').evaluateAll((bs) => bs.map((b) => [(b.textContent || '').trim(),
+  b.getAttribute('aria-pressed') || '', b.getAttribute('aria-disabled') || '', b.dataset.tip || '']));
+// callItems are People's own, which Members does not show (040-AC11).
+const callItems = ['Lower hand'];
+
+// peopleItems opens name's ⋯ in People and returns its items and whether it holds a volume.
+async function peopleItems(page, name) {
+  await page.locator('#participants li, #participants-away li').filter({ has: page.locator('.name', { hasText: new RegExp(`^${name}$`) }) })
+    .first().locator('.person-more').click();
+  const menu = page.locator('#person-menu');
+  await expect(menu).toBeVisible();
+  const items = await menuItems(menu);
+  const volume = await menu.getByRole('slider').count();
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  return { items, volume };
+}
+
+// memberItems opens Room settings › Members and returns the items of name's row ⋯; the sheet closes.
+async function memberItems(page, name) {
+  await page.evaluate(() => { location.hash = '#manage/admins'; });
+  const row = page.locator('#manage #room-admins > li').filter({ has: page.locator('.name', { hasText: new RegExp(`^${name}$`) }) });
+  await row.locator('.actions .more').click();
+  const menu = row.locator('.menu');
+  await expect(menu).toBeVisible();
+  const items = await menuItems(menu);
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#manage')).toBeHidden();
+  // Its close event, a task later, drops the hash: the next open must come after it.
+  await expect.poll(() => page.evaluate(() => location.hash)).toBe('');
+  return items;
+}
+
+// same reads name's membership actions in both menus and checks they match, as want.
+async function same(page, name, want) {
+  const people = await peopleItems(page, name);
+  const membership = people.items.filter(([label]) => !callItems.includes(label));
+  expect(membership, `People ⋯ of ${name}`).toEqual(want);
+  expect(await memberItems(page, name), `Members ⋯ of ${name}`).toEqual(want);
+  return people;
+}
+
+// 040-AC11 040-AC12: People's ⋯ and Room settings › Members' row ⋯ show one set of membership actions,
+// labels, order, checked and disabled states and reasons alike: a room admin who is also the AI host,
+// on another row and on their own as the last room admin, then with a second room admin; an AI host who
+// is not a room admin and a plain member read People only. Lower hand and Volume stay in People.
+test('membership actions: People and Members alike', async ({ browser, request, baseURL }) => {
+  test.setTimeout(120_000);
+  const { room, pages: [alice, bob, carol, dan] } = await roomWith(browser, request, ['Alice', 'Bob', 'Carol', 'Dan']);
+  await makeAdmin(request, alice, room);
+  await alice.reload();
+  const stops = [await fakeDaemon(alice, baseURL, room.id, 'alice-laptop')];
+  try {
+    await expect.poll(async () => (await agentState(alice, room.id)).host_participant_id).toBeTruthy();
+    await bob.getByRole('button', { name: 'Raise my hand' }).click();
+    const off = (label) => [label, '', '', ''];
+    const bobWant = [off('Rename'), off('Make room admin'), ['Can ask the AI', 'false', '', ''], off('Remove from room…')];
+    await expect(alice.locator('#participants li', { hasText: 'Bob' }).locator('.tag-hand:not(.blank)')).toHaveText('1');
+    const people = await same(alice, 'Bob', bobWant);
+    expect(people.items[0][0], 'Lower hand, People only').toBe('Lower hand');
+    // The last room admin: Step down off with its reason, Leave room… with 038-AC10's.
+    await same(alice, 'Alice', [['Step down', '', 'true', 'Make someone else room admin first.'],
+      ['Leave room…', '', 'true', 'Make someone else room admin, then step down.']]);
+
+    // A toggle from Members: both menus show it ticked, and the focus is back on the row's ⋯.
+    await alice.evaluate(() => { location.hash = '#manage/admins'; });
+    const bobRow = alice.locator('#manage #room-admins > li', { hasText: 'Bob' });
+    await rowAction(bobRow, 'Can ask the AI');
+    await expect(bobRow).toContainText('can ask the AI');
+    await expect(bobRow.locator('.actions .more')).toBeFocused();
+    await alice.keyboard.press('Escape');
+    bobWant[2] = ['Can ask the AI', 'true', '', ''];
+    await same(alice, 'Bob', bobWant);
+
+    // A second room admin: Carol's removal waits for her role, and Alice may step down.
+    expect((await request.put(`/api/rooms/${room.id}/admins/${await carol.evaluate(() => myID)}`, { headers: admin })).status()).toBe(204);
+    await expect(alice.locator('#participants li', { hasText: 'Carol' }).locator('.sigil')).toHaveText('@');
+    await same(alice, 'Carol', [off('Rename'), off('Remove room admin'), ['Can ask the AI', 'false', '', ''],
+      ['Remove from room…', '', 'true', 'Remove their room admin role first']]);
+    await same(alice, 'Alice', [off('Step down'), ['Leave room…', '', 'true', 'Step down as room admin first']]);
+
+    // Bob's app connects: Make AI host shows in both; Alice hands the role over from Members.
+    stops.push(await fakeDaemon(bob, baseURL, room.id, 'bob-laptop'));
+    bobWant.splice(3, 0, off('Make AI host'));
+    await expect.poll(async () => (await peopleItems(alice, 'Bob')).items.map(([l]) => l)).toContain('Make AI host');
+    await same(alice, 'Bob', bobWant);
+    await alice.evaluate(() => { location.hash = '#manage/admins'; });
+    await rowAction(bobRow, 'Make AI host');
+    await expect(bobRow).toContainText('AI host');
+    await alice.keyboard.press('Escape');
+
+    // The AI host who is no room admin: People only, as before 040.
+    await expect.poll(async () => (await peopleItems(bob, 'Alice')).items).toEqual([['Can ask the AI', 'false', '', ''], off('Make AI host')]);
+    await bob.evaluate(() => { location.hash = '#manage'; });
+    await expect(bob.locator('#manage #tab-invites')).toHaveAttribute('aria-current', 'page');
+    await expect(bob.locator('#manage #tab-admins')).toHaveCount(0);
+    await bob.keyboard.press('Escape');
+    // A plain member: Leave room… on their own row, nothing on others'.
+    expect((await peopleItems(dan, 'Dan')).items).toEqual([off('Leave room…')]);
+    await expect(dan.locator('#participants li', { hasText: 'Alice' }).locator('.person-more')).toBeDisabled();
+  } finally {
+    for (const stop of stops) stop();
+  }
+});
+
+// 040-AC10 040-AC13 040-AC17 003: Room settings › Members lists every seat, two seats of one profile as
+// two rows, each with the invite it joined through, named or "Link <id>", and the badges; a plain member's
+// room payload carries no invite and they get no Members tab. Blocked from rejoining shows when empty.
+// /admin's Members and admins shows the same invites.
+test('Members: one row per seat, with its invite', async ({ browser, request, baseURL }) => {
+  const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Seats room' } })).json();
+  const invite = async (name) => (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin, data: name ? { name } : {} })).json();
+  const joinPage = async (name, inv) => {
+    const page = await (await browser.newContext()).newPage();
+    await page.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
+    await page.getByLabel('Your name').fill(name);
+    await page.getByRole('button', { name: 'Join the room' }).click();
+    await expect(page.locator('#me')).toHaveText(name);
+    return page;
+  };
+  const alice = await joinPage('Alice', await invite('Founders'));
+  const team = await invite('Team link');
+  const bob = await joinPage('Bob', team);
+  const plain = await invite('');
+  // Bob's second seat, same profile, through another invite.
+  expect((await bob.request.post('/api/join', { data: { invite: new URL(plain.url).hash.slice(1), name: 'Bob' } })).status()).toBe(201);
+  const carol = await joinPage('Carol', team);
+  await makeAdmin(request, alice, room);
+  const host = await fakeDaemon(alice, baseURL, room.id, 'alice-laptop');
+  try {
+    // Bob's seat through the team link, as the admin-only overview says.
+    const seats = (await alice.evaluate((id) => fetch(`/api/rooms/${id}/overview`).then((r) => r.json()), room.id)).seats;
+    const bobSeat = seats.find((x) => x.invite_id === team.id).participant_id;
+    expect(await alice.evaluate(([id, p]) => fetch(`/api/rooms/${id}/participants/${p}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ can_trigger: true }) }).then((r) => r.status), [room.id, bobSeat])).toBe(204);
+    // Reloaded, the page reads Alice's new role.
+    await alice.goto('about:blank');
+    await alice.goto(`/r/${room.id}#manage/admins`);
+    const rows = alice.locator('#manage #room-admins > li');
+    await expect(rows).toHaveCount(4);
+    const cells = async () => (await rows.evaluateAll((ls) => ls.map((l) => [l.querySelector('.name').textContent,
+      [...l.querySelectorAll('.main .badge')].map((b) => b.textContent).join(', '), l.querySelector('.cell.invite')?.textContent || ''])));
+    await expect.poll(cells).toEqual([['Alice', 'room admin, AI host', 'Founders'], ['Bob', 'can ask the AI', 'Team link'],
+      ['Bob', '', 'Link ' + plain.id], ['Carol', '', 'Team link']]);
+    await expect(alice.locator('#manage #blocked-empty')).toHaveText('Nobody is blocked.');
+    await expect(alice.locator('#manage').getByRole('heading', { name: 'Blocked from rejoining' })).toBeVisible();
+
+    // 040-AC11: a focus moved while a Members action is in flight stays where the user put it.
+    await alice.route(`**/api/rooms/${room.id}/admins/*`, async (route) => {
+      if (route.request().method() === 'PUT') await new Promise((r) => setTimeout(r, 1500));
+      await route.fallback();
+    });
+    await rowAction(rows.nth(1), 'Make room admin');
+    const carolMore = rows.nth(3).locator('.actions .more');
+    await carolMore.focus();
+    await expect(rows.nth(1).locator('.badge.role')).toHaveText('room admin');
+    await expect(carolMore).toBeFocused();
+    await alice.unroute(`**/api/rooms/${room.id}/admins/*`);
+
+    // 040-AC12: stepped down, the viewer loses Members with their row: the focus goes to the tab
+    // shown, never to the page, on a phone's full-screen sheet and on a desktop.
+    for (const [page, link, width] of [[bob, 'Link ' + plain.id, 390], [alice, 'Founders', 1280]]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto('about:blank');
+      await page.goto(`/r/${room.id}#manage/admins`);
+      await rowAction(page.locator('#manage #room-admins > li', { hasText: link }).filter({ has: page.locator('.badge.role') }), 'Step down');
+      await expect(page.locator('#manage #tab-invites'), link).toHaveAttribute('aria-current', 'page');
+      await expect(page.locator('#manage #tab-invites'), link).toBeFocused();
+      // Alice is not left the last room admin, whose Step down is off.
+      if (page === bob) await makeAdmin(request, bob, room);
+    }
+
+    // Carol, a plain member: no invite in what the room tells her, no Members tab.
+    const payload = await carol.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.text()), room.id);
+    expect(payload).not.toMatch(/invite_(id|name)|Team link|Founders/);
+    expect((await carol.request.get(`/api/rooms/${room.id}/overview`)).status()).toBe(403);
+    await carol.goto('about:blank');
+    await carol.goto(`/r/${room.id}#manage/admins`);
+    await expect(carol.locator('#manage #tab-invites')).toHaveAttribute('aria-current', 'page');
+    await expect(carol.locator('#manage #tab-admins, #manage #room-admins')).toHaveCount(0);
+
+    const page = await (await browser.newContext()).newPage();
+    expect(await signIn(page, undefined, `rooms/${room.id}/admins`)).toBe(201);
+    await expect(page.locator('#room-panel #tab-admins')).toHaveText('Members and admins');
+    await expect(page.locator('#room-panel #room-admins .cell.invite')).toHaveText(['Founders', 'Team link', 'Link ' + plain.id, 'Team link']);
+    await expect(page.locator('#room-panel #blocked-empty')).toHaveText('Nobody is blocked.');
+  } finally {
+    host();
+  }
 });

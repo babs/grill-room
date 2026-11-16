@@ -54,7 +54,7 @@ func TestRoomProposals(t *testing.T) {
 	if _, err := s.CreateRoom(ctx, "x", "X"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateInvite(ctx, "x", "inv-x", 0); err != nil {
+	if _, err := s.CreateInvite(ctx, "x", "inv-x", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	carl, _, err := s.Join(ctx, "inv-x", "Carl", "tok-carl", JoinProfile{RecoveryHash: "rec-carl", SessionHash: "sess-carl"})

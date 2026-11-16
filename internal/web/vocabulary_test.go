@@ -33,6 +33,12 @@ var vocabRules = []struct {
 	{phrase(`shared with everyone( on this server)?`), `"Shared with everyone on this server"`},
 	{phrase(`\bholds? the agents?\b|\bits page\b`), `"the AI host app"`},
 	{phrase(`\bapproves? everything\b|\bapprove-all\b`), `"Hold new AI personas and changes for my approval"`},
+	// 040-AC9: the room's AI settings moved to their own sheet, and the room's member list is "Members".
+	{phrase(`Room settings › (?:Plugins|Skills|Websites)`), `"AI in this room › …"`},
+	{phrase(`Members and admins`), `"Room settings › Members" (/admin's tab keeps the name)`},
+	// 040-AC16: an invite stops new joins; API tokens and sessions are still revoked, and the API keeps the word.
+	{phrase(`Revoke…|Revoke this invite|it also revokes|(?-i:Revoked)\. |\brevoking in Room settings|\bRevoke link\b|\brevokes? (?:any|the ones|invites)\b|` +
+		`\bRevoking an invite\b|\brevoked shareable\b|>\s*(?:Revoke|revoked)\s*<|\bInvite revoked\b|\binvalid or was revoked\b`), `"Stop new joins…" / "Stopped."`},
 }
 
 // Text that must keep an old word: in file, on a line holding line, only the words listed.
@@ -51,6 +57,12 @@ var vocabAllow = []struct {
 	{"../../docs/design.md", "| annotation, Annotate, Comment on the document |", []string{"annotat", "Comment on the document"}, "the wording table names what it replaces"},
 	{"../../docs/design.md", "| Everyone on this server, Shared with everyone |", []string{"Everyone on this server", "Shared with everyone"}, "the wording table names what it replaces"},
 	{"../../docs/design.md", "| daemon, agent daemon, grill-room-daemon", []string{"daemon", "its page"}, "the wording table names what it replaces"},
+	{"ui/admin/room-panel.js", "admins: 'Members and admins'", []string{"Members and admins"}, "/admin's room panel tab (040-AC17); the room renames it"},
+	{"../../README.md", "Members and admins lists every seat", []string{"Members and admins"}, "/admin's room panel tab"},
+	{"../../README.md", "from the room's Members and admins tab in `/admin`", []string{"Members and admins"}, "/admin's room panel tab"},
+	{"ui/join.js", "'This invite link is invalid or was revoked.'", []string{"invalid or was revoked"}, "the join page's seat message keeps the word (040 Out of scope)"},
+	{"ui/admin/admin.js", "'invite.revoke': 'Invite revoked'", []string{"Invite revoked"}, "names the invite.revoke audit action, which keeps the word (040 Out of scope)"},
+	{"../../README.md", "and revokes any of them", []string{"revokes any"}, "admin sessions, not invites"},
 }
 
 // Vendored bundles, not our strings.
@@ -444,28 +456,54 @@ func TestPlacesNamedExist(t *testing.T) {
 			t.Errorf("README names the room's menu as %q: name it by the room's name", old)
 		}
 	}
-	// 042: a "Room settings › <tab>" shown in the UI names one of the sheet's tabs, whole.
+	// 042, 040-AC9: a "Room settings › <tab>" or "AI in this room › <tab>" shown in the UI names one
+	// of that sheet's tabs, whole.
 	all := regexp.MustCompile(`(?s)const allTabs = \[(.*?)\];`).FindStringSubmatch(read("ui/admin/room-admin.js"))
 	panel := regexp.MustCompile(`roomTabs = \{([^}]*)\}`).FindStringSubmatch(read("ui/admin/room-panel.js"))
-	if all == nil || panel == nil {
-		t.Fatal("the Room settings tab lists moved: update this test")
+	ai := regexp.MustCompile(`(?s)const aiTabs = \[(.*?)\];`).FindStringSubmatch(read("ui/room.js"))
+	if all == nil || panel == nil || ai == nil {
+		t.Fatal("the Room settings or AI in this room tab lists moved: update this test")
 	}
-	var sheetTabs []string
-	for _, m := range regexp.MustCompile(`\['[a-z]+', '([^']+)'\]`).FindAllStringSubmatch(all[1], -1) {
-		sheetTabs = append(sheetTabs, m[1])
+	shared := map[string]string{}
+	for _, m := range regexp.MustCompile(`(\w+): '([^']+)'`).FindAllStringSubmatch(panel[1], -1) {
+		shared[m[1]] = m[2]
 	}
-	for _, m := range regexp.MustCompile(`'([^']+)'`).FindAllStringSubmatch(panel[1], -1) {
-		sheetTabs = append(sheetTabs, m[1])
+	// labels reads a tab list's labels, literal or from room-panel.js's roomTabs.
+	labels := func(list string) []string {
+		var out []string
+		for _, m := range regexp.MustCompile(`\['[a-z]+', (?:'([^']+)'|roomTabs\.(\w+))\]`).FindAllStringSubmatch(list, -1) {
+			out = append(out, m[1]+shared[m[2]])
+		}
+		return out
 	}
-	// Pinned: a renamed tab fails here first, and every mention of its old name has to follow.
-	pinned := []string{"Links", "Personas", "Skills", "Plugins", "Websites and connectors", "Deleted documents", "Words to recognise",
-		"Call voices", "General", "Invites", "Members and admins", "Export"}
-	if strings.Join(sheetTabs, "|") != strings.Join(pinned, "|") {
-		t.Errorf("Room settings tabs = %q, pinned %q: update the pin and every \"Room settings › <old name>\"", sheetTabs, pinned)
+	// Any run of spaces, a wrap or &nbsp; between the words, as phrase() allows; › or its entities.
+	gap := `(?:\s|&nbsp;|\x{a0})`
+	type sheet struct {
+		name         string
+		tabs, pinned []string
+		named        *regexp.Regexp
 	}
-	// nameOf reads a mention as the longest tab name it starts with, pinned names included: a
-	// mention of a renamed tab's old name then shows on the run that breaks the pin.
-	names := append(slices.Clone(sheetTabs), pinned...)
+	var sheets []sheet
+	for _, sh := range []sheet{
+		// Pinned: a renamed tab fails here first, and every mention of its old name has to follow.
+		{name: "Room settings", tabs: labels(all[1]), pinned: []string{"General", "Members", "Invites", "Links", "Deleted documents", "Export"}},
+		{name: "AI in this room", tabs: labels(ai[1]), pinned: []string{"Status", "Personas", "Plugins", "Websites and connectors", "Words to recognise", "Call voices"}},
+	} {
+		if strings.Join(sh.tabs, "|") != strings.Join(sh.pinned, "|") {
+			t.Errorf("%s tabs = %q, pinned %q: update the pin and every \"%s › <old name>\"", sh.name, sh.tabs, sh.pinned, sh.name)
+		}
+		sh.named = regexp.MustCompile(strings.Join(strings.Fields(sh.name), gap+`+`) + gap + `+(?:›|&rsaquo;|&#8250;|&#x203[aA];)` + gap + `*`)
+		sheets = append(sheets, sh)
+	}
+	// nameOf reads a mention as the longest tab name it starts with, any sheet's, pinned names and
+	// /admin's included: a tab moved to the other sheet, or "Members and admins", is then not its prefix.
+	var names []string
+	for _, sh := range sheets {
+		names = append(append(names, sh.tabs...), sh.pinned...)
+	}
+	for _, v := range shared {
+		names = append(names, v)
+	}
 	nameOf := func(rest string) string {
 		best := ""
 		for _, tab := range names {
@@ -476,17 +514,16 @@ func TestPlacesNamedExist(t *testing.T) {
 		}
 		return best
 	}
-	// Any run of spaces, a wrap or &nbsp; between the words, as phrase() allows; › or its entities.
-	gap := `(?:\s|&nbsp;|\x{a0})`
-	named := regexp.MustCompile(`Room` + gap + `+settings` + gap + `+(?:›|&rsaquo;|&#8250;|&#x203[aA];)` + gap + `*`)
 	check := func(p string, spans []vspan) {
-		for _, sp := range spans {
-			// Each mention from its own start, the line's later ones too; a wrap inside a name folds.
-			for _, loc := range named.FindAllStringIndex(sp.text, -1) {
-				rest := sp.text[loc[1]:]
-				rest = strings.Join(strings.Fields(strings.ReplaceAll(rest[:min(len(rest), 80)], "&nbsp;", " ")), " ")
-				if n := nameOf(rest); !slices.Contains(sheetTabs, n) {
-					t.Errorf("%s names %q, not a tab of Room settings %q", p, "Room settings › "+rest, sheetTabs)
+		for _, sh := range sheets {
+			for _, sp := range spans {
+				// Each mention from its own start, the line's later ones too; a wrap inside a name folds.
+				for _, loc := range sh.named.FindAllStringIndex(sp.text, -1) {
+					rest := sp.text[loc[1]:]
+					rest = strings.Join(strings.Fields(strings.ReplaceAll(rest[:min(len(rest), 80)], "&nbsp;", " ")), " ")
+					if n := nameOf(rest); !slices.Contains(sh.tabs, n) {
+						t.Errorf("%s names %q, not a tab of %s %q", p, sh.name+" › "+rest, sh.name, sh.tabs)
+					}
 				}
 			}
 		}
@@ -631,6 +668,24 @@ func TestVocabularyScanner(t *testing.T) {
 		{"md link target", "a.md", "See [the protocol](docs/daemon-protocol.md).\n", false},
 		{"manifest name", "a.webmanifest", `{"name": "grill-room daemon"}`, true},
 		{"manifest other key", "a.webmanifest", `{"theme_color": "the daemon"}`, false},
+		{"invite menu label", "a.js", "items = [['Revoke…', run]]", true},
+		{"invite toast", "a.js", "toast(`Revoked. ${who} lost access.`)", true},
+		{"invite sheet title", "a.html", "<h2>Revoke this invite?</h2>", true},
+		{"invite chain line", "a.js", "html`<p>Ticked, it also revokes ${n} invites</p>`", true},
+		{"api token toast", "a.js", "toast(r.ok ? 'Revoked' : r.error)", false},
+		{"invite aria-label", "a.js", "items=${[['Stop', run, 'danger', 'Revoke link ' + i.id]]}", true},
+		{"revokes any", "a.md", "The admin revokes any.\n", true},
+		{"revoke the ones", "a.md", "Any member can revoke the ones they created.\n", true},
+		{"revokes invites", "a.js", "hint('it revokes invites down the chain')", true},
+		{"revoking an invite", "a.md", "Revoking an invite stops new joins.\n", true},
+		{"revoked shareable", "a.md", "A revoked shareable link is replaced.\n", true},
+		{"sheet button", "a.js", "html`<button class=\"btn-danger\" onClick=${go}>Revoke</button>`", true},
+		{"row pill", "a.js", "html`<span class=\"status off\">revoked</span>`", true},
+		{"audit label", "a.js", "const labels = { 'invite.revoke': 'Invite revoked' }", true},
+		{"join message", "a.js", "line.textContent = 'This invite link is invalid or was revoked.'", true},
+		{"session menu", "a.js", "items=${[['Revoke', () => revoke(s), 'danger', 'Revoke the session of ' + ua]]}", false},
+		{"api token audit label", "a.js", "const labels = { 'api_token.revoke': 'API token revoked' }", false},
+		{"api route prose", "a.md", "`?cut=1` also revokes the invites its joiners created.\n", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

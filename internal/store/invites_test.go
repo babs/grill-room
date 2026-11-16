@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"testing"
@@ -19,7 +20,7 @@ func TestShareInvite(t *testing.T) {
 	}
 	ps, _ := s.Participants(ctx, "r")
 	ali := ps[0]
-	inv, tok, created, err := s.ShareInvite(ctx, "r", ali.ID, "unused", "unused-h")
+	inv, tok, created, err := s.ShareInvite(ctx, "r", ali.ID, "", "unused", "unused-h")
 	if err != nil || created || tok != "lnk-r" || !inv.Shareable || inv.CreatedBy != ali.ID {
 		t.Fatalf("creator's link: %+v %q %v %v", inv, tok, created, err)
 	}
@@ -38,7 +39,7 @@ func TestShareInvite(t *testing.T) {
 	res := make([]got, 8)
 	for i := range res {
 		wg.Go(func() {
-			inv, tok, created, err := s.ShareInvite(ctx, "r", bob.ID, fmt.Sprint("b", i), fmt.Sprint("bh", i))
+			inv, tok, created, err := s.ShareInvite(ctx, "r", bob.ID, "", fmt.Sprint("b", i), fmt.Sprint("bh", i))
 			res[i] = got{tok: tok, created: created, err: err}
 			if inv != nil {
 				res[i].id = inv.ID
@@ -63,7 +64,7 @@ func TestShareInvite(t *testing.T) {
 	if _, err := s.RevokeInvite(ctx, "r", first, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
-	inv, tok, created, err = s.ShareInvite(ctx, "r", bob.ID, "b-new", "bh-new")
+	inv, tok, created, err = s.ShareInvite(ctx, "r", bob.ID, "", "b-new", "bh-new")
 	if err != nil || !created || tok != "b-new" || inv.ID == first {
 		t.Fatalf("after its revoke: %+v %q %v %v", inv, tok, created, err)
 	}
@@ -83,7 +84,7 @@ func TestShareInvite(t *testing.T) {
 	if want := []int64{ali.ID, bob.ID, bob.ID}; !slices.Equal(shareable, want) {
 		t.Fatalf("shareable invites by %v, want %v", shareable, want)
 	}
-	if _, _, _, err := s.ShareInvite(ctx, "r", 0, "adm", "adm-h"); !errors.Is(err, ErrNotFound) {
+	if _, _, _, err := s.ShareInvite(ctx, "r", 0, "", "adm", "adm-h"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("super-admin: %v, want ErrNotFound", err)
 	}
 	if adm, _ := s.Invites(ctx, "lobby", 0); len(adm) != 1 || adm[0].Shareable {
@@ -93,7 +94,7 @@ func TestShareInvite(t *testing.T) {
 	if _, err := s.RevokeInvite(ctx, "r", bob.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := s.ShareInvite(ctx, "r", bob.ID, "late", "late-h"); !errors.Is(err, ErrNotFound) {
+	if _, _, _, err := s.ShareInvite(ctx, "r", bob.ID, "", "late", "late-h"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("revoked member: %v, want ErrNotFound", err)
 	}
 }
@@ -110,7 +111,7 @@ func TestRevokePreviewMatchesRevoke(t *testing.T) {
 	}
 	ps, _ := s.Participants(ctx, "r")
 	ali := ps[0]
-	a, _, _, err := s.ShareInvite(ctx, "r", ali.ID, "", "")
+	a, _, _, err := s.ShareInvite(ctx, "r", ali.ID, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ func TestRevokePreviewMatchesRevoke(t *testing.T) {
 	}
 	invite := func(hash string, by int64) int64 {
 		t.Helper()
-		inv, err := s.CreateInvite(ctx, "r", hash, by)
+		inv, err := s.CreateInvite(ctx, "r", hash, by, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -198,7 +199,7 @@ func TestRevokePreviewEdges(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	seed(t, s, "a")
-	lone, err := s.CreateInvite(ctx, "a", "lone", 0)
+	lone, err := s.CreateInvite(ctx, "a", "lone", 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,5 +226,121 @@ func TestRevokePreviewEdges(t *testing.T) {
 		if _, err := s.RevokeInvite(ctx, c.room, c.id, true, "Admin"); !errors.Is(err, ErrNotFound) {
 			t.Errorf("revoke %s/%d: %v, want ErrNotFound", c.room, c.id, err)
 		}
+	}
+}
+
+// 040-AC14: migration 67 gives a database at version 66 the invite name column: existing invites
+// come out unnamed, everything else as it was; a fresh database has it too.
+func TestMigrateInviteName(t *testing.T) {
+	ctx := t.Context()
+	dsn := testDSN(t)
+	s := openAt(t, dsn)
+	seed(t, s, "a")
+	if _, err := s.CreateInvite(ctx, "a", "inv-named", 0, "Team"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.Invites(ctx, "a", 0)
+	if err != nil || len(before) != 2 || before[1].Name != "Team" {
+		t.Fatalf("before: %+v %v", before, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE invites DROP COLUMN name; UPDATE schema_version SET version = 66`); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s = openAt(t, dsn)
+	after, err := s.Invites(ctx, "a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before[1].Name = ""
+	if !slices.Equal(after, before) {
+		t.Fatalf("migrated invites: %+v, want %+v", after, before)
+	}
+	if n := count(t, s, `SELECT count(*) FROM invites WHERE name IS NULL`); n != 2 {
+		t.Fatalf("%d unnamed invites, want 2", n)
+	}
+}
+
+// 040-AC14 040-AC15: a name is stored as given, "" stored as NULL; a rename reaches only its room's
+// invite; in_room counts the seats still in the room through each invite, never the ones that
+// left, were cut off or came back through another.
+func TestInviteNameAndInRoom(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	seed(t, s, "a")
+	seed(t, s, "b")
+	inv, err := s.CreateInvite(ctx, "a", "inv-x", 0, "Design team")
+	if err != nil || inv.Name != "Design team" {
+		t.Fatalf("create: %+v %v", inv, err)
+	}
+	if err := s.RenameInvite(ctx, "b", inv.ID, "Other"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("rename through another room: %v", err)
+	}
+	if err := s.RenameInvite(ctx, "a", inv.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM invites WHERE id = ? AND name IS NULL`, inv.ID); n != 1 {
+		t.Fatal("a cleared name is not NULL")
+	}
+	other, err := s.CreateInvite(ctx, "a", "inv-y", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut, err := s.CreateInvite(ctx, "a", "inv-z", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	join := func(hash, name string) *Participant {
+		t.Helper()
+		p, _, err := s.Join(ctx, hash, name, "tok-"+name, JoinProfile{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	bob := join("inv-x", "Bob")
+	carol := join("inv-x", "Carol")
+	dave := join("inv-x", "Dave")
+	join("inv-z", "Erin")
+	endSeat(t, s, carol.ID, EndLeft)
+	endSeat(t, s, dave.ID, EndLeft)
+	daveAgain := join("inv-y", "Dave again")
+	if _, err := s.RevokeInvite(ctx, "a", cut.ID, true, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	invs, err := s.Invites(ctx, "a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int64]int{}
+	for _, i := range invs {
+		got[i.ID] = i.InRoom
+	}
+	// The seed's invite still holds Alice.
+	want := map[int64]int{invs[0].ID: 1, inv.ID: 1, other.ID: 1, cut.ID: 0}
+	if !maps.Equal(got, want) {
+		t.Fatalf("in_room %v, want %v", got, want)
+	}
+	if one, err := s.Invite(ctx, "a", inv.ID); err != nil || one.InRoom != 1 || one.Name != "" {
+		t.Fatalf("one invite: %+v %v", one, err)
+	}
+	// 040-AC10: each seat still in the room, in join order, with the invite it joined through.
+	if err := s.RenameInvite(ctx, "a", other.ID, "Guests"); err != nil {
+		t.Fatal(err)
+	}
+	seats, err := s.SeatInvites(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for _, si := range seats {
+		ids = append(ids, si.InviteID)
+	}
+	if !slices.Equal(ids, []int64{invs[0].ID, inv.ID, other.ID}) || seats[1].InviteName != "" || seats[2].InviteName != "Guests" ||
+		seats[1].ParticipantID != bob.ID || seats[2].ParticipantID != daveAgain.ID {
+		t.Fatalf("seat invites %+v", seats)
+	}
+	if none, err := s.SeatInvites(ctx, "b"); err != nil || len(none) != 1 {
+		t.Fatalf("room b's seats: %+v %v", none, err)
 	}
 }

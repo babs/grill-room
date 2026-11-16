@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { execFileSync } from 'node:child_process';
-import { roomWith, startDaemon, pairDaemon, reloadDaemonPage, removeSandbox, menuItem } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, reloadDaemonPage, removeSandbox, menuItem, sheetTab } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 // curlInSandbox asks the egress proxy for host from inside the sandbox and returns its CONNECT answer.
@@ -179,11 +179,11 @@ test('blocked websites held for the host and a delegated admin', async ({ browse
     await expect(banner(alice)).toHaveCount(0);
     await expect(line(carol, 'example.com')).toContainText('Alice allowed example.com for this room');
 
-    await menuItem(alice, 'Room settings');
-    await alice.locator('#manage').getByRole('link', { name: 'Websites and connectors' }).click();
+    await menuItem(alice, 'AI in this room');
+    await sheetTab(alice, 'ai', 'Websites and connectors');
     await alice.locator('#egress-admins').check();
     await expect(alice.locator('#messages li.msg.system', { hasText: 'Alice let the room admins allow websites for this room.' })).toHaveCount(1);
-    await alice.locator('#manage-close').click();
+    await alice.locator('#ai .sheet-head .close').click();
     await press(alice, 'FAKE_FETCH example.org');
     await expect(banner(bob).getByRole('button')).toHaveText(['Allow for this room', 'Dismiss'], { timeout: 30_000 });
     await expect(line(bob, 'example.org').getByRole('button')).toHaveText(['Allow for this room']);

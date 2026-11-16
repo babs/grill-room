@@ -33,7 +33,7 @@ func newMergeFixture(t *testing.T) *mergeFixture {
 	if _, err := s.CreateRoom(ctx, "both", "Room both"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateInvite(ctx, "both", "inv-both", 0); err != nil {
+	if _, err := s.CreateInvite(ctx, "both", "inv-both", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	var err error

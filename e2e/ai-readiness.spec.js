@@ -175,8 +175,9 @@ test('AI in this room: changes waiting and the host\'s choices', async ({ browse
     await copied(bob, 'Can you look at what waits for your approval in Docs room? Persona changes and new personas: 1.');
     const choices = bob.locator('#ai-choices li');
     await expect(choices).toHaveText(['Models up to sonnet', 'New personas and changes: wait for Alice\'s approval', 'Connectors: Linear',
-      'Websites: see Room settings › Websites and connectors', 'Only Alice changes these, in their AI host app.']);
-    await expect(bob.locator('#ai-choices').getByRole('link', { name: 'Room settings › Websites and connectors' })).toHaveAttribute('href', '#manage/network');
+      'Websites: see AI in this room › Websites and connectors', 'Only Alice changes these, in their AI host app.']);
+    // 040-AC9: the link names the tab's new place.
+    await expect(bob.locator('#ai-choices').getByRole('link', { name: 'AI in this room › Websites and connectors' })).toHaveAttribute('href', '#ai/network');
     await shots(bob, 'member', testInfo);
 
     await openAI(alice);
@@ -232,10 +233,13 @@ test('AI in this room: plugins that do not load', async ({ browser, request, bas
     await expect(rows.nth(2).getByRole('link', { name: 'Open Plugins' })).toHaveCount(0);
     await expect(rows.nth(2).getByRole('button', { name: 'Copy a message to Alice' })).toBeVisible();
     await expect(alice.locator('#ai-rows .ai-row[data-row^="plugin-"]').nth(1).getByRole('link')).toHaveCount(0);
+    // 040-AC9: Open Plugins switches the sheet to its Plugins tab.
     await rows.nth(1).getByRole('link', { name: 'Open Plugins' }).click();
-    await expect(bob.locator('#ai')).toBeHidden();
-    await expect(bob.locator('#manage')).toBeVisible();
-    await expect(bob).toHaveURL(/#manage\/plugins$/);
+    await expect(bob.locator('#ai')).toBeVisible();
+    await expect(bob.locator('#ai #tab-plugins')).toHaveAttribute('aria-current', 'page');
+    await expect(bob.locator('#ai #panel-plugins')).toBeVisible();
+    await expect(bob.locator('#ai #panel-status')).toBeHidden();
+    await expect(bob).toHaveURL(/#ai\/plugins$/);
   } finally {
     host();
   }
@@ -348,7 +352,11 @@ test('AI in this room: "What\'s missing?" links', async ({ browser, request, bas
 
     const blocked = { ...line(1e9 + 2, 'system', 'Grill tried to reach example.com (blocked)'), sender: 'Grill',
       blocked: { domain: 'example.com', persona: 'Grill', count: 1, decision: '' } };
+    // A system line reloads the room 200 ms later, which redraws the line: let it land first, or it
+    // brings back the link the last step removes. loadRoom sends grill:room after the redraw.
+    const reloaded = bob.evaluate(() => new Promise((done) => addEventListener('grill:room', () => done(), { once: true })));
     await live(bob, blocked);
+    await reloaded;
     // The line redraws while the sheet is open: the focus goes to its new link.
     const blockedLine = bob.locator(`#messages > li[data-id="${blocked.id}"]`);
     await missing(bob, blockedLine, blockedLine.locator('a[href="#ai"]'), () => bob.evaluate(() => renderBlocked()));
@@ -369,7 +377,7 @@ test('AI in this room: "What\'s missing?" links', async ({ browser, request, bas
     // Inside a sheet the sheet's opener gets the focus back: the room menu's button.
     await missing(bob, caps.locator('li[data-plugin="opt"]'), bob.locator('#room-open'));
     await expect(bob.locator('#persona-sheet')).toBeHidden();
-    await expect(bob.locator('#personas')).toBeHidden();
+    await expect(bob.locator('#ai')).toBeHidden();
   } finally {
     host();
   }

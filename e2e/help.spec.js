@@ -82,9 +82,9 @@ test('Help: room admin, last room admin, and the way back', async ({ browser, re
   await appointAdmin(alice, request, room.id);
   await openHelp(alice);
   expect(await can(alice)).toEqual([['member', lines.member], ['ask', whoever], ['host', lines.noHost, 'What\'s missing?', '#ai'],
-    ['admin', lines.admin, 'Room settings', '#manage'], ['last-admin', lines.lastAdmin, 'Room settings › Members and admins', '#manage/admins']]);
+    ['admin', lines.admin, 'Room settings', '#manage'], ['last-admin', lines.lastAdmin, 'Room settings › Members', '#manage/admins']]);
 
-  const members = row(alice, 'last-admin').getByRole('link', { name: 'Room settings › Members and admins' });
+  const members = row(alice, 'last-admin').getByRole('link', { name: 'Room settings › Members' });
   await members.click();
   await expect(alice.locator('#manage')).toBeVisible();
   await expect(alice).toHaveURL(/#manage\/admins$/);
