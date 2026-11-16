@@ -123,8 +123,8 @@ export function restricted(provider, db) {
     const page = await joined(browser, users.member, path);
     await page.goto(`/r/${room.id}#manage/invites`);
     await provider.fake.session(request, users.member, true);
-    expire(users.member.sub);
     let login = page.waitForRequest((r) => r.url().includes('/auth/login?prompt=none'));
+    expire(users.member.sub);
     await page.reload();
     await login;
     await expect(page).toHaveURL(new RegExp(`/r/${room.id}#manage/invites$`));
@@ -133,9 +133,9 @@ export function restricted(provider, db) {
 
     // No session at the provider: silent, refused, then the normal sign-in.
     await provider.fake.session(request, users.member, false);
-    expire(users.member.sub);
     await page.evaluate(() => sessionStorage.removeItem('grill_room_reauth_at'));
     login = page.waitForRequest((r) => r.url().includes('/auth/login?prompt=none'));
+    expire(users.member.sub);
     await page.reload();
     await login;
     await expect(page).toHaveURL(new RegExp(`/r/${room.id}#manage/invites$`));
@@ -150,14 +150,15 @@ export function restricted(provider, db) {
   test('a stream closed for reauth signs in again, the guard stops a second round', async ({ browser, request }) => {
     const { room, path, token } = await invite(request, 'Stream room');
     const page = await joined(browser, users.member, path);
-    expire(users.member.sub);
     // Any other call of the page would go to sign in too: the banner tells the stream's own answer.
+    // Watched before the sign-in expires: from then on any call of the page may leave it.
     await page.evaluate(() => {
       const b = document.getElementById('banner');
       new MutationObserver(() => { if (!b.hidden) sessionStorage.setItem('e2e_banner', b.textContent); })
         .observe(b, { attributes: true, childList: true, characterData: true, subtree: true });
     });
     const login = page.waitForRequest((r) => r.url().includes('/auth/login?prompt=none'));
+    expire(users.member.sub);
     // Another participant's line wakes every stream at once, ahead of any poll of the page.
     const guest = await (await request.post('/api/join', { data: { invite: token, name: 'Gus' } })).json();
     await request.post(`/api/rooms/${room.id}/messages`, { headers: { Authorization: `Bearer ${guest.token}` }, data: { body: 'hello' } });
@@ -168,10 +169,10 @@ export function restricted(provider, db) {
     expect(await page.evaluate(() => sessionStorage.getItem('e2e_banner'))).toBeNull();
 
     // A round within the last minute: no redirect, the reason instead.
-    expire(users.member.sub);
     await page.evaluate(() => sessionStorage.setItem('grill_room_reauth_at', String(Date.now())));
     let again = 0;
     page.on('request', (r) => { if (r.url().includes('/auth/login')) again++; });
+    expire(users.member.sub);
     // Narrow, where the chat filters to Written: no "Loading…" stays under the banner (A8).
     await page.setViewportSize({ width: 390, height: 844 });
     await page.reload();
