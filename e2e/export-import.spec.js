@@ -2,7 +2,7 @@ import { test, expect } from './fixtures.js';
 import { readFileSync } from 'node:fs';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, removeSandbox, ask, signIn, noOverflow, menuItem, uniq } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, removeSandbox, ask, signIn, noOverflow, menuItem, uniq, sheetTab } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -80,7 +80,7 @@ test('the room page offers its admins the export', async ({ browser, request }) 
   await alice.reload();
   await menuItem(alice, 'Room settings');
   const dialog = alice.locator('#manage');
-  await dialog.getByRole('link', { name: 'Export', exact: true }).click();
+  await sheetTab(alice, 'manage', 'Export');
   await expect(dialog.locator('#export-warning')).toContainText('everything Claude read');
   const [dl] = await Promise.all([alice.waitForEvent('download'), dialog.locator('#export').click()]);
   expect(dl.suggestedFilename()).toMatch(/\.tar\.gz$/);

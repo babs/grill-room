@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, menuItem, playSTT, playEvents, patchJSON } from './helpers.js';
+import { roomWith, menuItem, playSTT, playEvents, patchJSON, sheetTab } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -15,7 +15,7 @@ test('glossary tab and model credit follow the workers', async ({ browser, reque
   // A worker that reads it: every member gets the tab, and saves a glossary.
   await playSTT(bob, room.id, { engines: ['whisper'], glossary: true });
   await menuItem(bob, 'AI in this room');
-  await bob.locator('#ai #tab-glossary').click();
+  await sheetTab(bob, 'ai', 'Words to recognise');
   // Loaded first: a fill before the glossary arrives is overwritten by it.
   await expect(bob.locator('#glossary-used')).toHaveText('3 / ~70 terms used');
   await bob.locator('#stt-glossary').getByLabel('Words to recognise').fill('Kubernetes, Helm');

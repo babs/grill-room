@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, appointAdmin, menuItem, fakeDaemon, skillsAtTop, uniq, openPersonas, personaRow, personaAction, patchPersona, agentState, confirmSheet, skillZip, unfoldTabs } from './helpers.js';
+import { roomWith, appointAdmin, menuItem, openMenu, fakeDaemon, skillsAtTop, uniq, openPersonas, personaRow, personaAction, patchPersona, agentState, confirmSheet, skillZip, unfoldTabs, sheetTab } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const settingsTabs = [['general', 'General'], ['admins', 'Members'], ['invites', 'Invites'], ['links', 'Links'], ['documents', 'Deleted documents'], ['export', 'Export']];
@@ -108,8 +108,7 @@ test('plain member: their tabs, and the first one for a tab they lack', async ({
 test('AI in this room: menu, tabs in the history, focus on close', async ({ browser, request }) => {
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await alice.setViewportSize({ width: 1280, height: 800 });
-  await alice.locator('#room-open').click();
-  const items = await alice.locator('#room-menu > :is(a, button):visible').evaluateAll((els) => els.map((e) => e.textContent.trim()));
+  const items = await (await openMenu(alice)).locator(':scope > :is(a, button):visible').evaluateAll((els) => els.map((e) => e.textContent.trim()));
   const at = ['Room settings', 'AI in this room', 'Personas', 'Call and voice-to-text…', 'Open documents in a new window'].map((n) => items.indexOf(n));
   expect(at.every((i, k) => i >= 0 && (k === 0 || i > at[k - 1])), items.join(' | ')).toBe(true);
   await alice.keyboard.press('Escape');
@@ -120,9 +119,9 @@ test('AI in this room: menu, tabs in the history, focus on close', async ({ brow
   await menuItem(alice, 'AI in this room');
   await shows(alice, 'ai', 'status', '#ai');
   const sheet = alice.locator('#ai');
-  await sheet.getByRole('link', { name: 'Plugins', exact: true }).click();
+  await sheetTab(alice, 'ai', 'Plugins');
   await shows(alice, 'ai', 'plugins', '#ai/plugins');
-  await sheet.getByRole('link', { name: 'Websites and connectors', exact: true }).click();
+  await sheetTab(alice, 'ai', 'Websites and connectors');
   await shows(alice, 'ai', 'network', '#ai/network');
   await alice.goBack();
   await shows(alice, 'ai', 'plugins', '#ai/plugins');
@@ -135,7 +134,7 @@ test('AI in this room: menu, tabs in the history, focus on close', async ({ brow
   for (const how of ['Escape', 'close', 'outside']) {
     if (!(await sheet.isVisible())) {
       await menuItem(alice, 'AI in this room');
-      await sheet.getByRole('link', { name: 'Words to recognise', exact: true }).click();
+      await sheetTab(alice, 'ai', 'Words to recognise');
       await shows(alice, 'ai', 'glossary', '#ai/glossary');
     }
     if (how === 'Escape') await alice.keyboard.press('Escape');
@@ -328,21 +327,29 @@ test('AI tabs: an error goes with its tab and its opening', async ({ browser, re
 });
 
 // 040-AC6: Status's own link to another tab hides the panel that held the focus: the focus goes to
-// the tab shown, or to the folded bar's menu on a phone, never to the page.
+// the tab shown, or to the bar's menu once the bar folds (040-AC5), never to the page. The six
+// tabs fold in the 44rem sheet at any viewport: a sheet widened to the window shows them whole.
 test('a Status link hands the focus to the tab it shows', async ({ browser, request, baseURL }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   const host = await fakeDaemon(alice, baseURL, room.id, 'Alice laptop');
+  // The page's CSP refuses an injected style: only this page bypasses it, Alice's session with it.
+  const wide = await (await browser.newContext({ bypassCSP: true, storageState: await alice.context().storageState() })).newPage();
+  await wide.goto(alice.url().split('#')[0]);
+  await expect(wide.locator('#me')).toHaveText('Alice');
+  await wide.addStyleTag({ content: '#ai.sheet { width: 100vw !important; max-width: 100vw !important }' });
   try {
-    for (const [width, to] of [[1280, '#ai #tab-network'], [390, '#ai nav.tabs > .tabs-menu']]) {
-      await alice.setViewportSize({ width, height: 800 });
-      await menuItem(alice, 'AI in this room');
-      await shows(alice, 'ai', 'status', '#ai');
-      const link = alice.locator('#ai-choices').getByRole('link', { name: 'AI in this room › Websites and connectors' });
+    for (const [page, width, folded] of [[alice, 1280, true], [alice, 390, true], [wide, 1280, false]]) {
+      const at = `${width} px${folded ? '' : ', widened'}`;
+      await page.setViewportSize({ width, height: 800 });
+      await menuItem(page, 'AI in this room');
+      await shows(page, 'ai', 'status', '#ai');
+      const link = page.locator('#ai-choices').getByRole('link', { name: 'AI in this room › Websites and connectors' });
       await link.focus();
-      await alice.keyboard.press('Enter');
-      await shows(alice, 'ai', 'network', '#ai/network');
-      await expect(alice.locator(to), `${width} px`).toBeFocused();
-      await closeSheet(alice, 'ai');
+      await page.keyboard.press('Enter');
+      await shows(page, 'ai', 'network', '#ai/network');
+      expect(await page.locator('#ai nav.tabs').evaluate((n) => 'menu' in n.dataset), at).toBe(folded);
+      await expect(page.locator(folded ? '#ai nav.tabs > .tabs-menu' : '#ai #tab-network'), at).toBeFocused();
+      await closeSheet(page, 'ai');
     }
   } finally {
     host();
@@ -465,7 +472,7 @@ test('AI › Personas: the persona sheet returns to its row', async ({ browser, 
   // Back and Forward: Status, Personas, the persona sheet, and back down again.
   await menuItem(alice, 'AI in this room');
   await shows(alice, 'ai', 'status', '#ai');
-  await alice.locator('#ai').getByRole('link', { name: 'Personas', exact: true }).click();
+  await sheetTab(alice, 'ai', 'Personas');
   await shows(alice, 'ai', 'personas', '#ai/personas');
   await personaRow(alice, 'Grill').click();
   await expect(sheet).toBeVisible();
@@ -476,8 +483,10 @@ test('AI › Personas: the persona sheet returns to its row', async ({ browser, 
   await shows(alice, 'ai', 'status', '#ai');
   await alice.goForward();
   await shows(alice, 'ai', 'personas', '#ai/personas');
-  // Forward reopens it with the focus on a tab: closing still lands on the row.
-  await alice.locator('#ai #tab-personas').focus();
+  // Forward reopens it with the focus on the bar, folded at any viewport (040-AC5): closing still lands on the row.
+  await expect(alice.locator('#ai nav.tabs')).toHaveAttribute('data-menu');
+  await alice.locator('#ai nav.tabs > .tabs-menu').focus();
+  await expect(alice.locator('#ai nav.tabs > .tabs-menu')).toBeFocused();
   await alice.goForward();
   await expect(sheet).toBeVisible();
   await expect(sheet.locator('#persona-sheet-title')).toHaveText('🔥 Grill');
@@ -576,7 +585,7 @@ test('AI › Personas: Back closes the picker with the tab', async ({ browser, r
   const picker = alice.locator('#persona-picker');
   await menuItem(alice, 'AI in this room');
   await shows(alice, 'ai', 'status', '#ai');
-  await alice.locator('#ai').getByRole('link', { name: 'Personas', exact: true }).click();
+  await sheetTab(alice, 'ai', 'Personas');
   await shows(alice, 'ai', 'personas', '#ai/personas');
   await alice.locator('#persona-add').click();
   await expect(picker).toBeVisible();

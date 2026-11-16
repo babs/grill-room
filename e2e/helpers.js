@@ -348,6 +348,15 @@ export async function unfoldTabs(nav) {
   if ((await menu.isVisible()) && (await menu.getAttribute('aria-expanded')) === 'false') await menu.click();
 }
 
+// sheetTab follows the tab name of a sheet's bar, ai (AI in this room) or manage (Room settings),
+// folded into its menu or not: a bar still hidden reads as unfolded, so the sheet first.
+export async function sheetTab(page, sheet, name) {
+  await expect(page.locator('#' + sheet)).toBeVisible();
+  const nav = page.locator(`#${sheet} nav.tabs`);
+  await unfoldTabs(nav);
+  await nav.getByRole('link', { name, exact: true }).click();
+}
+
 // openMenu opens a header menu (005-AC32): the room's name (room), the user's initials (me) or the
 // audio options (voice), and returns it. A click on its button while the page is still drawing the
 // room can leave the menu shut: it clicks again until the menu shows.

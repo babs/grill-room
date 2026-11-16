@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas, rowAction, personMenu, appointAdmin, unfoldTabs, uniq, openPersonas } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas, rowAction, personMenu, appointAdmin, unfoldTabs, uniq, openPersonas, sheetTab } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const phone = { width: 390, height: 844 };
@@ -48,8 +48,7 @@ async function openManage(page) {
 
 // tab opens a tab of the Manage sheet.
 async function tab(panel, name) {
-  await unfoldTabs(panel.locator('nav.tabs'));
-  await panel.getByRole('link', { name, exact: true }).click();
+  await sheetTab(panel.page(), 'manage', name);
   await expect(panel.getByRole('link', { name, exact: true, includeHidden: true })).toHaveAttribute('aria-current', 'page');
 }
 
@@ -145,8 +144,7 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     // while a worker reads it (007-AC14), no room panel in Room settings, and the API says no.
     await playSTT(bob, id, { engines: ['whisper'], glossary: true });
     await menuItem(bob, 'AI in this room');
-    await unfoldTabs(bob.locator('#ai nav.tabs'));
-    await bob.locator('#ai #tab-glossary').click();
+    await sheetTab(bob, 'ai', 'Words to recognise');
     await expect(bob.locator('#ai #stt-glossary')).toBeVisible();
     await bob.locator('#ai .sheet-head .close').click();
     await menuItem(bob, 'Room settings');

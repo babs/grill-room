@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, fakeCall, appointAdmin, agentState, patchPersona, noOverflow, smallTargets, editPersona, openMenu, unfoldTabs } from './helpers.js';
+import { roomWith, fakeCall, appointAdmin, agentState, patchPersona, noOverflow, smallTargets, editPersona, openMenu, sheetTab } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const absent = 'Not available on this server: the server admin turns it on.';
@@ -298,14 +298,6 @@ test('call overview: voice-to-text on this device and its fall back', async ({ b
   await expect(you('where')).toHaveText('Voice-to-text runs on this device');
 });
 
-// aiTab follows a tab of AI in this room, its bar folded into its menu when it overflows: a bar
-// still hidden reads as unfolded, so the sheet first.
-async function aiTab(page, name) {
-  await expect(page.locator('#ai')).toBeVisible();
-  await unfoldTabs(page.locator('#ai-tabs'));
-  await page.locator('#ai-tabs').getByRole('link', { name }).click();
-}
-
 // 042-AC7: a link out opens its target as a new entry and closes the overview; closing the target
 // by Escape, ✕ or Back returns to the overview with the focus on the row that linked, and Forward
 // reopens the target. A tab switch inside the target still returns. A row gone meanwhile hands the
@@ -336,7 +328,7 @@ test('call overview: links out and back', async ({ browser, request }) => {
   const voicesLink = row(alice, 'room', 'voices').getByRole('link', { name: 'Open Call voices' });
   await voicesLink.click();
   await expect(alice).toHaveURL(/#ai\/voices$/);
-  await aiTab(alice, 'Plugins');
+  await sheetTab(alice, 'ai', 'Plugins');
   await expect(alice).toHaveURL(/#ai\/plugins$/);
   await expect(alice.locator('#ai #tab-plugins')).toHaveAttribute('aria-current', 'page');
   await alice.locator('#ai .close').click();
@@ -348,7 +340,7 @@ test('call overview: links out and back', async ({ browser, request }) => {
   await expect(alice.locator('#ai')).toBeVisible();
   await alice.reload();
   await expect(alice.locator('#ai')).toBeVisible();
-  await aiTab(alice, 'Plugins');
+  await sheetTab(alice, 'ai', 'Plugins');
   await expect(alice.locator('#ai #tab-plugins')).toHaveAttribute('aria-current', 'page');
   await alice.keyboard.press('Escape');
   await expect(sheet(alice)).toBeVisible();
@@ -357,7 +349,7 @@ test('call overview: links out and back', async ({ browser, request }) => {
   // AI in this room › Personas › a persona, over the AI sheet: its close returns to AI in this room,
   // whose close returns here.
   await voicesLink.click();
-  await aiTab(alice, 'Personas');
+  await sheetTab(alice, 'ai', 'Personas');
   await expect(alice.locator('#ai #tab-personas')).toHaveAttribute('aria-current', 'page');
   await alice.locator('#persona-list .persona-row').first().click();
   await expect(alice.locator('#persona-sheet')).toBeVisible();

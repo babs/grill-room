@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, menuItem, playSTT } from './helpers.js';
+import { roomWith, menuItem, playSTT, sheetTab } from './helpers.js';
 
 // 005-AC23: any member edits the transcription glossary in AI in this room, sees how many terms the prompt
 // holds, and the room says who changed it. 007-AC14: while a worker reads it.
@@ -7,7 +7,7 @@ test('a member edits the transcription glossary', async ({ browser, request }) =
   const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   await playSTT(bob, room.id, { engines: ['whisper'], glossary: true });
   await menuItem(bob, 'AI in this room');
-  await bob.locator('#ai #tab-glossary').click();
+  await sheetTab(bob, 'ai', 'Words to recognise');
   const form = bob.locator('#stt-glossary');
   // Alice, Bob and the room's Grill persona.
   await expect(form.locator('#glossary-used')).toHaveText('3 / ~70 terms used');
