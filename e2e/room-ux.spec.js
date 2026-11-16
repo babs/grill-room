@@ -574,6 +574,19 @@ test('Members: one row per seat, with its invite', async ({ browser, request, ba
     await expect(carolMore).toBeFocused();
     await alice.unroute(`**/api/rooms/${room.id}/admins/*`);
 
+    // 040-AC12: stepped down, the viewer loses Members with their row: the focus goes to the tab
+    // shown, never to the page, on a phone's full-screen sheet and on a desktop.
+    for (const [page, link, width] of [[bob, 'Link ' + plain.id, 390], [alice, 'Founders', 1280]]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto('about:blank');
+      await page.goto(`/r/${room.id}#manage/admins`);
+      await rowAction(page.locator('#manage #room-admins > li', { hasText: link }).filter({ has: page.locator('.badge.role') }), 'Step down');
+      await expect(page.locator('#manage #tab-invites'), link).toHaveAttribute('aria-current', 'page');
+      await expect(page.locator('#manage #tab-invites'), link).toBeFocused();
+      // Alice is not left the last room admin, whose Step down is off.
+      if (page === bob) await makeAdmin(request, bob, room);
+    }
+
     // Carol, a plain member: no invite in what the room tells her, no Members tab.
     const payload = await carol.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.text()), room.id);
     expect(payload).not.toMatch(/invite_(id|name)|Team link|Founders/);

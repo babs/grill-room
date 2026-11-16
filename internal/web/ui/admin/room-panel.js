@@ -195,9 +195,10 @@ export function AdminRows({ people, base, api, show, done, me, makeHost, actions
 function AdminRow({ p, base, api, show, done, me, makeHost, actions }) {
   const [renaming, setRenaming] = useState(false);
   const menu = 'admin-menu-' + p.id;
-  // A row gone, its person removed, hands the focus to the list's first ⋯.
+  // A row gone, its person removed, hands the focus to the list's first ⋯; the list gone, the viewer
+  // stepped down, to Room settings' tab shown.
   /** @param {() => unknown} [work] */
-  const back = (work) => followFocus(moreOf(menu), '#room-admins .more', work);
+  const back = (work) => followFocus(moreOf(menu), '#room-admins .more, #manage:not(:has(#room-admins .more)) nav.tabs > [aria-current=page]', work);
   /** @param {Member} p */
   const remove = async (p) => {
     const box = document.createElement('label');
